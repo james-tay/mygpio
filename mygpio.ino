@@ -9,6 +9,12 @@ char *tokens[MAX_TOKENS] ;
 
 void f_action (char **tokens)
 {
+  if ((strcmp(tokens[0], "?") == 0) || (strcmp(tokens[0], "help") == 0))
+  {
+    Serial.println ("hi <pin>") ;
+    Serial.println ("lo <pin>") ;
+  }
+
   if ((strcmp(tokens[0], "hi") == 0) && (tokens[1] != NULL))
   {
     int pin = atoi(tokens[1]) ;
@@ -18,6 +24,7 @@ void f_action (char **tokens)
     Serial.print (pin) ;
     Serial.print ("\r\n") ;
   }
+
   if ((strcmp(tokens[0], "lo") == 0) && (tokens[1] != NULL))
   {
     int pin = atoi(tokens[1]) ;
@@ -27,7 +34,6 @@ void f_action (char **tokens)
     Serial.print (pin) ;
     Serial.print ("\r\n") ;
   }
-
 }
 
 /* ------------------------------------------------------------------------- */
