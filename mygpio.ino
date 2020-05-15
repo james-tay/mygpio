@@ -3,7 +3,36 @@
 #define BUF_SIZE 80
 
 char line[BUF_SIZE] ;
-char *tokens[MAX_TOKENS] ;
+char *tokens[MAX_TOKENS+1] ;
+
+/* ------------------------------------------------------------------------- */
+
+/*
+   Returns the distance (in cm) measured by an HC-SR04 ultrasonic range sensor
+   or -1.0 if it was unable to take a reading.
+*/
+
+float f_hcsr04 (int trigPin, int echoPin)
+{
+  #define TIMEOUT_USEC 60000
+
+  pinMode (trigPin, OUTPUT) ;
+  pinMode (echoPin, INPUT) ;
+
+  /* set trigger pin low, then stay high for 10 usec */
+
+  digitalWrite (trigPin, LOW) ;
+  delayMicroseconds (1000) ;
+  digitalWrite (trigPin, HIGH) ;
+  delayMicroseconds (10) ;
+  digitalWrite (trigPin, LOW) ;
+
+  unsigned long echoUsecs = pulseIn (echoPin, HIGH, TIMEOUT_USEC) ;
+  if (echoUsecs == 0)
+    return (-1.0) ;
+  else
+    return (float(echoUsecs) / 58.0) ;
+}
 
 /* ------------------------------------------------------------------------- */
 
@@ -11,8 +40,10 @@ void f_action (char **tokens)
 {
   if ((strcmp(tokens[0], "?") == 0) || (strcmp(tokens[0], "help") == 0))
   {
-    Serial.println ("hi <pin>") ;
-    Serial.println ("lo <pin>") ;
+    Serial.println ("hi <pin 0-13>") ;
+    Serial.println ("lo <pin 0-13>") ;
+    Serial.println ("aread <pin 0-5> - analog read") ;
+    Serial.println ("hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic sensor") ;
   }
 
   if ((strcmp(tokens[0], "hi") == 0) && (tokens[1] != NULL))
@@ -21,8 +52,7 @@ void f_action (char **tokens)
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, HIGH) ;
     Serial.print ("f_action() pin HIGH ") ;
-    Serial.print (pin) ;
-    Serial.print ("\r\n") ;
+    Serial.println (pin) ;
   }
 
   if ((strcmp(tokens[0], "lo") == 0) && (tokens[1] != NULL))
@@ -31,8 +61,26 @@ void f_action (char **tokens)
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, LOW) ;
     Serial.print ("f_action() pin LOW ") ;
+    Serial.println (pin) ;
+  }
+
+  if ((strcmp(tokens[0], "aread") == 0) && (tokens[1] != NULL))
+  {
+    int pin = atoi(tokens[1]) ;
+    int val = analogRead (pin) ;
+    Serial.print ("f_action() analogRead pin:") ;
     Serial.print (pin) ;
-    Serial.print ("\r\n") ;
+    Serial.print (" value:") ;
+    Serial.println (val) ;
+  }
+
+  if ((strcmp(tokens[0], "hcsr04") == 0) && 
+      (tokens[1] != NULL) && (tokens[2] != NULL))
+  {
+    float rangeCm = f_hcsr04 (atoi(tokens[1]), atoi(tokens[2])) ;
+    Serial.print ("f_action() hcsr04 ") ;
+    Serial.print (rangeCm) ;
+    Serial.println (" cm") ;
   }
 }
 
@@ -68,7 +116,7 @@ void loop ()
   {
     idx = 0 ;
     p = strtok (line, " ") ;
-    while (p)
+    while ((p) && (idx < MAX_TOKENS))
     {
       tokens[idx] = p ;
       idx++ ;
@@ -91,7 +139,4 @@ void loop ()
     if (tokens[0] != NULL)
       f_action (tokens) ;
   }
-
-
-
 }
