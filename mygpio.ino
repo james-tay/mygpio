@@ -1,11 +1,93 @@
+/*
+   Examples
+
+     test LED,
+       hi 12
+       lo 12
+
+     test light sensor,
+       hi 5
+       aread 0
+       lo 5
+
+     test HC-SR04,
+       hi 4
+       hcsr04 2 3
+       lo 4
+
+     test DHT22,
+       hi 7
+       dht22 6
+       lo 7
+*/
+
 #define MAX_LONG 2147483647
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
 
-char line[BUF_SIZE] ;
-char *tokens[MAX_TOKENS+1] ;
+char line[BUF_SIZE] ;           // general purpose string buffer
+char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
 
 /* ------------------------------------------------------------------------- */
+
+/*
+   Polls a DHT-22 and writes the current temperature and humidity in the
+   supplied buffers. On success, it returns 1, otherwise 0.
+*/
+
+int f_dht22 (int dataPin, float *temperature, float *humidity)
+{
+  #define DHT22_TIMEOUT_USEC 500
+
+  int cycles[40] ;
+  unsigned char data[5] ;
+
+  /* send the trigger to begin a poll cycle */
+
+  pinMode (dataPin, OUTPUT) ;
+  digitalWrite (dataPin, LOW) ;         // sensor reset
+  delayMicroseconds (1200) ;
+  digitalWrite (dataPin, HIGH) ;        // sensor trigger
+  delayMicroseconds (20) ;
+  pinMode (dataPin, INPUT) ;
+
+  /* expect DHT22 to respond with a low and then a high */
+
+  if (pulseIn (dataPin, HIGH) == 0)
+  {
+    Serial.println ("f_dht22() no ACK, aborting.") ;
+    return (0) ;
+  }
+
+  /* now read 40 bits of data, store pulse timings in an array */
+
+  int i ;
+  for (i=0 ; i<40 ; i++)
+    cycles[i] = pulseIn (dataPin, HIGH, DHT22_TIMEOUT_USEC) ;
+
+  /* convert pulse timings timings into humidity/temperature/checksum */
+
+  memset (data, 0, 5) ;
+  for (i=0 ; i<40 ; i++)
+  {
+    data[i/8] <<= 1 ;           // left shift bits, right most bit will be 0
+    if (cycles[i] > 50)
+      data[i/8] |= 1 ;          // set right most bit to 1
+  }
+
+  /* validate checksum */
+
+  unsigned char c = data[0] + data[1] + data[2] + data[3] ;
+  if ((c & 0xff) != data[4])
+  {
+    Serial.println ("f_dht22() checksum failed.") ;
+    return (0) ;
+  }
+
+  *humidity = float (((int) data[0] << 8 ) | data[1]) / 10.0 ;
+  *temperature = float ((((int) data[2] & 0x7f ) << 8 ) | data[3]) / 10.0 ;
+  return (1) ;
+}
 
 /*
    Returns the distance (in cm) measured by an HC-SR04 ultrasonic range sensor
@@ -14,7 +96,7 @@ char *tokens[MAX_TOKENS+1] ;
 
 float f_hcsr04 (int trigPin, int echoPin)
 {
-  #define TIMEOUT_USEC 60000
+  #define HCSR04_TIMEOUT_USEC 60000
 
   pinMode (trigPin, OUTPUT) ;
   pinMode (echoPin, INPUT) ;
@@ -27,7 +109,7 @@ float f_hcsr04 (int trigPin, int echoPin)
   delayMicroseconds (10) ;
   digitalWrite (trigPin, LOW) ;
 
-  unsigned long echoUsecs = pulseIn (echoPin, HIGH, TIMEOUT_USEC) ;
+  unsigned long echoUsecs = pulseIn (echoPin, HIGH, HCSR04_TIMEOUT_USEC) ;
   if (echoUsecs == 0)
     return (-1.0) ;
   else
@@ -43,6 +125,7 @@ void f_action (char **tokens)
     Serial.println ("hi <pin 0-13>") ;
     Serial.println ("lo <pin 0-13>") ;
     Serial.println ("aread <pin 0-5> - analog read") ;
+    Serial.println ("dht22 <dataPin> - DHT-22 temperature/humidity sensor") ;
     Serial.println ("hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic sensor") ;
   }
 
@@ -51,8 +134,8 @@ void f_action (char **tokens)
     int pin = atoi(tokens[1]) ;
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, HIGH) ;
-    Serial.print ("f_action() pin HIGH ") ;
-    Serial.println (pin) ;
+    sprintf (line, "f_action() pin:%d HIGH", pin) ;
+    Serial.println (line) ;
   }
 
   if ((strcmp(tokens[0], "lo") == 0) && (tokens[1] != NULL))
@@ -60,27 +143,35 @@ void f_action (char **tokens)
     int pin = atoi(tokens[1]) ;
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, LOW) ;
-    Serial.print ("f_action() pin LOW ") ;
-    Serial.println (pin) ;
+    sprintf (line, "f_action() pin:%d LOW", pin) ;
+    Serial.println (line) ;
   }
 
   if ((strcmp(tokens[0], "aread") == 0) && (tokens[1] != NULL))
   {
     int pin = atoi(tokens[1]) ;
     int val = analogRead (pin) ;
-    Serial.print ("f_action() analogRead pin:") ;
-    Serial.print (pin) ;
-    Serial.print (" value:") ;
-    Serial.println (val) ;
+    sprintf (line, "f_action() analogRead pin:%d - %d", pin, val) ;
+    Serial.println (line) ;
+  }
+
+  if ((strcmp(tokens[0], "dht22") == 0) && (tokens[1] != NULL))
+  {
+    float t=0.0, h=0.0 ;
+    int pin = atoi(tokens[1]) ;
+    f_dht22 (pin, &t, &h) ;
+    sprintf (line, "f_action() dht22 - temperature:%d.%02d humidity:%d.%02d",
+             int(t), (int)(t*100)%100, int(h), (int)(h*100)%100) ;
+    Serial.println (line) ;
   }
 
   if ((strcmp(tokens[0], "hcsr04") == 0) && 
       (tokens[1] != NULL) && (tokens[2] != NULL))
   {
-    float rangeCm = f_hcsr04 (atoi(tokens[1]), atoi(tokens[2])) ;
-    Serial.print ("f_action() hcsr04 ") ;
-    Serial.print (rangeCm) ;
-    Serial.println (" cm") ;
+    float f = f_hcsr04 (atoi(tokens[1]), atoi(tokens[2])) ;
+    sprintf (line, "f_action() hcsr04 - %d.%02d cm",
+             int(f), (int)(f*100)%100) ;
+    Serial.println (line) ;
   }
 }
 
@@ -105,10 +196,11 @@ void loop ()
   Serial.print ("> ") ;
   int amt = Serial.readBytesUntil('\r', line, BUF_SIZE-1) ;
   line[amt] = 0 ;
+  Serial.print (line) ;
   Serial.print ("\r\n") ;
-  Serial.print ("Received ") ;
+  Serial.print ("main() received ") ;
   Serial.print (amt) ;
-  Serial.print (" bytes.\r\n") ;
+  Serial.print (" bytes - ") ;
 
   /* parse what we've received on the serial port */
 
@@ -140,3 +232,4 @@ void loop ()
       f_action (tokens) ;
   }
 }
+
