@@ -158,11 +158,12 @@ void f_action (char **tokens)
   if ((strcmp(tokens[0], "dht22") == 0) && (tokens[1] != NULL))
   {
     float t=0.0, h=0.0 ;
-    int pin = atoi(tokens[1]) ;
-    f_dht22 (pin, &t, &h) ;
-    sprintf (line, "f_action() dht22 - temperature:%d.%02d humidity:%d.%02d",
-             int(t), (int)(t*100)%100, int(h), (int)(h*100)%100) ;
-    Serial.println (line) ;
+    if (f_dht22 (atoi(tokens[1]), &t, &h))
+    {
+      sprintf (line, "f_action() dht22 - temperature:%d.%02d humidity:%d.%02d",
+               int(t), (int)(t*100)%100, int(h), (int)(h*100)%100) ;
+      Serial.println (line) ;
+    }
   }
 
   if ((strcmp(tokens[0], "hcsr04") == 0) && 
