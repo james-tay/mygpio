@@ -205,7 +205,11 @@ void loop ()
 
   /* parse what we've received on the serial port */
 
-  if (amt > 0)
+  if (amt == 0)
+  {
+    Serial.print ("\r\n") ;
+  }
+  else
   {
     idx = 0 ;
     p = strtok (line, " ") ;
