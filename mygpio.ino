@@ -195,6 +195,9 @@ void loop ()
   unsigned long now = millis() / 1000 ;
   Serial.print (now) ;
   Serial.print ("> ") ;
+
+  /* wait for '\r' (minicom sends this when user presses ENTER) */
+
   int amt = Serial.readBytesUntil('\r', line, BUF_SIZE-1) ;
   line[amt] = 0 ;
   Serial.print (line) ;
