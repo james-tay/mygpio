@@ -203,11 +203,6 @@ void loop ()
 
   int amt = Serial.readBytesUntil('\r', line, BUF_SIZE-1) ;
   line[amt] = 0 ;
-  Serial.print (line) ;
-  Serial.print ("\r\n") ;
-  Serial.print ("main() received ") ;
-  Serial.print (amt) ;
-  Serial.print (" bytes - ") ;
 
   /* parse what we've received on the serial port */
 
@@ -226,19 +221,6 @@ void loop ()
       p = strtok (NULL, " ") ;
     }
     tokens[idx] = NULL ;
-
-    /* print what we've parsed */
-
-    idx = 0 ;
-    while (tokens[idx] != NULL)
-    {
-      Serial.print ("[") ;
-      Serial.print (tokens[idx]) ;
-      Serial.print ("]") ;
-      idx++ ;
-    }
-    Serial.print ("\r\n") ;
-
     if (tokens[0] != NULL)
       f_action (tokens) ;
   }
