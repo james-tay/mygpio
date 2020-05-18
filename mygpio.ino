@@ -111,9 +111,12 @@ float f_hcsr04 (int trigPin, int echoPin)
 
   unsigned long echoUsecs = pulseIn (echoPin, HIGH, HCSR04_TIMEOUT_USEC) ;
   if (echoUsecs == 0)
+  {
+    Serial.println ("FAULT: f_hcsr04() no response.") ;
     return (-1.0) ;
+  }
   else
-    return (float(echoUsecs) / 58.0) ;
+    return (float(echoUsecs) / 58.0) ; // convert time to centimeters
 }
 
 /* ------------------------------------------------------------------------- */
@@ -171,9 +174,11 @@ void f_action (char **tokens)
       (tokens[1] != NULL) && (tokens[2] != NULL))
   {
     float f = f_hcsr04 (atoi(tokens[1]), atoi(tokens[2])) ;
-    sprintf (line, "hcsr04 - %d.%02d cm",
-             int(f), (int)(f*100)%100) ;
-    Serial.println (line) ;
+    if (f > 0.0)
+    {
+      sprintf (line, "hcsr04 - %d.%02d cm", int(f), (int)(f*100)%100) ;
+      Serial.println (line) ;
+    }
   }
   else
   if (strcmp(tokens[0], "uptime") == 0)
@@ -184,7 +189,7 @@ void f_action (char **tokens)
   }
   else
   {
-    Serial.println ("Unknown command. Enter ? for help.") ;
+    Serial.println ("FAULT: Unknown command. Enter ? for help.") ;
   }
 }
 
@@ -193,7 +198,7 @@ void f_action (char **tokens)
 void setup ()
 {
   Serial.begin (9600) ;
-  Serial.setTimeout (MAX_LONG) ;
+  Serial.setTimeout (MAX_LONG) ; // Serial.read() to block as long as possible
   Serial.println ("Ready.") ;
 }
 
