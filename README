@@ -1,0 +1,6 @@
+These tools allow for generic sensor polling on an arduino.
+
+  mygpio.ino - this is the source code for the program in the arduino
+  mygpio.py  - this tool communicates to the arduino via (virtual) serial
+
+
