@@ -55,7 +55,7 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
 
   if (pulseIn (dataPin, HIGH) == 0)
   {
-    Serial.println ("f_dht22() no ACK, aborting.") ;
+    Serial.println ("FAULT: f_dht22() no ACK, aborting.") ;
     return (0) ;
   }
 
@@ -80,7 +80,7 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
   unsigned char c = data[0] + data[1] + data[2] + data[3] ;
   if ((c & 0xff) != data[4])
   {
-    Serial.println ("f_dht22() checksum failed.") ;
+    Serial.println ("FAULT: f_dht22() checksum failed.") ;
     return (0) ;
   }
 
@@ -134,7 +134,7 @@ void f_action (char **tokens)
     int pin = atoi(tokens[1]) ;
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, HIGH) ;
-    sprintf (line, "f_action() pin:%d HIGH", pin) ;
+    sprintf (line, "pin:%d HIGH", pin) ;
     Serial.println (line) ;
   }
   else
@@ -143,7 +143,7 @@ void f_action (char **tokens)
     int pin = atoi(tokens[1]) ;
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, LOW) ;
-    sprintf (line, "f_action() pin:%d LOW", pin) ;
+    sprintf (line, "pin:%d LOW", pin) ;
     Serial.println (line) ;
   }
   else
@@ -151,7 +151,7 @@ void f_action (char **tokens)
   {
     int pin = atoi(tokens[1]) ;
     int val = analogRead (pin) ;
-    sprintf (line, "f_action() analogRead pin:%d - %d", pin, val) ;
+    sprintf (line, "analogRead pin:%d - %d", pin, val) ;
     Serial.println (line) ;
   }
   else
@@ -160,7 +160,7 @@ void f_action (char **tokens)
     float t=0.0, h=0.0 ;
     if (f_dht22 (atoi(tokens[1]), &t, &h))
     {
-      sprintf (line, "f_action() dht22 - temperature:%d.%02d humidity:%d.%02d",
+      sprintf (line, "dht22 - temperature:%d.%02d humidity:%d.%02d",
                int(t), (int)(t*100)%100, int(h), (int)(h*100)%100) ;
       Serial.println (line) ;
     }
@@ -170,7 +170,7 @@ void f_action (char **tokens)
       (tokens[1] != NULL) && (tokens[2] != NULL))
   {
     float f = f_hcsr04 (atoi(tokens[1]), atoi(tokens[2])) ;
-    sprintf (line, "f_action() hcsr04 - %d.%02d cm",
+    sprintf (line, "hcsr04 - %d.%02d cm",
              int(f), (int)(f*100)%100) ;
     Serial.println (line) ;
   }
