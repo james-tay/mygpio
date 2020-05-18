@@ -128,7 +128,7 @@ void f_action (char **tokens)
     Serial.println ("dht22 <dataPin> - DHT-22 temperature/humidity sensor") ;
     Serial.println ("hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic sensor") ;
   }
-
+  else
   if ((strcmp(tokens[0], "hi") == 0) && (tokens[1] != NULL))
   {
     int pin = atoi(tokens[1]) ;
@@ -137,7 +137,7 @@ void f_action (char **tokens)
     sprintf (line, "f_action() pin:%d HIGH", pin) ;
     Serial.println (line) ;
   }
-
+  else
   if ((strcmp(tokens[0], "lo") == 0) && (tokens[1] != NULL))
   {
     int pin = atoi(tokens[1]) ;
@@ -146,7 +146,7 @@ void f_action (char **tokens)
     sprintf (line, "f_action() pin:%d LOW", pin) ;
     Serial.println (line) ;
   }
-
+  else
   if ((strcmp(tokens[0], "aread") == 0) && (tokens[1] != NULL))
   {
     int pin = atoi(tokens[1]) ;
@@ -154,7 +154,7 @@ void f_action (char **tokens)
     sprintf (line, "f_action() analogRead pin:%d - %d", pin, val) ;
     Serial.println (line) ;
   }
-
+  else
   if ((strcmp(tokens[0], "dht22") == 0) && (tokens[1] != NULL))
   {
     float t=0.0, h=0.0 ;
@@ -165,7 +165,7 @@ void f_action (char **tokens)
       Serial.println (line) ;
     }
   }
-
+  else
   if ((strcmp(tokens[0], "hcsr04") == 0) && 
       (tokens[1] != NULL) && (tokens[2] != NULL))
   {
@@ -173,6 +173,10 @@ void f_action (char **tokens)
     sprintf (line, "f_action() hcsr04 - %d.%02d cm",
              int(f), (int)(f*100)%100) ;
     Serial.println (line) ;
+  }
+  else
+  {
+    Serial.println ("Unknown command. Enter ? for help.") ;
   }
 }
 
@@ -193,8 +197,7 @@ void loop ()
   /* At the start of our loop, print the prompt */
 
   unsigned long now = millis() / 1000 ;
-  Serial.print (now) ;
-  Serial.print ("> ") ;
+  Serial.println ("OK") ;
 
   /* wait for '\r' (minicom sends this when user presses ENTER) */
 
