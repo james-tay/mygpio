@@ -6,9 +6,8 @@
 
 import os
 import sys
+import select
 import termios
-
-import pprint
 
 cfg_serial_port = "/dev/ttyUSB0"
 cfg_serial_baud = termios.B9600
@@ -24,6 +23,13 @@ com_fd = os.open (cfg_serial_port, os.O_RDWR | os.O_NOCTTY)
 if (com_fd is None):
   print ("FATAL! Cannot open '%s'." % cfg_serial_port)
   sys.exit (1)
+
+# If there are unexpected bytes coming from the arduino, read and discard
+# them now.
+
+rfds, wfds, xfds = select.select ([com_fd], [], [], 0)
+if (com_fd in rfds):
+  discard = os.read(com_fd, 80) ;
 
 # get the current line attributes, which is an array. Note:
 #  - array elements : [iflag, oflag, cflag, lflag, ispeed, ospeed, cc]
@@ -58,13 +64,19 @@ ospeed = cfg_serial_baud
 termios.tcsetattr (com_fd, termios.TCSANOW,
                    [iflag, oflag, cflag, lflag, ispeed, ospeed, cc])
 
-# Send a newline and keep reading until we get "OK".
+# Send a newline and keep reading until we get "OK", but enforce a timeout.
 
 os.write (com_fd, cmd + "\r")
 buf = ""
 while (buf.endswith("OK\r\n") == False):
-  s = os.read (com_fd, 80)
-  buf = buf + s
+  rfds, wfds, xfds = select.select ([com_fd], [], [], 1.0)
+  if (com_fd in rfds):
+    s = os.read (com_fd, 80)
+    buf = buf + s
+  else:
+    print ("FATAL! Timed out on read.")
+    sys.exit (1)
+    break
 
 buf = buf.rstrip ("OK\r\n")
 print (buf)

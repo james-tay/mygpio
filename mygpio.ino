@@ -127,6 +127,7 @@ void f_action (char **tokens)
     Serial.println ("aread <pin 0-5> - analog read") ;
     Serial.println ("dht22 <dataPin> - DHT-22 temperature/humidity sensor") ;
     Serial.println ("hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic sensor") ;
+    Serial.println ("uptime") ;
   }
   else
   if ((strcmp(tokens[0], "hi") == 0) && (tokens[1] != NULL))
@@ -175,6 +176,13 @@ void f_action (char **tokens)
     Serial.println (line) ;
   }
   else
+  if (strcmp(tokens[0], "uptime") == 0)
+  {
+    unsigned long now = millis() / 1000 ;
+    sprintf (line, "uptime - %ld secs", now) ;
+    Serial.println (line) ;
+  }
+  else
   {
     Serial.println ("Unknown command. Enter ? for help.") ;
   }
@@ -196,7 +204,6 @@ void loop ()
 
   /* At the start of our loop, print the prompt */
 
-  unsigned long now = millis() / 1000 ;
   Serial.println ("OK") ;
 
   /* wait for '\r' (minicom sends this when user presses ENTER) */
