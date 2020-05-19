@@ -21,7 +21,7 @@ cmd = " ".join(sys.argv)
 
 com_fd = os.open (cfg_serial_port, os.O_RDWR | os.O_NOCTTY)
 if (com_fd is None):
-  print ("FATAL! Cannot open '%s'." % cfg_serial_port)
+  print ("FAULT: Cannot open '%s'." % cfg_serial_port)
   sys.exit (1)
 
 # If there are unexpected bytes coming from the arduino, read and discard
@@ -74,7 +74,7 @@ while (buf.endswith("OK\r\n") == False):
     s = os.read (com_fd, 80)
     buf = buf + s
   else:
-    print ("FATAL! Timed out on read.")
+    print ("FAULT: Timed out on read.")
     sys.exit (1)
     break
 
