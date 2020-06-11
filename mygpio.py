@@ -15,8 +15,11 @@ cfg_serial_baud = termios.B9600
 cfg_discard_wait_sec = 0.2               # wait for bytes before first xmit
 cfg_debug = 0
 
-if (os.getenv("DEBUG") is not None):
+if (os.getenv("DEBUG") is not None):            # optional debug flag
   cfg_debug = 1
+
+if (os.getenv("SERIAL") is not None):           # specify serial port
+  cfg_serial_port = os.getenv("SERIAL")
 
 # Concat our commandline arguments, that's what we'll send to the arduino.
 
