@@ -30,6 +30,16 @@
 
 #include <Wire.h>
 
+#ifdef ARDUINO_ESP8266_NODEMCU
+  #include <ESP8266WiFi.h>
+
+  #define MAX_SSID_LEN 32
+  #define MAX_PASSWD_LEN 32
+
+  char cfg_wifi_ssid[MAX_SSID_LEN] ;
+  char cfg_wifi_pw[MAX_PASSWD_LEN] ;
+#endif
+
 #define MAX_LONG 2147483647
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
@@ -173,6 +183,52 @@ float f_hcsr04 (int trigPin, int echoPin)
 
 /* ------------------------------------------------------------------------- */
 
+#ifdef ARDUINO_ESP8266_NODEMCU
+
+void f_wifi (char **tokens)
+{
+  if (strcmp(tokens[1], "status") == 0)
+  {
+    int status = WiFi.status() ;
+    strcpy (line, "status: ") ;
+    switch (status)
+    {
+      case WL_CONNECTED:
+        strcat (line, "WL_CONNECTED") ; break ;
+      case WL_NO_SHIELD:
+        strcat (line, "WL_NO_SHIELD") ; break ;
+      case WL_IDLE_STATUS:
+        strcat (line, "WL_IDLE_STATUS") ; break ;
+      case WL_NO_SSID_AVAIL:
+        strcat (line, "WL_NO_SSID_AVAIL") ; break ;
+      case WL_SCAN_COMPLETED:
+        strcat (line, "WL_SCAN_COMPLETED") ; break ;
+      case WL_CONNECT_FAILED:
+        strcat (line, "WL_CONNECT_FAILED") ; break ;
+      case WL_CONNECTION_LOST:
+        strcat (line, "WL_CONNECTION_LOST") ; break ;
+      case WL_DISCONNECTED:
+        strcat (line, "WL_DISCONNECTED") ; break ;
+      default:
+        strcat (line, "UNKNOWN") ; break ;
+    }
+    Serial.println (line) ;
+    sprintf (line, "cfg_wifi_ssid: %s", cfg_wifi_ssid) ;
+    Serial.println (line) ;
+    sprintf (line, "cfg_wifi_pw: %s", cfg_wifi_pw) ;
+    Serial.println (line) ;
+  }
+  else
+  if (strcmp(tokens[1], "disconnect") == 0)
+  {
+    WiFi.disconnect() ;
+  }
+}
+
+#endif
+
+/* ------------------------------------------------------------------------- */
+
 void f_action (char **tokens)
 {
   if ((strcmp(tokens[0], "?") == 0) || (strcmp(tokens[0], "help") == 0))
@@ -184,6 +240,60 @@ void f_action (char **tokens)
     Serial.println ("dht22 <dataPin> - DHT-22 temperature/humidity sensor") ;
     Serial.println ("hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic sensor") ;
     Serial.println ("uptime") ;
+    #ifdef ARDUINO_ESP8266_NODEMCU
+      Serial.println ("wifi status") ;
+      Serial.println ("wifi ssid <ssid>") ;
+      Serial.println ("wifi pw <password>") ;
+      Serial.println ("wifi disconnect") ;
+    #endif
+  }
+  else
+  if ((strcmp(tokens[0], "hi") == 0) && (tokens[1] != NULL))
+  {
+    int pin = atoi(tokens[1]) ;
+    pinMode (pin, OUTPUT) ;
+    digitalWrite (pin, HIGH) ;
+    sprintf (line, "pin:%d HIGH", pin) ;
+    Serial.println (line) ;
+  }
+  else
+  if ((strcmp(tokens[0], "lo") == 0) && (tokens[1] != NULL))
+  {
+    int pin = atoi(tokens[1]) ;
+    pinMode (pin, OUTPUT) ;
+    digitalWrite (pin, LOW) ;
+    sprintf (line, "pin:%d LOW", pin) ;
+    Serial.println (line) ;
+  }
+  else
+  if ((strcmp(tokens[0], "aread") == 0) && (tokens[1] != NULL))
+  {
+    int pin = atoi(tokens[1]) ;
+    int val = analogRead (pin) ;
+    sprintf (line, "analogRead pin:%d - %d", pin, val) ;
+    Serial.println (line) ;
+  }
+  else
+  if (strcmp(tokens[0], "bmp180") == 0)
+  {
+    float t=0.0, p=0.0 ;
+    if (f_bmp180 (&t, &p))
+    {
+      sprintf (line, "bmp180 - temperature:%d.%02d pressure:%d.%02d",
+               int(t), (int)(t*100)%100, int(p), (int)(p*100)%100) ;
+      Serial.println (line) ;
+    }
+  }
+  else
+  if ((strcmp(tokens[0], "dht22") == 0) && (tokens[1] != NULL))
+  {
+    float t=0.0, h=0.0 ;
+    if (f_dht22 (atoi(tokens[1]), &t, &h))
+    {
+      sprintf (line, "dht22 - temperature:%d.%02d humidity:%d.%02d",
+               int(t), (int)(t*100)%100, int(h), (int)(h*100)%100) ;
+      Serial.println (line) ;
+    }
   }
   else
   if ((strcmp(tokens[0], "hi") == 0) && (tokens[1] != NULL))
@@ -251,6 +361,15 @@ void f_action (char **tokens)
     sprintf (line, "uptime - %ld secs", now) ;
     Serial.println (line) ;
   }
+
+  #ifdef ARDUINO_ESP8266_NODEMCU
+  else
+  if ((strcmp(tokens[0], "wifi") == 0) && (tokens[1] != NULL))
+  {
+    f_wifi (tokens) ;
+  }
+  #endif
+
   else
   {
     Serial.println ("FAULT: Unknown command. Enter ? for help.") ;
@@ -264,6 +383,12 @@ void setup ()
   Wire.begin () ;
   Serial.begin (9600) ;
   Serial.setTimeout (MAX_LONG) ; // Serial.read() to block as long as possible
+
+  #ifdef ARDUINO_ESP8266_NODEMCU
+    cfg_wifi_ssid[0] = 0 ;
+    cfg_wifi_pw[0] = 0 ;
+  #endif
+
   Serial.println ("Ready.") ;
 }
 
