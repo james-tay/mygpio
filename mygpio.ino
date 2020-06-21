@@ -19,7 +19,16 @@
        hi 7
        dht22 6
        lo 7
+
+     test BMP180,
+       bmp180
+
+     test build-in LED on NodeMCU
+       lo 16
+       hi 16
 */
+
+#include <Wire.h>
 
 #define MAX_LONG 2147483647
 #define MAX_TOKENS 10
@@ -29,6 +38,49 @@ char line[BUF_SIZE] ;           // general purpose string buffer
 char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
 
 /* ------------------------------------------------------------------------- */
+
+/*
+   Polls a BMP180 on the I2C bus. This should return temperature and pressure
+   data which is then written into "temperature" and "pressure". On success
+   we return 1, otherwise 0.
+*/
+
+int f_bmp180 (float *temperature, float *pressure)
+{
+  #define BMP180_ADDR 0x77 /* this came from the BMP180 data sheet */
+
+  unsigned char data[2] ;
+
+  Wire.beginTransmission (BMP180_ADDR) ;
+
+  /* read the 11x 16-bit registers on the BMP180 for calibration data */
+
+  short AC1, AC2, AC3, VB1, VB2, MB, MC, MD ;
+  unsigned short AC4, AC5, AC6 ;
+
+  Wire.beginTransmission (BMP180_ADDR) ;
+  data[0] = 0xAA ;
+  data[1] = 0 ;
+  Wire.write(data[0]) ;
+  int error = Wire.endTransmission() ;
+  if (error == 0)
+  {
+    Wire.requestFrom (BMP180_ADDR, 2) ;
+    data[0] = Wire.read() ;
+    data[1] = Wire.read() ;
+
+    sprintf (line, "AC1: %d %d.", data[0], data[1]) ;
+    Serial.println (line) ;
+  }
+  else
+  {
+    sprintf (line, "FAULT: f_bmp180() xmit error %d.", error) ;
+    Serial.println (line) ;
+    return (0) ;
+  }
+
+  return (1) ;
+}
 
 /*
    Polls a DHT-22 and writes the current temperature and humidity in the
@@ -128,6 +180,7 @@ void f_action (char **tokens)
     Serial.println ("hi <pin 0-13>") ;
     Serial.println ("lo <pin 0-13>") ;
     Serial.println ("aread <pin 0-5> - analog read") ;
+    Serial.println ("bmp180") ;
     Serial.println ("dht22 <dataPin> - DHT-22 temperature/humidity sensor") ;
     Serial.println ("hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic sensor") ;
     Serial.println ("uptime") ;
@@ -157,6 +210,17 @@ void f_action (char **tokens)
     int val = analogRead (pin) ;
     sprintf (line, "analogRead pin:%d - %d", pin, val) ;
     Serial.println (line) ;
+  }
+  else
+  if (strcmp(tokens[0], "bmp180") == 0)
+  {
+    float t=0.0, p=0.0 ;
+    if (f_bmp180 (&t, &p))
+    {
+      sprintf (line, "bmp180 - temperature:%d.%02d pressure:%d.%02d",
+               int(t), (int)(t*100)%100, int(p), (int)(p*100)%100) ;
+      Serial.println (line) ;
+    }
   }
   else
   if ((strcmp(tokens[0], "dht22") == 0) && (tokens[1] != NULL))
@@ -197,6 +261,7 @@ void f_action (char **tokens)
 
 void setup ()
 {
+  Wire.begin () ;
   Serial.begin (9600) ;
   Serial.setTimeout (MAX_LONG) ; // Serial.read() to block as long as possible
   Serial.println ("Ready.") ;
