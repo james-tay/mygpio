@@ -12,7 +12,8 @@ import termios
 
 cfg_serial_port = "/dev/ttyUSB0"
 cfg_serial_baud = termios.B9600
-cfg_discard_wait_sec = 0.2               # wait for bytes before first xmit
+cfg_discard_wait_sec = 0.2              # wait for bytes before first xmit
+cfg_read_timeout = 20.0                 # secs to wait for (text) response
 cfg_debug = 0
 
 if (os.getenv("DEBUG") is not None):            # optional debug flag
@@ -93,7 +94,7 @@ if (cfg_debug):
 
 buf = ""
 while (buf.endswith("OK\r\n") == False):
-  rfds, wfds, xfds = select.select ([com_fd], [], [], 1.0)
+  rfds, wfds, xfds = select.select ([com_fd], [], [], cfg_read_timeout)
   if (com_fd in rfds):
     s = os.read (com_fd, 80)
     buf = buf + s

@@ -20,12 +20,17 @@
        dht22 6
        lo 7
 
-     test BMP180,
+     test BMP180,       (on nodemcu, SCL is D1, SDA is D2)
        bmp180
 
      test build-in LED on NodeMCU
        lo 16
        hi 16
+
+   Bugs
+
+     - The "wifi {ssid|pw} <value>" command does not support arguments with
+       spaces.
 */
 
 #include <Wire.h>
@@ -34,7 +39,8 @@
   #include <ESP8266WiFi.h>
 
   #define MAX_SSID_LEN 32
-  #define MAX_PASSWD_LEN 32
+  #define MAX_PASSWD_LEN 64             // maximum wifi password length
+  #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
 
   char cfg_wifi_ssid[MAX_SSID_LEN] ;
   char cfg_wifi_pw[MAX_PASSWD_LEN] ;
@@ -187,8 +193,15 @@ float f_hcsr04 (int trigPin, int echoPin)
 
 void f_wifi (char **tokens)
 {
-  if (strcmp(tokens[1], "status") == 0)
+  if (strcmp(tokens[1], "status") == 0)                         // status
   {
+    sprintf (line, "cfg_wifi_ssid: %s", cfg_wifi_ssid) ;
+    Serial.println (line) ;
+    if (strlen(cfg_wifi_pw) > 0)
+      Serial.println ("cfg_wifi_pw: (set)") ;
+    else
+      Serial.println ("cfg_wifi_pw: (unset)") ;
+
     int status = WiFi.status() ;
     strcpy (line, "status: ") ;
     switch (status)
@@ -213,15 +226,79 @@ void f_wifi (char **tokens)
         strcat (line, "UNKNOWN") ; break ;
     }
     Serial.println (line) ;
-    sprintf (line, "cfg_wifi_ssid: %s", cfg_wifi_ssid) ;
+
+    unsigned char mac[6] ;
+    WiFi.macAddress(mac) ;
+    sprintf (line, "wifi_mac: %x:%x:%x:%x:%x:%x",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
     Serial.println (line) ;
-    sprintf (line, "cfg_wifi_pw: %s", cfg_wifi_pw) ;
-    Serial.println (line) ;
+    Serial.print ("wifi_ip: ") ;
+    Serial.print (WiFi.localIP()) ;
+    Serial.print ("/") ;
+    Serial.println (WiFi.subnetMask()) ;
   }
   else
-  if (strcmp(tokens[1], "disconnect") == 0)
+  if (strcmp(tokens[1], "disconnect") == 0)                     // disconnect
   {
     WiFi.disconnect() ;
+  }
+  else
+  if ((strcmp(tokens[1], "ssid") == 0) &&                       // set ssid
+      (tokens[2] != NULL))
+  {
+    strlcpy (cfg_wifi_ssid, tokens[2], MAX_SSID_LEN) ;
+  }
+  else
+  if (strcmp(tokens[1], "pw") == 0)                            // set pw
+  {
+    if (tokens[2] != NULL)
+      strlcpy (cfg_wifi_pw, tokens[2], MAX_PASSWD_LEN) ;
+    else
+      cfg_wifi_pw[0] = 0 ;
+  }
+  else
+  if (strcmp(tokens[1], "connect") == 0)                        // connect
+  {
+    WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
+    for (int retry=0 ; retry < MAX_WIFI_TIMEOUT ; retry++)
+    {
+      int status = WiFi.status() ;
+      if (status == WL_CONNECTED)
+      {
+        WiFi.setAutoReconnect (true) ;
+        sprintf (line, "Connected in %d seconds.", retry) ;
+        Serial.println (line) ;
+        return ;
+      }
+      else
+      if (status == WL_DISCONNECTED)
+        delay (1000) ;
+      else
+      {
+        switch (status)
+        {
+          case WL_NO_SHIELD:
+            Serial.println ("WL_NO_SHIELD") ; return ;
+          case WL_IDLE_STATUS:
+            Serial.println ("WL_IDLE_STATUS") ; return ;
+          case WL_NO_SSID_AVAIL:
+            Serial.println ("WL_NO_SSID_AVAIL") ; return ;
+          case WL_SCAN_COMPLETED:
+            Serial.println ("WL_SCAN_COMPLETE") ; return ;
+          case WL_CONNECT_FAILED:
+            Serial.println ("WL_CONNECT_FAILED") ; return ;
+          case WL_CONNECTION_LOST:
+            Serial.println ("WL_CONNECTION_LOST") ; return ;
+          default:
+            Serial.println ("UNKNOWN") ; return ;
+        }
+      }
+    }
+    Serial.println ("Connection attempt timed out.") ;
+  }
+  else
+  {
+    Serial.println ("Invalid argument.") ;
   }
 }
 
@@ -387,9 +464,13 @@ void setup ()
   #ifdef ARDUINO_ESP8266_NODEMCU
     cfg_wifi_ssid[0] = 0 ;
     cfg_wifi_pw[0] = 0 ;
+    pinMode (LED_BUILTIN, OUTPUT) ;
+    digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
+    delay (1000) ;
+    digitalWrite (LED_BUILTIN, HIGH) ;
   #endif
 
-  Serial.println ("Ready.") ;
+  Serial.println ("\nReady.") ;
 }
 
 void loop ()
