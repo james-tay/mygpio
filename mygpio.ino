@@ -56,6 +56,58 @@ char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
 /* ------------------------------------------------------------------------- */
 
 /*
+   Reads a 16-bit (signed) value from "device" at "address", saving the 16-bit
+   value in "result". On success, it returns 1, otherwise 0.
+*/
+
+int f_i2c_readShort (int device, unsigned char addr, short *result)
+{
+  unsigned char data[2] ;
+  Wire.beginTransmission (device) ;
+  data[0] = addr ;
+  data[1] = 0 ;
+  if ((Wire.write (data[0]) != 1) ||
+      (Wire.endTransmission() != 0) ||
+      (Wire.requestFrom (device, 2) != 2))
+    return (0) ;
+
+  data[0] = Wire.read () ;
+  data[1] = Wire.read () ;
+  int v = data[0] ;
+  v = (v << 8) + data[1] ;
+  if (v > 32767)
+    v = v - 65536 ;
+  *result = (short) v ;
+  return (1) ;
+}
+
+/*
+   Reads a 16-bit (unsigned) value from "device" at "address", saving the
+   value in "result". On success, it returns 1, otherwise 0.
+*/
+
+int f_i2c_readUShort (int device, unsigned char addr, unsigned short *result)
+{
+  unsigned char data[2] ;
+  Wire.beginTransmission (device) ;
+  data[0] = addr ;
+  data[1] = 0 ;
+  if ((Wire.write (data[0]) != 1) ||
+      (Wire.endTransmission() != 0) ||
+      (Wire.requestFrom (device, 2) != 2))
+    return (0) ;
+
+  data[0] = Wire.read () ;
+  data[1] = Wire.read () ;
+  int v = data[0] ;
+  v = (v << 8) + data[1] ;
+  *result = (unsigned short) v ;
+  return (1) ;
+}
+
+/* ------------------------------------------------------------------------- */
+
+/*
    Polls a BMP180 on the I2C bus. This should return temperature and pressure
    data which is then written into "temperature" and "pressure". On success
    we return 1, otherwise 0.
@@ -65,36 +117,49 @@ int f_bmp180 (float *temperature, float *pressure)
 {
   #define BMP180_ADDR 0x77 /* this came from the BMP180 data sheet */
 
-  unsigned char data[2] ;
-
-  Wire.beginTransmission (BMP180_ADDR) ;
-
   /* read the 11x 16-bit registers on the BMP180 for calibration data */
 
-  short AC1, AC2, AC3, VB1, VB2, MB, MC, MD ;
-  unsigned short AC4, AC5, AC6 ;
+  short ac1, ac2, ac3, b1, b2, mb, mc, md ;
+  unsigned short ac4, ac5, ac6 ;
 
-  Wire.beginTransmission (BMP180_ADDR) ;
-  data[0] = 0xAA ;
-  data[1] = 0 ;
-  Wire.write(data[0]) ;
-  int error = Wire.endTransmission() ;
-  if (error == 0)
+  if ((f_i2c_readShort (BMP180_ADDR, 0xAA, &ac1) == 0) ||
+      (f_i2c_readShort (BMP180_ADDR, 0xAC, &ac2) == 0) ||
+      (f_i2c_readShort (BMP180_ADDR, 0xAE, &ac3) == 0) ||
+      (f_i2c_readUShort (BMP180_ADDR, 0xB0, &ac4) == 0) ||
+      (f_i2c_readUShort (BMP180_ADDR, 0xB2, &ac5) == 0) ||
+      (f_i2c_readUShort (BMP180_ADDR, 0xB4, &ac6) == 0) ||
+      (f_i2c_readShort (BMP180_ADDR, 0xB6, &b1) == 0) ||
+      (f_i2c_readShort (BMP180_ADDR, 0xB8, &b2) == 0) ||
+      (f_i2c_readShort (BMP180_ADDR, 0xBA, &mb) == 0) ||
+      (f_i2c_readShort (BMP180_ADDR, 0xBC, &mc) == 0) ||
+      (f_i2c_readShort (BMP180_ADDR, 0xBE, &md) == 0))
   {
-    Wire.requestFrom (BMP180_ADDR, 2) ;
-    data[0] = Wire.read() ;
-    data[1] = Wire.read() ;
-
-    sprintf (line, "AC1: %d %d.", data[0], data[1]) ;
-    Serial.println (line) ;
-  }
-  else
-  {
-    sprintf (line, "FAULT: f_bmp180() xmit error %d.", error) ;
-    Serial.println (line) ;
+    Serial.println ("Cannot read data from BMP180.") ;
     return (0) ;
   }
 
+  sprintf (line, "ac1: %d", ac1) ;
+  Serial.println (line) ;
+  sprintf (line, "ac2: %d", ac2) ;
+  Serial.println (line) ;
+  sprintf (line, "ac3: %d", ac3) ;
+  Serial.println (line) ;
+  sprintf (line, "ac4: %d", ac4) ;
+  Serial.println (line) ;
+  sprintf (line, "ac5: %d", ac5) ;
+  Serial.println (line) ;
+  sprintf (line, "ac6: %d", ac6) ;
+  Serial.println (line) ;
+  sprintf (line, "b1: %d", b1) ;
+  Serial.println (line) ;
+  sprintf (line, "b2: %d", b2) ;
+  Serial.println (line) ;
+  sprintf (line, "mb: %d", mb) ;
+  Serial.println (line) ;
+  sprintf (line, "mc: %d", mc) ;
+  Serial.println (line) ;
+  sprintf (line, "md: %d", md) ;
+  Serial.println (line) ;
   return (1) ;
 }
 
