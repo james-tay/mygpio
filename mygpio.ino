@@ -156,18 +156,18 @@ int f_bmp180 (float *temperature, float *pressure)
   Wire.write ((byte)(0x2E)) ;
   Wire.endTransmission () ;
   delay (5) ;                           // datasheet says wait 4.5 ms
-  short raw=0 ;
-  f_i2c_readShort (BMP180_ADDR, 0xF6, &raw) ;
+  short raw_t=0 ;
+  f_i2c_readShort (BMP180_ADDR, 0xF6, &raw_t) ;
 
-  sprintf (line, "raw_t: %d", raw) ;
+  sprintf (line, "raw_t: %d", raw_t) ;
   Serial.println (line) ;
 
   /* now calculate the true temperature */
 
-  int x1 = (raw - ac6) * ac5 >> 15 ;
-  int x2 = (mc << 11) / (x1 + md) ;
-  int b5 = x1 + x2 ;
-  int t = (b5 + 8) >> 4 ;
+  long x1 = (raw_t - ac6) * ac5 >> 15 ;
+  long x2 = (mc << 11) / (x1 + md) ;
+  long b5 = x1 + x2 ;
+  long t = (b5 + 8) >> 4 ;
   *temperature = float(t) / 10.0 ;
 
   /*
@@ -175,7 +175,7 @@ int f_bmp180 (float *temperature, float *pressure)
      result is 3 bytes (MSB, LSB, XLSB) starting at 0xF6.
   */
 
-  int v = 0x34 + (BMP180_MODE << 6) ;
+  long v = 0x34 + (BMP180_MODE << 6) ;
   Wire.beginTransmission (BMP180_ADDR) ;
   Wire.write ((byte)(0xF4)) ;
   Wire.write ((byte)(v)) ;
@@ -186,15 +186,34 @@ int f_bmp180 (float *temperature, float *pressure)
   Wire.write ((byte)(0xF6)) ;
   Wire.endTransmission () ;
   Wire.requestFrom (BMP180_ADDR, 3) ;
-  int msb = Wire.read () ;
-  int lsb = Wire.read () ;
-  int xlsb = Wire.read () ;
-  raw = ((msb << 16) + (lsb << 8) + xlsb) >> (8 - BMP180_MODE) ;
+  long msb = Wire.read () ;
+  long lsb = Wire.read () ;
+  long xlsb = Wire.read () ;
+  long raw_p = ((msb << 16) + (lsb << 8) + xlsb) >> (8 - BMP180_MODE) ;
 
-  sprintf (line, "raw_p: %d", raw) ;
+  sprintf (line, "raw_p: %d", raw_p) ;
   Serial.println (line) ;
 
-
+  long b6 = b5 - 4000 ;
+  x1 = (b2 * (b6 * b6) >> 12) >> 11 ;
+  x2 = (ac2 * b6) >> 11 ;
+  long x3 = x1 + x2 ;
+  long b3 = (((ac1 * 4 + x3) << BMP180_MODE) + 2) / 4 ;
+  x1 = ac3 * b6 >> 13 ;
+  x2 = ((b1 * (b6 * b6)) >> 12) >> 16 ;
+  x3 = ((x1 + x2) + 2) >> 2 ;
+  unsigned long b4 = (ac4 * (unsigned long)(x3 + 32768)) >> 15 ;
+  unsigned long b7 = (raw_p - b3) * (50000 >> BMP180_MODE) ;
+  long p ;
+  if (b7 < (unsigned long) 0x80000000)
+    p = (b7 * 2) / b4 ;
+  else
+    p = (b7 / b4) * 2 ;
+  x1 = (p >> 8) * (p >> 8) ;
+  x1 = (x1 * 3038) >> 16 ;
+  x2 = (-7357 * p) >> 16 ;
+  p = p + ((x1 + x2 + 3791) >> 4) ;
+  *pressure = float(p) / 100.0 ;
 
   return (1) ;
 }
