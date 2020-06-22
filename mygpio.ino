@@ -115,7 +115,8 @@ int f_i2c_readUShort (int device, unsigned char addr, unsigned short *result)
 
 int f_bmp180 (float *temperature, float *pressure)
 {
-  #define BMP180_ADDR 0x77 /* this came from the BMP180 data sheet */
+  #define BMP180_ADDR 0x77      /* this came from the BMP180 data sheet */
+  #define BMP180_MODE 3         /* the pressure oversampling */
 
   /* read the 11x 16-bit registers on the BMP180 for calibration data */
 
@@ -138,28 +139,43 @@ int f_bmp180 (float *temperature, float *pressure)
     return (0) ;
   }
 
-  sprintf (line, "ac1: %d", ac1) ;
+  sprintf (line, "ac1: %d\nac2: %d\nac3: %d\nac4: %d", ac1, ac2, ac3, ac4) ;
   Serial.println (line) ;
-  sprintf (line, "ac2: %d", ac2) ;
+  sprintf (line, "ac5: %d\nac6: %d\nb1: %d\nb2: %d", ac5, ac6, b1, b2) ;
   Serial.println (line) ;
-  sprintf (line, "ac3: %d", ac3) ;
+  sprintf (line, "mb: %d\nmc: %d\nmd: %d", mb, mc, md) ;
   Serial.println (line) ;
-  sprintf (line, "ac4: %d", ac4) ;
+
+  /*
+     read the raw temperature by writing 0x2E to address 0xF4, the result is
+     2 bytes at 0xF6.
+  */
+
+  Wire.beginTransmission (BMP180_ADDR) ;
+  Wire.write ((byte)(0xF4)) ;
+  Wire.write ((byte)(0x2E)) ;
+  Wire.endTransmission () ;
+  delay (5) ;
+  short raw=0 ;
+  f_i2c_readShort (BMP180_ADDR, 0xF6, &raw) ;
+
+  sprintf (line, "raw_t: %d", raw) ;
   Serial.println (line) ;
-  sprintf (line, "ac5: %d", ac5) ;
-  Serial.println (line) ;
-  sprintf (line, "ac6: %d", ac6) ;
-  Serial.println (line) ;
-  sprintf (line, "b1: %d", b1) ;
-  Serial.println (line) ;
-  sprintf (line, "b2: %d", b2) ;
-  Serial.println (line) ;
-  sprintf (line, "mb: %d", mb) ;
-  Serial.println (line) ;
-  sprintf (line, "mc: %d", mc) ;
-  Serial.println (line) ;
-  sprintf (line, "md: %d", md) ;
-  Serial.println (line) ;
+
+  /* now calculate the true temperature */
+
+  int x1 = (raw - ac6) * ac5 >> 15 ;
+  int x2 = (mc << 11) / (x1 + md) ;
+  int b5 = x1 + x2 ;
+  int t = (b5 + 8) >> 4 ;
+  *temperature = float(t) / 10.0 ;
+
+  /*
+     read raw pressure by writing "0x34+(mode<<6)" to address 0xF4, the
+     result is 3 bytes (MSB, LSB, XLSB) starting at 0xF6.
+  */
+
+
   return (1) ;
 }
 
