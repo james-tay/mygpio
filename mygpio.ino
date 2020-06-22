@@ -155,7 +155,7 @@ int f_bmp180 (float *temperature, float *pressure)
   Wire.write ((byte)(0xF4)) ;
   Wire.write ((byte)(0x2E)) ;
   Wire.endTransmission () ;
-  delay (5) ;
+  delay (5) ;                           // datasheet says wait 4.5 ms
   short raw=0 ;
   f_i2c_readShort (BMP180_ADDR, 0xF6, &raw) ;
 
@@ -174,6 +174,26 @@ int f_bmp180 (float *temperature, float *pressure)
      read raw pressure by writing "0x34+(mode<<6)" to address 0xF4, the
      result is 3 bytes (MSB, LSB, XLSB) starting at 0xF6.
   */
+
+  int v = 0x34 + (BMP180_MODE << 6) ;
+  Wire.beginTransmission (BMP180_ADDR) ;
+  Wire.write ((byte)(0xF4)) ;
+  Wire.write ((byte)(v)) ;
+  Wire.endTransmission () ;
+  delay (26) ;                          // datasheet says 25.5 ms for mode 3.
+
+  Wire.beginTransmission (BMP180_ADDR) ;
+  Wire.write ((byte)(0xF6)) ;
+  Wire.endTransmission () ;
+  Wire.requestFrom (BMP180_ADDR, 3) ;
+  int msb = Wire.read () ;
+  int lsb = Wire.read () ;
+  int xlsb = Wire.read () ;
+  raw = ((msb << 16) + (lsb << 8) + xlsb) >> (8 - BMP180_MODE) ;
+
+  sprintf (line, "raw_p: %d", raw) ;
+  Serial.println (line) ;
+
 
 
   return (1) ;
