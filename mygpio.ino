@@ -36,6 +36,7 @@
 #include <Wire.h>
 
 #ifdef ARDUINO_ESP8266_NODEMCU
+  #include <FS.h>
   #include <ESP8266WiFi.h>
 
   #define MAX_SSID_LEN 32
@@ -311,6 +312,128 @@ float f_hcsr04 (int trigPin, int echoPin)
 
 #ifdef ARDUINO_ESP8266_NODEMCU
 
+void f_fs (char **tokens)
+{
+  char msg[BUF_SIZE] ;
+
+  if (strcmp(tokens[1], "info") == 0)                           // info
+  {
+    FSInfo fi ;
+    if (SPIFFS.info (fi))
+    {
+      sprintf (line, "totalBytes: %d\nusedBytes: %d\nblockSize: %d",
+               fi.totalBytes, fi.usedBytes, fi.blockSize) ;
+      Serial.println (line) ;
+      sprintf (line, "pageSize: %d\nmaxOpenFiles: %d\nmaxPathLength: %d",
+               fi.pageSize, fi.maxOpenFiles, fi.maxPathLength) ;
+      Serial.println (line) ;
+    }
+    else
+    {
+      Serial.println ("Cannot obtain fs info.") ;
+    }
+  }
+  else
+  if (strcmp(tokens[1], "format") == 0)                         // format
+  {
+    if (SPIFFS.format())
+    {
+      Serial.println ("Success.") ;
+    }
+    else
+    {
+      Serial.println ("Formatting failed.") ;
+    }
+  }
+  else
+  if (strcmp(tokens[1], "ls") == 0)                             // ls
+  {
+    Dir dir = SPIFFS.openDir ("/") ;
+    while (dir.next())
+    {
+      String s = dir.fileName () ;
+      Serial.println (s) ;
+    }
+  }
+  else
+  if ((strcmp(tokens[1], "write") == 0) &&                      // write
+      (tokens[2] != NULL) && (tokens[3] != NULL))
+  {
+    char *filename = tokens[2] ;
+    char *content = tokens[3] ;
+
+    /* force filenames to begin with '/' */
+
+    if ((filename[0] != '/') || (strlen(filename) == 1))
+    {
+      Serial.println ("Invalid filename.") ;
+      return ;
+    }
+
+    File f = SPIFFS.open (filename, "w") ;
+    if (f)
+    {
+      int amt = f.print (content) ;
+      f.close () ;
+      sprintf (msg, "Wrote %d bytes to '%s'.", amt, filename) ;
+      Serial.println (msg) ;
+    }
+    else
+    {
+      sprintf (line, "Cannot write to '%s'.", filename) ;
+      Serial.println (line) ;
+    }
+  }
+  else
+  if ((strcmp(tokens[1], "read") == 0) && (tokens[2] != NULL))  // read
+  {
+    char *filename = tokens[2] ;
+    File f = SPIFFS.open (filename, "r") ;
+    int amt = f.readBytes (msg, BUF_SIZE-1) ;
+    f.close () ;
+    if (amt > 0)
+    {
+      msg[amt] = 0 ;
+      Serial.println (msg) ;
+    }
+    else
+    {
+      Serial.println ("Cannot read file.") ;
+    }
+  }
+  else
+  if ((strcmp(tokens[1], "remove") == 0) &&                     // remove
+      (tokens[2] != NULL))
+  {
+    char *filename = tokens[2] ;
+    if (SPIFFS.remove(filename))
+      Serial.println ("File removed.") ;
+    else
+      Serial.println ("Cannot remove file.") ;
+  }
+  else
+  if ((strcmp(tokens[1], "rename") == 0) &&                     // rename
+      (tokens[2] != NULL) && (tokens[3] != NULL))
+  {
+    char *old_name = tokens[2] ;
+    char *new_name = tokens[3] ;
+
+    if ((new_name[0] != '/') || (strlen(new_name) == 1))
+    {
+      Serial.println ("Invalid filename.") ;
+      return ;
+    }
+    if (SPIFFS.rename(old_name, new_name))
+      Serial.println ("File renamed.") ;
+    else
+      Serial.println ("Cannot rename file.") ;
+  }
+  else
+  {
+    Serial.println ("Invalid argument.") ;
+  }
+}
+
 void f_wifi (char **tokens)
 {
   if (strcmp(tokens[1], "status") == 0)                         // status
@@ -438,6 +561,13 @@ void f_action (char **tokens)
     Serial.println ("hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic sensor") ;
     Serial.println ("uptime") ;
     #ifdef ARDUINO_ESP8266_NODEMCU
+      Serial.println ("fs format") ;
+      Serial.println ("fs info") ;
+      Serial.println ("fs ls") ;
+      Serial.println ("fs read <filename>") ;
+      Serial.println ("fs remove <filename>") ;
+      Serial.println ("fs rename <old> <new>") ;
+      Serial.println ("fs write <filename> <content>") ;
       Serial.println ("wifi status") ;
       Serial.println ("wifi ssid <ssid>") ;
       Serial.println ("wifi pw <password>") ;
@@ -561,6 +691,11 @@ void f_action (char **tokens)
 
   #ifdef ARDUINO_ESP8266_NODEMCU
   else
+  if ((strcmp(tokens[0], "fs") == 0) && (tokens[1] != NULL))
+  {
+    f_fs (tokens) ;
+  }
+  else
   if ((strcmp(tokens[0], "wifi") == 0) && (tokens[1] != NULL))
   {
     f_wifi (tokens) ;
@@ -584,6 +719,7 @@ void setup ()
   #ifdef ARDUINO_ESP8266_NODEMCU
     cfg_wifi_ssid[0] = 0 ;
     cfg_wifi_pw[0] = 0 ;
+    SPIFFS.begin () ;
     pinMode (LED_BUILTIN, OUTPUT) ;
     digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
     delay (1000) ;
