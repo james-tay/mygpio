@@ -50,7 +50,7 @@
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
 #endif
 
-#define MAX_LONG 2147483647
+#define SERIAL_TIMEOUT 5000     // serial timeout in milliseconds
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
 
@@ -139,7 +139,7 @@ int f_bmp180 (float *temperature, float *pressure)
       (f_i2c_readShort (BMP180_ADDR, 0xBC, &mc) == 0) ||
       (f_i2c_readShort (BMP180_ADDR, 0xBE, &md) == 0))
   {
-    Serial.println ("Cannot read data from BMP180.") ;
+    Serial.println ("FAULT: Cannot read data from BMP180.") ;
     return (0) ;
   }
 
@@ -315,6 +315,21 @@ float f_hcsr04 (int trigPin, int echoPin)
 
 #ifdef ARDUINO_ESP8266_NODEMCU
 
+int f_blink (int num)
+{
+  int duration = 0 ;
+  for (int i=0 ; i < num ; i++)
+  {
+    digitalWrite (LED_BUILTIN, LOW) ;
+    delay (30) ;
+    duration = duration + 30 ;
+    digitalWrite (LED_BUILTIN, HIGH) ;
+    delay (300) ;
+    duration = duration + 300 ;
+  }
+  return (duration) ;
+}
+
 void f_fs (char **tokens)
 {
   char msg[BUF_SIZE] ;
@@ -333,7 +348,7 @@ void f_fs (char **tokens)
     }
     else
     {
-      Serial.println ("Cannot obtain fs info.") ;
+      Serial.println ("FAULT: Cannot obtain fs info.") ;
     }
   }
   else
@@ -345,7 +360,7 @@ void f_fs (char **tokens)
     }
     else
     {
-      Serial.println ("Formatting failed.") ;
+      Serial.println ("FAULT: Formatting failed.") ;
     }
   }
   else
@@ -369,7 +384,7 @@ void f_fs (char **tokens)
 
     if ((filename[0] != '/') || (strlen(filename) == 1))
     {
-      Serial.println ("Invalid filename.") ;
+      Serial.println ("FAULT: Invalid filename.") ;
       return ;
     }
 
@@ -383,7 +398,7 @@ void f_fs (char **tokens)
     }
     else
     {
-      sprintf (line, "Cannot write to '%s'.", filename) ;
+      sprintf (line, "FAULT: Cannot write to '%s'.", filename) ;
       Serial.println (line) ;
     }
   }
@@ -401,18 +416,18 @@ void f_fs (char **tokens)
     }
     else
     {
-      Serial.println ("Cannot read file.") ;
+      Serial.println ("FAULT: Cannot read file.") ;
     }
   }
   else
-  if ((strcmp(tokens[1], "remove") == 0) &&                     // remove
+  if ((strcmp(tokens[1], "rm") == 0) &&                         // rm
       (tokens[2] != NULL))
   {
     char *filename = tokens[2] ;
     if (SPIFFS.remove(filename))
       Serial.println ("File removed.") ;
     else
-      Serial.println ("Cannot remove file.") ;
+      Serial.println ("FAULT: Cannot remove file.") ;
   }
   else
   if ((strcmp(tokens[1], "rename") == 0) &&                     // rename
@@ -423,17 +438,17 @@ void f_fs (char **tokens)
 
     if ((new_name[0] != '/') || (strlen(new_name) == 1))
     {
-      Serial.println ("Invalid filename.") ;
+      Serial.println ("FAULT: Invalid filename.") ;
       return ;
     }
     if (SPIFFS.rename(old_name, new_name))
       Serial.println ("File renamed.") ;
     else
-      Serial.println ("Cannot rename file.") ;
+      Serial.println ("FAULT: Cannot rename file.") ;
   }
   else
   {
-    Serial.println ("Invalid argument.") ;
+    Serial.println ("FAULT: Invalid argument.") ;
   }
 }
 
@@ -540,11 +555,11 @@ void f_wifi (char **tokens)
         }
       }
     }
-    Serial.println ("Connection attempt timed out.") ;
+    Serial.println ("FAULT: Connection attempt timed out.") ;
   }
   else
   {
-    Serial.println ("Invalid argument.") ;
+    Serial.println ("FAULT: Invalid argument.") ;
   }
 }
 
@@ -568,7 +583,7 @@ void f_action (char **tokens)
       Serial.println ("fs info") ;
       Serial.println ("fs ls") ;
       Serial.println ("fs read <filename>") ;
-      Serial.println ("fs remove <filename>") ;
+      Serial.println ("fs rm <filename>") ;
       Serial.println ("fs rename <old> <new>") ;
       Serial.println ("fs write <filename> <content>") ;
       Serial.println ("wifi connect") ;
@@ -708,7 +723,7 @@ void f_action (char **tokens)
 
   else
   {
-    Serial.println ("FAULT: Unknown command. Enter ? for help.") ;
+    Serial.println ("FAULT: Unknown command. Enter 'help' for commands.") ;
   }
 }
 
@@ -718,7 +733,7 @@ void setup ()
 {
   Wire.begin () ;
   Serial.begin (9600) ;
-  Serial.setTimeout (MAX_LONG) ; // Serial.read() to block as long as possible
+  Serial.setTimeout (SERIAL_TIMEOUT) ;
 
   #ifdef ARDUINO_ESP8266_NODEMCU
     cfg_wifi_ssid[0] = 0 ;
@@ -764,22 +779,24 @@ void loop ()
   int idx=0 ;
   char *p ;
 
-  /* At the start of our loop, print the prompt */
-
-  Serial.println ("OK") ;
-
   /* wait for '\r' (minicom sends this when user presses ENTER) */
 
   int amt = Serial.readBytesUntil('\r', line, BUF_SIZE-1) ;
   line[amt] = 0 ;
 
-  /* parse what we've received on the serial port */
-
-  if (amt == 0)
+  if (amt == 0)                 // user pressed ENTER or serial read timed out
   {
-    Serial.print ("\r\n") ;
+    #ifdef ARDUINO_ESP8266_NODEMCU
+
+      /* blink once if wifi is connected, twice otherwise. */
+
+      if (WiFi.status() == WL_CONNECTED)
+        f_blink (1) ;
+      else
+        f_blink (2) ;
+    #endif
   }
-  else
+  else                          // user entered something, tokenize it
   {
     idx = 0 ;
     p = strtok (line, " ") ;
@@ -791,7 +808,10 @@ void loop ()
     }
     tokens[idx] = NULL ;
     if (tokens[0] != NULL)
+    {
       f_action (tokens) ;
+      Serial.println ("OK") ;
+    }
   }
 }
 
