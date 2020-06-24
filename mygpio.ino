@@ -43,8 +43,11 @@
   #define MAX_PASSWD_LEN 64             // maximum wifi password length
   #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
 
-  char cfg_wifi_ssid[MAX_SSID_LEN] ;
-  char cfg_wifi_pw[MAX_PASSWD_LEN] ;
+  #define WIFI_SSID_FILE "/wifi.ssid"
+  #define WIFI_PW_FILE "/wifi.pw"
+
+  char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
+  char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
 #endif
 
 #define MAX_LONG 2147483647
@@ -568,6 +571,7 @@ void f_action (char **tokens)
       Serial.println ("fs remove <filename>") ;
       Serial.println ("fs rename <old> <new>") ;
       Serial.println ("fs write <filename> <content>") ;
+      Serial.println ("wifi connect") ;
       Serial.println ("wifi status") ;
       Serial.println ("wifi ssid <ssid>") ;
       Serial.println ("wifi pw <password>") ;
@@ -721,6 +725,32 @@ void setup ()
     cfg_wifi_pw[0] = 0 ;
     SPIFFS.begin () ;
     pinMode (LED_BUILTIN, OUTPUT) ;
+
+    /* if wifi ssid and password are available, try connect to wifi now */
+
+    FSInfo fi ;
+    if (SPIFFS.info(fi))
+    {
+      File f_ssid = SPIFFS.open (WIFI_SSID_FILE, "r") ;
+      File f_pw = SPIFFS.open (WIFI_PW_FILE, "r") ;
+      if ((f_ssid) && (f_pw) &&
+          (f_ssid.size() <= MAX_SSID_LEN) && (f_pw.size() <= MAX_PASSWD_LEN))
+      {
+        int s_amt = f_ssid.readBytes (cfg_wifi_ssid, MAX_SSID_LEN) ;
+        if (s_amt > 0)
+          cfg_wifi_ssid[s_amt] = 0 ;
+        int p_amt = f_pw.readBytes (cfg_wifi_pw, MAX_PASSWD_LEN) ;
+        if (p_amt > 0)
+          cfg_wifi_pw[p_amt] = 0 ;
+        if ((s_amt > 0) && (p_amt > 0))
+          WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
+      }
+      if (f_ssid)
+        f_ssid.close () ;
+      if (f_pw)
+        f_pw.close () ;
+    }
+
     digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
     delay (1000) ;
     digitalWrite (LED_BUILTIN, HIGH) ;
