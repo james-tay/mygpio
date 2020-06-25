@@ -487,6 +487,8 @@ void f_wifi (char **tokens)
         strcat (line, "UNKNOWN") ; break ;
     }
     Serial.println (line) ;
+    sprintf (line, "rssi: %d dBm", WiFi.RSSI()) ;
+    Serial.println (line) ;
 
     unsigned char mac[6] ;
     WiFi.macAddress(mac) ;
