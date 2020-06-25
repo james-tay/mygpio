@@ -31,12 +31,16 @@
 
      - The "wifi {ssid|pw} <value>" command does not support arguments with
        spaces.
+     - The "fs write <filename> <content>" command does not support content
+       with spaces.
+     - All filenames must begin with '/'.
 */
 
 #include <Wire.h>
 
 #ifdef ARDUINO_ESP8266_NODEMCU
   #include <FS.h>
+  #include <WiFiUdp.h>
   #include <ESP8266WiFi.h>
 
   #define MAX_SSID_LEN 32
@@ -45,17 +49,23 @@
 
   #define WIFI_SSID_FILE "/wifi.ssid"
   #define WIFI_PW_FILE "/wifi.pw"
+  #define UDP_PORT_FILE "/udp.port"
 
   char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
+  int cfg_udp_port=0 ;
+  WiFiUDP Udp ;
 #endif
 
-#define SERIAL_TIMEOUT 5000     // serial timeout in milliseconds
+#define SERIAL_TIMEOUT 1000     // serial timeout in milliseconds
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
 
 char line[BUF_SIZE] ;           // general purpose string buffer
+char input_buf[BUF_SIZE+1] ;    // bytes received on serial port
+int input_pos ;                 // index of bytes received on serial port
 char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
+unsigned long last_blink=5000 ;
 
 /* ------------------------------------------------------------------------- */
 
@@ -143,12 +153,14 @@ int f_bmp180 (float *temperature, float *pressure)
     return (0) ;
   }
 
-  sprintf (line, "ac1: %d\nac2: %d\nac3: %d\nac4: %d", ac1, ac2, ac3, ac4) ;
+  sprintf (line, "ac1: %d\r\nac2: %d\r\nac3: %d", ac1, ac2, ac3) ;
   Serial.println (line) ;
-  sprintf (line, "ac5: %d\nac6: %d\nb1: %d\nb2: %d", ac5, ac6, b1, b2) ;
+  sprintf (line, "ac4: %d\r\nac5: %d\r\nac6: %d", ac4, ac5, ac6) ;
   Serial.println (line) ;
-  sprintf (line, "mb: %d\nmc: %d\nmd: %d", mb, mc, md) ;
+  sprintf (line, "b1: %d\r\nb2: %d\r\nmb: %d\r\nmc: %d", b2, mb, mc) ;
   Serial.println (line) ;
+  sprintf (line, "md: %d", md) ;
+  Serial.println (md) ;
 
   /*
      read the raw temperature by writing 0x2E to address 0xF4, the result is
@@ -317,15 +329,19 @@ float f_hcsr04 (int trigPin, int echoPin)
 
 int f_blink (int num)
 {
+  #define BLINK_DURATION 10     // just long enough to be noticed
+  #define PAUSE_DURATION 300    // long enough for a human to count blinks
+
   int duration = 0 ;
   for (int i=0 ; i < num ; i++)
   {
     digitalWrite (LED_BUILTIN, LOW) ;
-    delay (30) ;
-    duration = duration + 30 ;
+    delay (BLINK_DURATION) ;
+    duration = duration + BLINK_DURATION ;
     digitalWrite (LED_BUILTIN, HIGH) ;
-    delay (300) ;
-    duration = duration + 300 ;
+    if (i < num-1)
+      delay (PAUSE_DURATION) ;
+    duration = duration + PAUSE_DURATION ;
   }
   return (duration) ;
 }
@@ -488,6 +504,9 @@ void f_wifi (char **tokens)
     }
     Serial.println (line) ;
     sprintf (line, "rssi: %d dBm", WiFi.RSSI()) ;
+    Serial.println (line) ;
+
+    sprintf (line, "udp_port: %d", cfg_udp_port) ;
     Serial.println (line) ;
 
     unsigned char mac[6] ;
@@ -736,6 +755,8 @@ void setup ()
   Wire.begin () ;
   Serial.begin (9600) ;
   Serial.setTimeout (SERIAL_TIMEOUT) ;
+  input_buf[0] = 0 ;
+  input_pos = 0 ;
 
   #ifdef ARDUINO_ESP8266_NODEMCU
     cfg_wifi_ssid[0] = 0 ;
@@ -743,7 +764,10 @@ void setup ()
     SPIFFS.begin () ;
     pinMode (LED_BUILTIN, OUTPUT) ;
 
-    /* if wifi ssid and password are available, try connect to wifi now */
+    /*
+       if wifi ssid and password are available, try connect to wifi now.
+       if udp server port is defined, configure it now.
+    */
 
     FSInfo fi ;
     if (SPIFFS.info(fi))
@@ -760,12 +784,42 @@ void setup ()
         if (p_amt > 0)
           cfg_wifi_pw[p_amt] = 0 ;
         if ((s_amt > 0) && (p_amt > 0))
+        {
+          sprintf (line, "NOTICE: Wifi config loaded for %s.", cfg_wifi_ssid) ;
+          Serial.println (line) ;
           WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
+        }
       }
       if (f_ssid)
         f_ssid.close () ;
       if (f_pw)
         f_pw.close () ;
+
+      File f_udp = SPIFFS.open (UDP_PORT_FILE, "r") ;
+      if ((f_udp) && (f_udp.size() > 0))
+      {
+        char msg[BUF_SIZE] ;
+        int amt = f_udp.readBytes (msg, 6) ;
+        if (amt > 0)
+        {
+          msg[amt] = 0 ;
+          cfg_udp_port = atoi (msg) ;
+          if ((cfg_udp_port < 65535) && (cfg_udp_port > 0))
+          {
+            sprintf (line, "NOTICE: UDP server on port %d.", cfg_udp_port) ;
+            Serial.println (line) ;
+            Udp.begin (cfg_udp_port) ;
+          }
+          else
+          {
+            sprintf (line, "WARNING: Invalid udp port '%s'.", msg) ;
+            Serial.println (line) ;
+            cfg_udp_port = 0 ;
+          }
+        }
+      }
+      if (f_udp)
+        f_udp.close () ;
     }
 
     digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
@@ -781,27 +835,42 @@ void loop ()
   int idx=0 ;
   char *p ;
 
-  /* wait for '\r' (minicom sends this when user presses ENTER) */
+  /* see if any UDP packet arrived */
 
-  int amt = Serial.readBytesUntil('\r', line, BUF_SIZE-1) ;
-  line[amt] = 0 ;
-
-  if (amt == 0)                 // user pressed ENTER or serial read timed out
+  int pktsize = Udp.parsePacket () ;
+  if (pktsize)
   {
-    #ifdef ARDUINO_ESP8266_NODEMCU
+    sprintf (line, "NOTICE: received %d bytes from %s:%d.", pktsize,
+             Udp.remoteIP().toString().c_str(), Udp.remotePort()) ;
+    Serial.println (line) ;
 
-      /* blink once if wifi is connected, twice otherwise. */
 
-      if (WiFi.status() == WL_CONNECTED)
-        f_blink (1) ;
-      else
-        f_blink (2) ;
-    #endif
+
+
   }
-  else                          // user entered something, tokenize it
+
+  /*
+     see if serial data arrived, wait for '\r' (minicom sends this when user
+     presses ENTER)
+  */
+
+  while ((Serial.available() > 0) && (input_pos < BUF_SIZE))
   {
+    char c = Serial.read () ;
+    input_buf[input_pos] = c ;
+    if (input_buf[input_pos] == '\r')
+    {
+      input_buf[input_pos + 1] = 0 ;
+      break ;
+    }
+    input_pos++ ;
+  }
+
+  if (input_buf[input_pos] == '\r')
+  {
+    input_buf[input_pos] = 0 ;
     idx = 0 ;
-    p = strtok (line, " ") ;
+    p = strtok (input_buf, " ") ;
     while ((p) && (idx < MAX_TOKENS))
     {
       tokens[idx] = p ;
@@ -814,6 +883,25 @@ void loop ()
       f_action (tokens) ;
       Serial.println ("OK") ;
     }
+    input_buf[0] = 0 ;
+    input_pos = 0 ;
   }
+
+  #ifdef ARDUINO_ESP8266_NODEMCU
+
+    /* one in a while, blink once if wifi is connected, twice otherwise. */
+
+    if (millis() > last_blink)
+    {
+      if (WiFi.status() == WL_CONNECTED)
+        f_blink (1) ;
+      else
+        f_blink (2) ;
+      last_blink = last_blink + 5000 ;
+    }
+
+  #endif
+
+  delay (50) ; // mandatory sleep to prevent excessive power drain
 }
 
