@@ -60,9 +60,11 @@
 #define SERIAL_TIMEOUT 1000     // serial timeout in milliseconds
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
+#define REPLY_SIZE 256
 
 char line[BUF_SIZE] ;           // general purpose string buffer
 char input_buf[BUF_SIZE+1] ;    // bytes received on serial port
+char reply_buf[REPLY_SIZE+1] ;  // accumulate our reply message here
 int input_pos ;                 // index of bytes received on serial port
 char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
 unsigned long last_blink=5000 ;
@@ -832,23 +834,6 @@ void setup ()
 
 void loop ()
 {
-  int idx=0 ;
-  char *p ;
-
-  /* see if any UDP packet arrived */
-
-  int pktsize = Udp.parsePacket () ;
-  if (pktsize)
-  {
-    sprintf (line, "NOTICE: received %d bytes from %s:%d.", pktsize,
-             Udp.remoteIP().toString().c_str(), Udp.remotePort()) ;
-    Serial.println (line) ;
-
-
-
-
-  }
-
   /*
      see if serial data arrived, wait for '\r' (minicom sends this when user
      presses ENTER)
@@ -869,8 +854,8 @@ void loop ()
   if (input_buf[input_pos] == '\r')
   {
     input_buf[input_pos] = 0 ;
-    idx = 0 ;
-    p = strtok (input_buf, " ") ;
+    int idx = 0 ;
+    char *p = strtok (input_buf, " ") ;
     while ((p) && (idx < MAX_TOKENS))
     {
       tokens[idx] = p ;
@@ -880,6 +865,7 @@ void loop ()
     tokens[idx] = NULL ;
     if (tokens[0] != NULL)
     {
+      reply_buf[0] = 0 ;
       f_action (tokens) ;
       Serial.println ("OK") ;
     }
@@ -889,16 +875,31 @@ void loop ()
 
   #ifdef ARDUINO_ESP8266_NODEMCU
 
-    /* one in a while, blink once if wifi is connected, twice otherwise. */
+  int pktsize = Udp.parsePacket () ;
+  if (pktsize)
+  {
+    sprintf (line, "NOTICE: received %d bytes from %s:%d.", pktsize,
+             Udp.remoteIP().toString().c_str(), Udp.remotePort()) ;
+    Serial.println (line) ;
 
-    if (millis() > last_blink)
-    {
-      if (WiFi.status() == WL_CONNECTED)
-        f_blink (1) ;
-      else
-        f_blink (2) ;
-      last_blink = last_blink + 5000 ;
-    }
+    /* demonstration on sending back a UDP reply */
+
+    Udp.beginPacket (Udp.remoteIP(), Udp.remotePort()) ;
+    sprintf (line, "uptime - %d ms", millis()) ;
+    Udp.write (line) ;
+    Udp.endPacket () ;
+  }
+
+  /* one in a while, blink once if wifi is connected, twice otherwise. */
+
+  if (millis() > last_blink)
+  {
+    if (WiFi.status() == WL_CONNECTED)
+      f_blink (1) ;
+    else
+      f_blink (2) ;
+    last_blink = last_blink + 5000 ;
+  }
 
   #endif
 
