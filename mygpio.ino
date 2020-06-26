@@ -151,18 +151,18 @@ int f_bmp180 (float *temperature, float *pressure)
       (f_i2c_readShort (BMP180_ADDR, 0xBC, &mc) == 0) ||
       (f_i2c_readShort (BMP180_ADDR, 0xBE, &md) == 0))
   {
-    Serial.println ("FAULT: Cannot read data from BMP180.") ;
+    strcat (reply_buf, "FAULT: Cannot read data from BMP180.\r\n") ;
     return (0) ;
   }
 
-  sprintf (line, "ac1: %d\r\nac2: %d\r\nac3: %d", ac1, ac2, ac3) ;
-  Serial.println (line) ;
-  sprintf (line, "ac4: %d\r\nac5: %d\r\nac6: %d", ac4, ac5, ac6) ;
-  Serial.println (line) ;
-  sprintf (line, "b1: %d\r\nb2: %d\r\nmb: %d\r\nmc: %d", b2, mb, mc) ;
-  Serial.println (line) ;
-  sprintf (line, "md: %d", md) ;
-  Serial.println (md) ;
+  sprintf (line, "ac1: %d\r\nac2: %d\r\nac3: %d\r\n", ac1, ac2, ac3) ;
+  strcat (reply_buf, line) ;
+  sprintf (line, "ac4: %d\r\nac5: %d\r\nac6: %d\r\n", ac4, ac5, ac6) ;
+  strcat (reply_buf, line) ;
+  sprintf (line, "b1: %d\r\nb2: %d\r\nmb: %d\r\nmc: %d\r\n", b2, mb, mc) ;
+  strcat (reply_buf, line) ;
+  sprintf (line, "md: %d\r\n", md) ;
+  strcat (reply_buf, line) ;
 
   /*
      read the raw temperature by writing 0x2E to address 0xF4, the result is
@@ -177,8 +177,8 @@ int f_bmp180 (float *temperature, float *pressure)
   short raw_t=0 ;
   f_i2c_readShort (BMP180_ADDR, 0xF6, &raw_t) ;
 
-  sprintf (line, "raw_t: %d", raw_t) ;
-  Serial.println (line) ;
+  sprintf (line, "raw_t: %d\r\n", raw_t) ;
+  strcat (reply_buf, line) ;
 
   /* now calculate the true temperature */
 
@@ -209,8 +209,8 @@ int f_bmp180 (float *temperature, float *pressure)
   long xlsb = Wire.read () ;
   long raw_p = ((msb << 16) + (lsb << 8) + xlsb) >> (8 - BMP180_MODE) ;
 
-  sprintf (line, "raw_p: %d", raw_p) ;
-  Serial.println (line) ;
+  sprintf (line, "raw_p: %d\r\n", raw_p) ;
+  strcat (reply_buf, line) ;
 
   long b6 = b5 - 4000 ;
   x1 = (b2 * (b6 * b6) >> 12) >> 11 ;
@@ -261,7 +261,7 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
 
   if (pulseIn (dataPin, HIGH) == 0)
   {
-    Serial.println ("FAULT: f_dht22() no ACK, aborting.") ;
+    strcat (reply_buf, "FAULT: f_dht22() no ACK, aborting.\r\n") ;
     return (0) ;
   }
 
@@ -286,7 +286,7 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
   unsigned char c = data[0] + data[1] + data[2] + data[3] ;
   if ((c & 0xff) != data[4])
   {
-    Serial.println ("FAULT: f_dht22() checksum failed.") ;
+    strcat (reply_buf, "FAULT: f_dht22() checksum failed.\r\n") ;
     return (0) ;
   }
 
@@ -318,7 +318,7 @@ float f_hcsr04 (int trigPin, int echoPin)
   unsigned long echoUsecs = pulseIn (echoPin, HIGH, HCSR04_TIMEOUT_USEC) ;
   if (echoUsecs == 0)
   {
-    Serial.println ("FAULT: f_hcsr04() no response.") ;
+    strcat (reply_buf, "FAULT: f_hcsr04() no response.\r\n") ;
     return (-1.0) ;
   }
   else
@@ -357,16 +357,17 @@ void f_fs (char **tokens)
     FSInfo fi ;
     if (SPIFFS.info (fi))
     {
-      sprintf (line, "totalBytes: %d\nusedBytes: %d\nblockSize: %d",
+      sprintf (line, "totalBytes: %d\r\nusedBytes: %d\r\nblockSize: %d\r\n",
                fi.totalBytes, fi.usedBytes, fi.blockSize) ;
-      Serial.println (line) ;
-      sprintf (line, "pageSize: %d\nmaxOpenFiles: %d\nmaxPathLength: %d",
-               fi.pageSize, fi.maxOpenFiles, fi.maxPathLength) ;
-      Serial.println (line) ;
+      strcat (reply_buf, line) ;
+      sprintf (line, "pageSize: %d\r\nmaxOpenFiles: %d\r\n",
+               fi.pageSize, fi.maxOpenFiles) ;
+      strcat (reply_buf, line) ;
+      sprintf (line, "maxPathLength: %d\r\n", fi.maxPathLength) ;
     }
     else
     {
-      Serial.println ("FAULT: Cannot obtain fs info.") ;
+      strcat (reply_buf, "FAULT: Cannot obtain fs info.\r\n") ;
     }
   }
   else
@@ -374,11 +375,11 @@ void f_fs (char **tokens)
   {
     if (SPIFFS.format())
     {
-      Serial.println ("Success.") ;
+      strcat (reply_buf, "Success.\r\n") ;
     }
     else
     {
-      Serial.println ("FAULT: Formatting failed.") ;
+      strcat (reply_buf, "FAULT: Formatting failed.\r\n") ;
     }
   }
   else
@@ -388,7 +389,13 @@ void f_fs (char **tokens)
     while (dir.next())
     {
       String s = dir.fileName () ;
-      Serial.println (s) ;
+      int len = s.length()+1 ;
+      char filename[len+1] ;
+      s.toCharArray (filename, len) ;
+      File f = SPIFFS.open (s, "r") ;
+      sprintf (line, "%-8d %s\r\n", f.size(), filename) ;
+      f.close () ;
+      strcat (reply_buf, line) ;
     }
   }
   else
@@ -402,7 +409,7 @@ void f_fs (char **tokens)
 
     if ((filename[0] != '/') || (strlen(filename) == 1))
     {
-      Serial.println ("FAULT: Invalid filename.") ;
+      strcat (reply_buf, "FAULT: Invalid filename.\r\n") ;
       return ;
     }
 
@@ -411,13 +418,13 @@ void f_fs (char **tokens)
     {
       int amt = f.print (content) ;
       f.close () ;
-      sprintf (msg, "Wrote %d bytes to '%s'.", amt, filename) ;
-      Serial.println (msg) ;
+      sprintf (msg, "Wrote %d bytes to '%s'.\r\n", amt, filename) ;
+      strcat (reply_buf, msg) ;
     }
     else
     {
-      sprintf (line, "FAULT: Cannot write to '%s'.", filename) ;
-      Serial.println (line) ;
+      sprintf (line, "FAULT: Cannot write to '%s'.\r\n", filename) ;
+      strcat (reply_buf, msg) ;
     }
   }
   else
@@ -430,11 +437,12 @@ void f_fs (char **tokens)
     if (amt > 0)
     {
       msg[amt] = 0 ;
-      Serial.println (msg) ;
+      strcat (reply_buf, msg) ;
+      strcat (reply_buf, "\r\n") ;
     }
     else
     {
-      Serial.println ("FAULT: Cannot read file.") ;
+      strcat (reply_buf, "FAULT: Cannot read file.\r\n") ;
     }
   }
   else
@@ -443,9 +451,9 @@ void f_fs (char **tokens)
   {
     char *filename = tokens[2] ;
     if (SPIFFS.remove(filename))
-      Serial.println ("File removed.") ;
+      strcat (reply_buf, "File removed.\r\n") ;
     else
-      Serial.println ("FAULT: Cannot remove file.") ;
+      strcat (reply_buf, "FAULT: Cannot remove file.\r\n") ;
   }
   else
   if ((strcmp(tokens[1], "rename") == 0) &&                     // rename
@@ -456,17 +464,17 @@ void f_fs (char **tokens)
 
     if ((new_name[0] != '/') || (strlen(new_name) == 1))
     {
-      Serial.println ("FAULT: Invalid filename.") ;
+      strcat (reply_buf, "FAULT: Invalid filename.\r\n") ;
       return ;
     }
     if (SPIFFS.rename(old_name, new_name))
-      Serial.println ("File renamed.") ;
+      strcat (reply_buf, "File renamed.\r\n") ;
     else
-      Serial.println ("FAULT: Cannot rename file.") ;
+      strcat (reply_buf, "FAULT: Cannot rename file.\r\n") ;
   }
   else
   {
-    Serial.println ("FAULT: Invalid argument.") ;
+    strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
 }
 
@@ -474,52 +482,51 @@ void f_wifi (char **tokens)
 {
   if (strcmp(tokens[1], "status") == 0)                         // status
   {
-    sprintf (line, "cfg_wifi_ssid: %s", cfg_wifi_ssid) ;
-    Serial.println (line) ;
+    sprintf (line, "cfg_wifi_ssid: %s\r\n", cfg_wifi_ssid) ;
+    strcat (reply_buf, line) ;
     if (strlen(cfg_wifi_pw) > 0)
-      Serial.println ("cfg_wifi_pw: (set)") ;
+      strcat (reply_buf, "cfg_wifi_pw: (set)\r\n") ;
     else
-      Serial.println ("cfg_wifi_pw: (unset)") ;
+      strcat (reply_buf, "cfg_wifi_pw: (unset)\r\n") ;
 
     int status = WiFi.status() ;
     strcpy (line, "status: ") ;
     switch (status)
     {
       case WL_CONNECTED:
-        strcat (line, "WL_CONNECTED") ; break ;
+        strcat (reply_buf, "WL_CONNECTED\r\n") ; break ;
       case WL_NO_SHIELD:
-        strcat (line, "WL_NO_SHIELD") ; break ;
+        strcat (reply_buf, "WL_NO_SHIELD\r\n") ; break ;
       case WL_IDLE_STATUS:
-        strcat (line, "WL_IDLE_STATUS") ; break ;
+        strcat (reply_buf, "WL_IDLE_STATUS\r\n") ; break ;
       case WL_NO_SSID_AVAIL:
-        strcat (line, "WL_NO_SSID_AVAIL") ; break ;
+        strcat (reply_buf, "WL_NO_SSID_AVAIL\r\n") ; break ;
       case WL_SCAN_COMPLETED:
-        strcat (line, "WL_SCAN_COMPLETED") ; break ;
+        strcat (reply_buf, "WL_SCAN_COMPLETED\r\n") ; break ;
       case WL_CONNECT_FAILED:
-        strcat (line, "WL_CONNECT_FAILED") ; break ;
+        strcat (reply_buf, "WL_CONNECT_FAILED\r\n") ; break ;
       case WL_CONNECTION_LOST:
-        strcat (line, "WL_CONNECTION_LOST") ; break ;
+        strcat (reply_buf, "WL_CONNECTION_LOST\r\n") ; break ;
       case WL_DISCONNECTED:
-        strcat (line, "WL_DISCONNECTED") ; break ;
+        strcat (reply_buf, "WL_DISCONNECTED\r\n") ; break ;
       default:
-        strcat (line, "UNKNOWN") ; break ;
+        strcat (reply_buf, "UNKNOWN\r\n") ; break ;
     }
-    Serial.println (line) ;
-    sprintf (line, "rssi: %d dBm", WiFi.RSSI()) ;
-    Serial.println (line) ;
 
-    sprintf (line, "udp_port: %d", cfg_udp_port) ;
-    Serial.println (line) ;
+    sprintf (line, "rssi: %d dBm\r\n", WiFi.RSSI()) ;
+    strcat (reply_buf, line) ;
+    sprintf (line, "udp_port: %d\r\n", cfg_udp_port) ;
+    strcat (reply_buf, line) ;
 
     unsigned char mac[6] ;
     WiFi.macAddress(mac) ;
-    sprintf (line, "wifi_mac: %x:%x:%x:%x:%x:%x",
+    sprintf (line, "wifi_mac: %x:%x:%x:%x:%x:%x\r\n",
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
-    Serial.println (line) ;
-    Serial.print ("wifi_ip: ") ;
-    Serial.print (WiFi.localIP()) ;
-    Serial.print ("/") ;
-    Serial.println (WiFi.subnetMask()) ;
+    strcat (reply_buf, line) ;
+    sprintf (line, "wifi_ip: %s/%s\r\n",
+             WiFi.localIP().toString().c_str(),
+             WiFi.subnetMask().toString().c_str()) ;
+    strcat (reply_buf, line) ;
   }
   else
   if (strcmp(tokens[1], "disconnect") == 0)                     // disconnect
@@ -867,6 +874,8 @@ void loop ()
     {
       reply_buf[0] = 0 ;
       f_action (tokens) ;
+      if (strlen(reply_buf) > 0)
+        Serial.print (reply_buf) ;
       Serial.println ("OK") ;
     }
     input_buf[0] = 0 ;
