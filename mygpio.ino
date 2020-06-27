@@ -61,7 +61,7 @@
 #define BLINK_FREQ 5000         // blink to indicate we're alive (ms)
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
-#define REPLY_SIZE 192
+#define REPLY_SIZE 256
 
 char line[BUF_SIZE] ;           // general purpose string buffer
 char input_buf[BUF_SIZE+1] ;    // bytes received on serial port
@@ -491,7 +491,7 @@ void f_wifi (char **tokens)
       strcat (reply_buf, "cfg_wifi_pw: (unset)\r\n") ;
 
     int status = WiFi.status() ;
-    strcpy (line, "status: ") ;
+    strcat (reply_buf, "status: ") ;
     switch (status)
     {
       case WL_CONNECTED:
@@ -849,9 +849,23 @@ void loop ()
 
     /* demonstration on sending back a UDP reply */
 
+    int amt = Udp.read (input_buf, BUF_SIZE) ;
+    input_buf[amt] = 0 ;
+
+    int idx = 0 ;
+    char *p = strtok (input_buf, " ") ;
+    while ((p) && (idx < MAX_TOKENS))
+    {
+      tokens[idx] = p ;
+      idx++ ;
+      p = strtok (NULL, " ") ;
+    }
+    tokens[idx] = NULL ;
+    reply_buf[0] = 0 ;
+    f_action (tokens) ;
+
     Udp.beginPacket (Udp.remoteIP(), Udp.remotePort()) ;
-    sprintf (line, "uptime - %d ms", millis()) ;
-    Udp.write (line) ;
+    Udp.write (reply_buf) ;
     Udp.endPacket () ;
   }
 
