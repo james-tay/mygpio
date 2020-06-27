@@ -1,4 +1,12 @@
 /*
+   Build/Upload
+
+     % arduino-cli compile -b esp8266:esp8266:nodemcuv2 .
+     % arduino-cli compile -b arduino:avr:uno .
+
+     % arduino-cli upload -v -p /dev/ttyUSB0 esp8266:esp8266:nodemcuv2 .
+     % arduino-cli upload -v -p /dev/ttyUSB0 arduino:avr:uno .
+
    Examples
 
      test LED,
@@ -61,7 +69,12 @@
 #define BLINK_FREQ 5000         // blink to indicate we're alive (ms)
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
-#define REPLY_SIZE 256
+
+#ifdef ARDUINO_ESP8266_NODEMCU
+  #define REPLY_SIZE 256
+#else
+  #define REPLY_SIZE 192
+#endif
 
 char line[BUF_SIZE] ;           // general purpose string buffer
 char input_buf[BUF_SIZE+1] ;    // bytes received on serial port
@@ -620,6 +633,7 @@ void f_action (char **tokens)
               "fs rm <filename>\r\n"
               "fs rename <old> <new>\r\n"
               "fs write <filename> <content>\r\n"
+              "restart\r\n"
               "wifi connect\r\n"
               "wifi status\r\n"
               "wifi ssid <ssid>\r\n"
@@ -705,6 +719,14 @@ void f_action (char **tokens)
   {
     f_wifi (tokens) ;
   }
+  else
+  if (strcmp(tokens[0], "restart") == 0)
+  {
+    Serial.println ("Restarting.") ;
+    delay (1000) ;
+    ESP.restart () ;
+  }
+
   #endif
 
   else
@@ -720,6 +742,7 @@ void setup ()
   Wire.begin () ;
   Serial.begin (9600) ;
   Serial.setTimeout (SERIAL_TIMEOUT) ;
+  Serial.println ("") ;
   input_buf[0] = 0 ;
   input_pos = 0 ;
 
@@ -843,11 +866,7 @@ void loop ()
   int pktsize = Udp.parsePacket () ;
   if (pktsize)
   {
-    sprintf (line, "NOTICE: received %d bytes from %s:%d.", pktsize,
-             Udp.remoteIP().toString().c_str(), Udp.remotePort()) ;
-    Serial.println (line) ;
-
-    /* demonstration on sending back a UDP reply */
+    /* if a UDP packet arrived, parse the command and send a response */
 
     int amt = Udp.read (input_buf, BUF_SIZE) ;
     input_buf[amt] = 0 ;
@@ -862,7 +881,8 @@ void loop ()
     }
     tokens[idx] = NULL ;
     reply_buf[0] = 0 ;
-    f_action (tokens) ;
+    if (idx > 0)
+      f_action (tokens) ;
 
     Udp.beginPacket (Udp.remoteIP(), Udp.remotePort()) ;
     Udp.write (reply_buf) ;
