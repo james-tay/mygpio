@@ -58,16 +58,17 @@
 #endif
 
 #define SERIAL_TIMEOUT 1000     // serial timeout in milliseconds
+#define BLINK_FREQ 5000         // blink to indicate we're alive (ms)
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
-#define REPLY_SIZE 256
+#define REPLY_SIZE 192
 
 char line[BUF_SIZE] ;           // general purpose string buffer
 char input_buf[BUF_SIZE+1] ;    // bytes received on serial port
 char reply_buf[REPLY_SIZE+1] ;  // accumulate our reply message here
 int input_pos ;                 // index of bytes received on serial port
 char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
-unsigned long last_blink=5000 ;
+unsigned long next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 
 /* ------------------------------------------------------------------------- */
 
@@ -557,8 +558,8 @@ void f_wifi (char **tokens)
       if (status == WL_CONNECTED)
       {
         WiFi.setAutoReconnect (true) ;
-        sprintf (line, "Connected in %d seconds.", retry) ;
-        Serial.println (line) ;
+        sprintf (line, "Connected in %d seconds.\r\n", retry) ;
+        strcat (reply_buf, line) ;
         return ;
       }
       else
@@ -569,27 +570,27 @@ void f_wifi (char **tokens)
         switch (status)
         {
           case WL_NO_SHIELD:
-            Serial.println ("WL_NO_SHIELD") ; return ;
+            strcat (reply_buf, "WL_NO_SHIELD\r\n") ; return ;
           case WL_IDLE_STATUS:
-            Serial.println ("WL_IDLE_STATUS") ; return ;
+            strcat (reply_buf, "WL_IDLE_STATUS\r\n") ; return ;
           case WL_NO_SSID_AVAIL:
-            Serial.println ("WL_NO_SSID_AVAIL") ; return ;
+            strcat (reply_buf, "WL_NO_SSID_AVAIL\r\n") ; return ;
           case WL_SCAN_COMPLETED:
-            Serial.println ("WL_SCAN_COMPLETE") ; return ;
+            strcat (reply_buf, "WL_SCAN_COMPLETE\r\n") ; return ;
           case WL_CONNECT_FAILED:
-            Serial.println ("WL_CONNECT_FAILED") ; return ;
+            strcat (reply_buf, "WL_CONNECT_FAILED\r\n") ; return ;
           case WL_CONNECTION_LOST:
-            Serial.println ("WL_CONNECTION_LOST") ; return ;
+            strcat (reply_buf, "WL_CONNECTION_LOST\r\n") ; return ;
           default:
-            Serial.println ("UNKNOWN") ; return ;
+            strcat (reply_buf, "UNKNOWN\r\n") ; return ;
         }
       }
     }
-    Serial.println ("FAULT: Connection attempt timed out.") ;
+    strcat (reply_buf, "FAULT: Connection attempt timed out.\r\n") ;
   }
   else
   {
-    Serial.println ("FAULT: Invalid argument.") ;
+    strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
 }
 
@@ -601,26 +602,29 @@ void f_action (char **tokens)
 {
   if ((strcmp(tokens[0], "?") == 0) || (strcmp(tokens[0], "help") == 0))
   {
-    Serial.println ("hi <pin 0-13>") ;
-    Serial.println ("lo <pin 0-13>") ;
-    Serial.println ("aread <pin 0-5> - analog read") ;
-    Serial.println ("bmp180") ;
-    Serial.println ("dht22 <dataPin> - DHT-22 temperature/humidity sensor") ;
-    Serial.println ("hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic sensor") ;
-    Serial.println ("uptime") ;
+    strcat (reply_buf,
+            "hi <pin 0-13>\r\n"
+            "lo <pin 0-13>\r\n"
+            "aread <pin 0-5> - analog read\r\n"
+            "bmp180\r\n"
+            "dht22 <dataPin> - DHT-22 temperature/humidity sensor\r\n"
+            "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
+            "uptime\r\n") ;
+
     #ifdef ARDUINO_ESP8266_NODEMCU
-      Serial.println ("fs format") ;
-      Serial.println ("fs info") ;
-      Serial.println ("fs ls") ;
-      Serial.println ("fs read <filename>") ;
-      Serial.println ("fs rm <filename>") ;
-      Serial.println ("fs rename <old> <new>") ;
-      Serial.println ("fs write <filename> <content>") ;
-      Serial.println ("wifi connect") ;
-      Serial.println ("wifi status") ;
-      Serial.println ("wifi ssid <ssid>") ;
-      Serial.println ("wifi pw <password>") ;
-      Serial.println ("wifi disconnect") ;
+      strcat (reply_buf,
+              "fs format\r\n"
+              "fs info\r\n"
+              "fs ls\r\n"
+              "fs read <filename>\r\n"
+              "fs rm <filename>\r\n"
+              "fs rename <old> <new>\r\n"
+              "fs write <filename> <content>\r\n"
+              "wifi connect\r\n"
+              "wifi status\r\n"
+              "wifi ssid <ssid>\r\n"
+              "wifi pw <password>\r\n"
+              "wifi disconnect\r\n") ;
     #endif
   }
   else
@@ -629,8 +633,8 @@ void f_action (char **tokens)
     int pin = atoi(tokens[1]) ;
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, HIGH) ;
-    sprintf (line, "pin:%d HIGH", pin) ;
-    Serial.println (line) ;
+    sprintf (line, "pin:%d HIGH\r\n", pin) ;
+    strcat (reply_buf, line) ;
   }
   else
   if ((strcmp(tokens[0], "lo") == 0) && (tokens[1] != NULL))
@@ -638,16 +642,16 @@ void f_action (char **tokens)
     int pin = atoi(tokens[1]) ;
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, LOW) ;
-    sprintf (line, "pin:%d LOW", pin) ;
-    Serial.println (line) ;
+    sprintf (line, "pin:%d LOW\r\n", pin) ;
+    strcat (reply_buf, line) ;
   }
   else
   if ((strcmp(tokens[0], "aread") == 0) && (tokens[1] != NULL))
   {
     int pin = atoi(tokens[1]) ;
     int val = analogRead (pin) ;
-    sprintf (line, "analogRead pin:%d - %d", pin, val) ;
-    Serial.println (line) ;
+    sprintf (line, "analogRead pin:%d - %d\r\n", pin, val) ;
+    strcat (reply_buf, line) ;
   }
   else
   if (strcmp(tokens[0], "bmp180") == 0)
@@ -655,9 +659,9 @@ void f_action (char **tokens)
     float t=0.0, p=0.0 ;
     if (f_bmp180 (&t, &p))
     {
-      sprintf (line, "bmp180 - temperature:%d.%02d pressure:%d.%02d",
+      sprintf (line, "bmp180 - temperature:%d.%02d pressure:%d.%02d\r\n",
                int(t), (int)(t*100)%100, int(p), (int)(p*100)%100) ;
-      Serial.println (line) ;
+      strcat (reply_buf, line) ;
     }
   }
   else
@@ -666,57 +670,9 @@ void f_action (char **tokens)
     float t=0.0, h=0.0 ;
     if (f_dht22 (atoi(tokens[1]), &t, &h))
     {
-      sprintf (line, "dht22 - temperature:%d.%02d humidity:%d.%02d",
+      sprintf (line, "dht22 - temperature:%d.%02d humidity:%d.%02d\r\n",
                int(t), (int)(t*100)%100, int(h), (int)(h*100)%100) ;
-      Serial.println (line) ;
-    }
-  }
-  else
-  if ((strcmp(tokens[0], "hi") == 0) && (tokens[1] != NULL))
-  {
-    int pin = atoi(tokens[1]) ;
-    pinMode (pin, OUTPUT) ;
-    digitalWrite (pin, HIGH) ;
-    sprintf (line, "pin:%d HIGH", pin) ;
-    Serial.println (line) ;
-  }
-  else
-  if ((strcmp(tokens[0], "lo") == 0) && (tokens[1] != NULL))
-  {
-    int pin = atoi(tokens[1]) ;
-    pinMode (pin, OUTPUT) ;
-    digitalWrite (pin, LOW) ;
-    sprintf (line, "pin:%d LOW", pin) ;
-    Serial.println (line) ;
-  }
-  else
-  if ((strcmp(tokens[0], "aread") == 0) && (tokens[1] != NULL))
-  {
-    int pin = atoi(tokens[1]) ;
-    int val = analogRead (pin) ;
-    sprintf (line, "analogRead pin:%d - %d", pin, val) ;
-    Serial.println (line) ;
-  }
-  else
-  if (strcmp(tokens[0], "bmp180") == 0)
-  {
-    float t=0.0, p=0.0 ;
-    if (f_bmp180 (&t, &p))
-    {
-      sprintf (line, "bmp180 - temperature:%d.%02d pressure:%d.%02d",
-               int(t), (int)(t*100)%100, int(p), (int)(p*100)%100) ;
-      Serial.println (line) ;
-    }
-  }
-  else
-  if ((strcmp(tokens[0], "dht22") == 0) && (tokens[1] != NULL))
-  {
-    float t=0.0, h=0.0 ;
-    if (f_dht22 (atoi(tokens[1]), &t, &h))
-    {
-      sprintf (line, "dht22 - temperature:%d.%02d humidity:%d.%02d",
-               int(t), (int)(t*100)%100, int(h), (int)(h*100)%100) ;
-      Serial.println (line) ;
+      strcat (reply_buf, line) ;
     }
   }
   else
@@ -726,16 +682,16 @@ void f_action (char **tokens)
     float f = f_hcsr04 (atoi(tokens[1]), atoi(tokens[2])) ;
     if (f > 0.0)
     {
-      sprintf (line, "hcsr04 - %d.%02d cm", int(f), (int)(f*100)%100) ;
-      Serial.println (line) ;
+      sprintf (line, "hcsr04 - %d.%02d cm\r\n", int(f), (int)(f*100)%100) ;
+      strcat (reply_buf, line) ;
     }
   }
   else
   if (strcmp(tokens[0], "uptime") == 0)
   {
     unsigned long now = millis() / 1000 ;
-    sprintf (line, "uptime - %ld secs", now) ;
-    Serial.println (line) ;
+    sprintf (line, "uptime - %ld secs\r\n", now) ;
+    strcat (reply_buf, line) ;
   }
 
   #ifdef ARDUINO_ESP8266_NODEMCU
@@ -753,7 +709,7 @@ void f_action (char **tokens)
 
   else
   {
-    Serial.println ("FAULT: Unknown command. Enter 'help' for commands.") ;
+    strcat (reply_buf, "FAULT: Enter 'help' for commands.\r\n") ;
   }
 }
 
@@ -901,13 +857,13 @@ void loop ()
 
   /* one in a while, blink once if wifi is connected, twice otherwise. */
 
-  if (millis() > last_blink)
+  if (millis() > next_blink)
   {
     if (WiFi.status() == WL_CONNECTED)
       f_blink (1) ;
     else
       f_blink (2) ;
-    last_blink = last_blink + 5000 ;
+    next_blink = next_blink + BLINK_FREQ ;
   }
 
   #endif
