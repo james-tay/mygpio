@@ -50,10 +50,12 @@
   #include <FS.h>
   #include <WiFiUdp.h>
   #include <ESP8266WiFi.h>
+  #include <ESP8266WebServer.h>
 
   #define MAX_SSID_LEN 32
   #define MAX_PASSWD_LEN 64             // maximum wifi password length
   #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
+  #define WEB_PORT 8080
 
   #define WIFI_SSID_FILE "/wifi.ssid"
   #define WIFI_PW_FILE "/wifi.pw"
@@ -62,7 +64,8 @@
   char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
   int cfg_udp_port=0 ;
-  WiFiUDP Udp ;
+  WiFiUDP Udp ;                         // our UDP server socket
+  ESP8266WebServer Webs(WEB_PORT) ;     // our built-in webserver
 #endif
 
 #define SERIAL_TIMEOUT 1000     // serial timeout in milliseconds
@@ -607,6 +610,13 @@ void f_wifi (char **tokens)
   }
 }
 
+/* callback function for web server */
+
+void f_handleWeb ()
+{
+  Webs.send (200, "text/plain", "OK\r\n") ;
+}
+
 #endif
 
 /* ------------------------------------------------------------------------- */
@@ -810,6 +820,11 @@ void setup ()
         f_udp.close () ;
     }
 
+    Webs.on ("/", f_handleWeb) ;
+    Webs.begin () ;
+    sprintf (line, "NOTICE: Web server started on port %d.\r\n", WEB_PORT) ;
+    Serial.print (line) ;
+
     digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
     delay (1000) ;
     digitalWrite (LED_BUILTIN, HIGH) ;
@@ -888,6 +903,8 @@ void loop ()
     Udp.write (reply_buf) ;
     Udp.endPacket () ;
   }
+
+  Webs.handleClient () ;
 
   /* one in a while, blink once if wifi is connected, twice otherwise. */
 
