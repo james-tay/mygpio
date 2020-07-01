@@ -630,7 +630,13 @@ void f_wifi (char **tokens)
 
 void f_handleWeb ()
 {
-  Webs.send (200, "text/plain", "OK\r\n") ;
+  Webs.send (200, "text/plain", "OK\n") ;
+}
+
+void f_handleWebMetrics ()
+{
+  sprintf (line, "node_uptime_secs %ld\n", millis() / 1000) ;
+  Webs.send (200, "text/plain", line) ;
 }
 
 #endif
@@ -838,6 +844,7 @@ void setup ()
     }
 
     Webs.on ("/", f_handleWeb) ;
+    Webs.on ("/metrics", f_handleWebMetrics) ;
     Webs.begin () ;
     sprintf (line, "NOTICE: Web server started on port %d.\r\n", WEB_PORT) ;
     Serial.print (line) ;
