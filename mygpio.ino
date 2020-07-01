@@ -4,8 +4,8 @@
      % arduino-cli compile -b esp8266:esp8266:nodemcuv2 .
      % arduino-cli compile -b arduino:avr:uno .
 
-     % arduino-cli upload -v -p /dev/ttyUSB0 esp8266:esp8266:nodemcuv2 .
-     % arduino-cli upload -v -p /dev/ttyUSB0 arduino:avr:uno .
+     % arduino-cli upload -v -p /dev/ttyUSB0 -b esp8266:esp8266:nodemcuv2 .
+     % arduino-cli upload -v -p /dev/ttyUSB0 -b arduino:avr:uno .
 
    Examples
 
@@ -55,7 +55,7 @@
   #define MAX_SSID_LEN 32
   #define MAX_PASSWD_LEN 64             // maximum wifi password length
   #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
-  #define WEB_PORT 8080
+  #define WEB_PORT 80
 
   #define WIFI_SSID_FILE "/wifi.ssid"
   #define WIFI_PW_FILE "/wifi.pw"
@@ -74,7 +74,7 @@
 #define BUF_SIZE 80
 
 #ifdef ARDUINO_ESP8266_NODEMCU
-  #define REPLY_SIZE 256
+  #define REPLY_SIZE 512
 #else
   #define REPLY_SIZE 192
 #endif
@@ -497,6 +497,22 @@ void f_fs (char **tokens)
 
 void f_wifi (char **tokens)
 {
+  if (strcmp(tokens[1], "scan") == 0)                           // scan
+  {
+    int n = WiFi.scanNetworks() ;
+    sprintf (line, "Found %d wifi networks.\r\n", n) ;
+    strcat (reply_buf, line) ;
+    for (int i=0 ; i<n ; i++)
+    {
+      char ssid[MAX_SSID_LEN+1] ;
+      WiFi.SSID(i).toCharArray (ssid, MAX_SSID_LEN) ;
+      sprintf (line, "%2d. ch %d, %d dBm [%s]\r\n",
+               i+1, WiFi.channel(i), WiFi.RSSI(i), ssid) ;
+      if (strlen(reply_buf) + strlen(line) < REPLY_SIZE)
+        strcat (reply_buf, line) ;
+    }
+  }
+  else
   if (strcmp(tokens[1], "status") == 0)                         // status
   {
     sprintf (line, "cfg_wifi_ssid: %s\r\n", cfg_wifi_ssid) ;
@@ -645,6 +661,7 @@ void f_action (char **tokens)
               "fs write <filename> <content>\r\n"
               "restart\r\n"
               "wifi connect\r\n"
+              "wifi scan\r\n"
               "wifi status\r\n"
               "wifi ssid <ssid>\r\n"
               "wifi pw <password>\r\n"
