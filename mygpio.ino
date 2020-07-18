@@ -47,9 +47,13 @@
 
      - pin numbering goes by GPIO number, thus "hi 5" means GPIO pin 5, not
        the physical pin number.
+
+     - LCD implementation reference :
+       https://create.arduino.cc/projecthub/arduino_uno_guy/i2c-liquid-crystal-displays-5b806c
 */
 
 #include <Wire.h>
+#include "LiquidCrystal_I2C.h"
 
 #ifdef ARDUINO_ESP8266_NODEMCU
   #include <FS.h>
@@ -84,12 +88,22 @@
   #define REPLY_SIZE 192
 #endif
 
+/* LCD definitions */
+
+#define LCD_ADDR 0x27
+#define LCD_WIDTH 16
+#define LCD_ROWS 2
+
+/* global variables */
+
 char line[BUF_SIZE] ;           // general purpose string buffer
 char input_buf[BUF_SIZE+1] ;    // bytes received on serial port
 char reply_buf[REPLY_SIZE+1] ;  // accumulate our reply message here
 int input_pos ;                 // index of bytes received on serial port
 char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
 unsigned long next_blink=BLINK_FREQ ; // "wall clock" time for next blink
+
+LiquidCrystal_I2C lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
 /* ------------------------------------------------------------------------- */
 
@@ -345,6 +359,78 @@ float f_hcsr04 (int trigPin, int echoPin)
   }
   else
     return (float(echoUsecs) / 58.0) ; // convert time to centimeters
+}
+
+/*
+   Control an I2C LCD via a LCM1602 module.
+*/
+
+void f_lcd (char **tokens)
+{
+  if (tokens[1] == NULL)
+  {
+    strcat (reply_buf, "FAULT: No arguments.\r\n") ;
+    return ;
+  }
+
+  if (strcmp(tokens[1], "init") == 0)                           // init
+  {
+    lcd.init () ;
+    strcat (reply_buf, "LCD initialized.\r\n") ;
+  }
+  else
+  if (strcmp(tokens[1], "backlight") == 0)                      // backlight
+  {
+    if (strcmp(tokens[2], "on") == 0)
+    {
+      lcd.backlight () ;
+      strcat (reply_buf, "LCD backlight is on.\r\n") ;
+    }
+    else
+    if (strcmp(tokens[2], "off") == 0)
+    {
+      lcd.noBacklight () ;
+      strcat (reply_buf, "LCD backlight is off.\r\n") ;
+    }
+    else
+    {
+      strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
+    }
+  }
+  else
+  if (strcmp(tokens[1], "clear") == 0)                          // clear
+  {
+    lcd.clear () ;
+    strcat (reply_buf, "LCD cleared.\r\n") ;
+  }
+  else
+  if ((strcmp(tokens[1], "print") == 0) &&                      // print
+      (tokens[2] != NULL) &&
+      (tokens[3] != NULL) &&
+      (tokens[4] != NULL))
+  {
+    int row = atoi(tokens[2]) ;
+    int col = atoi(tokens[3]) ;
+
+    line[0] = 0 ;
+    for (int idx=4 ; idx < MAX_TOKENS ; idx++)
+    {
+      if (tokens[idx] == NULL)
+        break ;
+      if (strlen(line) > 0)
+        strcat (line, " ") ;
+      strcat (line, tokens[idx]) ;
+    }
+
+    lcd.setCursor (col, row) ;
+    lcd.print (line) ;
+    sprintf (line, "LCD write at row:%d col:%d.\r\n", row, col) ;
+    strcat (reply_buf, line) ;
+  }
+  else
+  {
+    strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
+  }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -659,6 +745,10 @@ void f_action (char **tokens)
             "bmp180\r\n"
             "dht22 <dataPin> - DHT-22 temperature/humidity sensor\r\n"
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
+            "lcd backlight <on/off>\r\n"
+            "lcd clear\r\n"
+            "lcd init\r\n"
+            "lcd print <row> <col> <message...>\r\n"
             "uptime\r\n") ;
 
     #ifdef ARDUINO_ESP8266_NODEMCU
@@ -744,6 +834,11 @@ void f_action (char **tokens)
     unsigned long now = millis() / 1000 ;
     sprintf (line, "uptime - %ld secs\r\n", now) ;
     strcat (reply_buf, line) ;
+  }
+  else
+  if (strcmp(tokens[0], "lcd") == 0)
+  {
+    f_lcd (tokens) ;
   }
 
   #ifdef ARDUINO_ESP8266_NODEMCU
