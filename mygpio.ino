@@ -42,6 +42,11 @@
      - The "fs write <filename> <content>" command does not support content
        with spaces.
      - All filenames must begin with '/'.
+
+   Notes
+
+     - pin numbering goes by GPIO number, thus "hi 5" means GPIO pin 5, not
+       the physical pin number.
 */
 
 #include <Wire.h>
