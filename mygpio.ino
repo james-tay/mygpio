@@ -55,11 +55,11 @@
 #include <Wire.h>
 #include "LiquidCrystal_I2C.h"
 
-#ifdef ARDUINO_ESP8266_NODEMCU
+/* ====== STUFF COMMON BETWEEN ESP32 and ESP8266 ====== */
+
+#if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
   #include <FS.h>
   #include <WiFiUdp.h>
-  #include <ESP8266WiFi.h>
-  #include <ESP8266WebServer.h>
 
   #define MAX_SSID_LEN 32
   #define MAX_PASSWD_LEN 64             // maximum wifi password length
@@ -74,15 +74,38 @@
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
   int cfg_udp_port=0 ;
   WiFiUDP Udp ;                         // our UDP server socket
+#endif
+
+/* ====== STUFF SPECIFIC TO ESP32 and ESP8266 ====== */
+
+#ifdef ARDUINO_ESP32_DEV
+  #define LED_BUILTIN 2
+  #define BLINK_ON HIGH
+  #define BLINK_OFF LOW
+
+  #include <SPIFFS.h>
+  #include <WebServer.h>
+  WebServer Webs(WEB_PORT) ;     // our built-in webserver
+#endif
+
+#ifdef ARDUINO_ESP8266_NODEMCU
+  #define BLINK_ON LOW
+  #define BLINK_OFF HIGH
+
+  #include <ESP8266WiFi.h>
+  #include <ESP8266WebServer.h>
   ESP8266WebServer Webs(WEB_PORT) ;     // our built-in webserver
 #endif
 
+/* ====== ALL OTHER GENERAL STUFF ====== */
+
+#define DEF_BAUD 9600
 #define SERIAL_TIMEOUT 1000     // serial timeout in milliseconds
 #define BLINK_FREQ 5000         // blink to indicate we're alive (ms)
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
 
-#ifdef ARDUINO_ESP8266_NODEMCU
+#if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
   #define REPLY_SIZE 512
 #else
   #define REPLY_SIZE 192
@@ -435,7 +458,7 @@ void f_lcd (char **tokens)
 
 /* ------------------------------------------------------------------------- */
 
-#ifdef ARDUINO_ESP8266_NODEMCU
+#if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
 int f_blink (int num)
 {
@@ -443,18 +466,24 @@ int f_blink (int num)
   #define PAUSE_DURATION 300    // long enough for a human to count blinks
 
   int duration = 0 ;
+  pinMode (LED_BUILTIN, OUTPUT) ;
   for (int i=0 ; i < num ; i++)
   {
-    digitalWrite (LED_BUILTIN, LOW) ;
+    digitalWrite (LED_BUILTIN, BLINK_ON) ;
     delay (BLINK_DURATION) ;
     duration = duration + BLINK_DURATION ;
-    digitalWrite (LED_BUILTIN, HIGH) ;
+    digitalWrite (LED_BUILTIN, BLINK_OFF) ;
     if (i < num-1)
       delay (PAUSE_DURATION) ;
     duration = duration + PAUSE_DURATION ;
   }
   return (duration) ;
 }
+
+#endif
+
+
+#ifdef ARDUINO_ESP8266_NODEMCU
 
 void f_fs (char **tokens)
 {
@@ -585,6 +614,10 @@ void f_fs (char **tokens)
     strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
 }
+
+#endif
+
+#if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
 void f_wifi (char **tokens)
 {
@@ -751,7 +784,7 @@ void f_action (char **tokens)
             "lcd print <row> <col> <message...>\r\n"
             "uptime\r\n") ;
 
-    #ifdef ARDUINO_ESP8266_NODEMCU
+    #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
       strcat (reply_buf,
               "fs format\r\n"
               "fs info\r\n"
@@ -842,11 +875,17 @@ void f_action (char **tokens)
   }
 
   #ifdef ARDUINO_ESP8266_NODEMCU
+
   else
   if ((strcmp(tokens[0], "fs") == 0) && (tokens[1] != NULL))
   {
     f_fs (tokens) ;
   }
+
+  #endif
+
+  #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
+
   else
   if ((strcmp(tokens[0], "wifi") == 0) && (tokens[1] != NULL))
   {
@@ -873,7 +912,7 @@ void f_action (char **tokens)
 void setup ()
 {
   Wire.begin () ;
-  Serial.begin (9600) ;
+  Serial.begin (DEF_BAUD) ;
   Serial.setTimeout (SERIAL_TIMEOUT) ;
   Serial.println ("") ;
   input_buf[0] = 0 ;
@@ -1000,7 +1039,7 @@ void loop ()
     input_pos = 0 ;
   }
 
-  #ifdef ARDUINO_ESP8266_NODEMCU
+  #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
   int pktsize = Udp.parsePacket () ;
   if (pktsize)
@@ -1024,7 +1063,7 @@ void loop ()
       f_action (tokens) ;
 
     Udp.beginPacket (Udp.remoteIP(), Udp.remotePort()) ;
-    Udp.write (reply_buf) ;
+    Udp.write ((uint8_t*)reply_buf, strlen(reply_buf)) ;
     Udp.endPacket () ;
   }
 
