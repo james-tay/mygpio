@@ -43,6 +43,7 @@
      test wifi boot up config
        fs write /wifi.ssid superman
        fs write /wifi.pw changeme
+       fs write /udp.port 8266
 
    Bugs
 
@@ -944,7 +945,7 @@ void setup ()
   Wire.begin () ;
   Serial.begin (DEF_BAUD) ;
   Serial.setTimeout (SERIAL_TIMEOUT) ;
-  Serial.println ("\nSystem boot.") ;
+  Serial.println ("\nNOTICE: System boot.") ;
   input_buf[0] = 0 ;
   input_pos = 0 ;
 
@@ -961,7 +962,7 @@ void setup ()
 
     if (SPIFFS.begin())
     {
-      Serial.println ("Checking built-in configuration.") ;
+      Serial.println ("NOTICE: Checking built-in configuration.") ;
       File f_ssid = SPIFFS.open (WIFI_SSID_FILE, "r") ;
       File f_pw = SPIFFS.open (WIFI_PW_FILE, "r") ;
       if ((f_ssid) && (f_pw) &&
@@ -1027,7 +1028,7 @@ void setup ()
     digitalWrite (LED_BUILTIN, HIGH) ;
   #endif
 
-  Serial.println ("Ready.") ;
+  Serial.println ("NOTICE: Ready.") ;
 }
 
 void loop ()
