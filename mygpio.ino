@@ -35,6 +35,15 @@
        lo 16
        hi 16
 
+     test wifi client
+       wifi ssid superman
+       wifi pw changeme
+       wifi connect
+
+     test wifi boot up config
+       fs write /wifi.ssid superman
+       fs write /wifi.pw changeme
+
    Bugs
 
      - The "wifi {ssid|pw} <value>" command does not support arguments with
@@ -50,6 +59,9 @@
 
      - LCD implementation reference :
        https://create.arduino.cc/projecthub/arduino_uno_guy/i2c-liquid-crystal-displays-5b806c
+
+     - ESP32 hardware API reference
+       https://github.com/espressif/arduino-esp32
 */
 
 #include <Wire.h>
@@ -480,17 +492,14 @@ int f_blink (int num)
   return (duration) ;
 }
 
-#endif
-
-
-#ifdef ARDUINO_ESP8266_NODEMCU
-
 void f_fs (char **tokens)
 {
   char msg[BUF_SIZE] ;
 
   if (strcmp(tokens[1], "info") == 0)                           // info
   {
+    #ifdef ARDUINO_ESP8266_NODEMCU
+
     FSInfo fi ;
     if (SPIFFS.info (fi))
     {
@@ -506,6 +515,15 @@ void f_fs (char **tokens)
     {
       strcat (reply_buf, "FAULT: Cannot obtain fs info.\r\n") ;
     }
+
+    #endif
+    #ifdef ARDUINO_ESP32_DEV
+
+      sprintf (line, "totalBytes: %d\r\nusedBytes: %d\r\n",
+               SPIFFS.totalBytes(), SPIFFS.usedBytes()) ;
+      strcat (reply_buf, line) ;
+
+    #endif
   }
   else
   if (strcmp(tokens[1], "format") == 0)                         // format
@@ -522,6 +540,8 @@ void f_fs (char **tokens)
   else
   if (strcmp(tokens[1], "ls") == 0)                             // ls
   {
+    #ifdef ARDUINO_ESP8266_NODEMCU
+
     Dir dir = SPIFFS.openDir ("/") ;
     while (dir.next())
     {
@@ -534,6 +554,21 @@ void f_fs (char **tokens)
       f.close () ;
       strcat (reply_buf, line) ;
     }
+
+    #endif
+    #ifdef ARDUINO_ESP32_DEV
+
+    File root = SPIFFS.open ("/") ;
+    File f = root.openNextFile () ;
+    while (f)
+    {
+      sprintf (line, "%-8d %s\r\n", f.size(), f.name()) ;
+      strcat (reply_buf, line) ;
+      f = root.openNextFile () ;
+    }
+    root.close () ;
+
+    #endif
   }
   else
   if ((strcmp(tokens[1], "write") == 0) &&                      // write
@@ -560,7 +595,7 @@ void f_fs (char **tokens)
     }
     else
     {
-      sprintf (line, "FAULT: Cannot write to '%s'.\r\n", filename) ;
+      sprintf (msg, "FAULT: Cannot write to '%s'.\r\n", filename) ;
       strcat (reply_buf, msg) ;
     }
   }
@@ -874,18 +909,13 @@ void f_action (char **tokens)
     f_lcd (tokens) ;
   }
 
-  #ifdef ARDUINO_ESP8266_NODEMCU
+  #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
   else
   if ((strcmp(tokens[0], "fs") == 0) && (tokens[1] != NULL))
   {
     f_fs (tokens) ;
   }
-
-  #endif
-
-  #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-
   else
   if ((strcmp(tokens[0], "wifi") == 0) && (tokens[1] != NULL))
   {
@@ -914,14 +944,14 @@ void setup ()
   Wire.begin () ;
   Serial.begin (DEF_BAUD) ;
   Serial.setTimeout (SERIAL_TIMEOUT) ;
-  Serial.println ("") ;
+  Serial.println ("\nSystem boot.") ;
   input_buf[0] = 0 ;
   input_pos = 0 ;
 
-  #ifdef ARDUINO_ESP8266_NODEMCU
+  #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
+
     cfg_wifi_ssid[0] = 0 ;
     cfg_wifi_pw[0] = 0 ;
-    SPIFFS.begin () ;
     pinMode (LED_BUILTIN, OUTPUT) ;
 
     /*
@@ -929,9 +959,9 @@ void setup ()
        if udp server port is defined, configure it now.
     */
 
-    FSInfo fi ;
-    if (SPIFFS.info(fi))
+    if (SPIFFS.begin())
     {
+      Serial.println ("Checking built-in configuration.") ;
       File f_ssid = SPIFFS.open (WIFI_SSID_FILE, "r") ;
       File f_pw = SPIFFS.open (WIFI_PW_FILE, "r") ;
       if ((f_ssid) && (f_pw) &&
@@ -982,18 +1012,22 @@ void setup ()
         f_udp.close () ;
     }
 
+    #ifdef ARDUINO_ESP8266_NODEMCU
+
     Webs.on ("/", f_handleWeb) ;
     Webs.on ("/metrics", f_handleWebMetrics) ;
     Webs.begin () ;
     sprintf (line, "NOTICE: Web server started on port %d.\r\n", WEB_PORT) ;
     Serial.print (line) ;
 
+    #endif
+
     digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
     delay (1000) ;
     digitalWrite (LED_BUILTIN, HIGH) ;
   #endif
 
-  Serial.println ("\nReady.") ;
+  Serial.println ("Ready.") ;
 }
 
 void loop ()
