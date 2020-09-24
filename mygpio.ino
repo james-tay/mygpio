@@ -966,6 +966,7 @@ void setup ()
       File f_ssid = SPIFFS.open (WIFI_SSID_FILE, "r") ;
       File f_pw = SPIFFS.open (WIFI_PW_FILE, "r") ;
       if ((f_ssid) && (f_pw) &&
+          (f_ssid.size() > 0) && (f_pw.sizez() > 0) &&
           (f_ssid.size() <= MAX_SSID_LEN) && (f_pw.size() <= MAX_PASSWD_LEN))
       {
         int s_amt = f_ssid.readBytes (cfg_wifi_ssid, MAX_SSID_LEN) ;
@@ -1013,15 +1014,11 @@ void setup ()
         f_udp.close () ;
     }
 
-    #ifdef ARDUINO_ESP8266_NODEMCU
-
     Webs.on ("/", f_handleWeb) ;
     Webs.on ("/metrics", f_handleWebMetrics) ;
     Webs.begin () ;
     sprintf (line, "NOTICE: Web server started on port %d.\r\n", WEB_PORT) ;
     Serial.print (line) ;
-
-    #endif
 
     digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
     delay (1000) ;
