@@ -470,6 +470,8 @@ void f_lcd (char **tokens)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Features specific to both ESP8266 and ESP32                               */
+/* ------------------------------------------------------------------------- */
 
 #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
@@ -651,10 +653,6 @@ void f_fs (char **tokens)
   }
 }
 
-#endif
-
-#if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-
 void f_wifi (char **tokens)
 {
   if (strcmp(tokens[1], "scan") == 0)                           // scan
@@ -802,6 +800,29 @@ void f_handleWebMetrics ()
 #endif
 
 /* ------------------------------------------------------------------------- */
+/* Features specific to ESP32                                                */
+/* ------------------------------------------------------------------------- */
+
+#ifdef ARDUINO_ESP32_DEV
+
+void f_esp32 (char **tokens)
+{
+  char msg[BUF_SIZE] ;
+
+  if (strcmp(tokens[1], "hall") == 0)                           // hall
+  {
+    sprintf (msg, "%d\r\n", hallRead()) ;
+    strcat (reply_buf, msg) ;
+  }
+  else
+  {
+    strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
+  }
+}
+
+#endif
+
+/* ------------------------------------------------------------------------- */
 
 void f_action (char **tokens)
 {
@@ -836,6 +857,11 @@ void f_action (char **tokens)
               "wifi ssid <ssid>\r\n"
               "wifi pw <password>\r\n"
               "wifi disconnect\r\n") ;
+    #endif
+
+    #ifdef ARDUINO_ESP32_DEV
+      strcat (reply_buf,
+              "esp32 hall\r\n") ;
     #endif
   }
   else
@@ -911,7 +937,6 @@ void f_action (char **tokens)
   }
 
   #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-
   else
   if ((strcmp(tokens[0], "fs") == 0) && (tokens[1] != NULL))
   {
@@ -929,9 +954,14 @@ void f_action (char **tokens)
     delay (1000) ;
     ESP.restart () ;
   }
-
   #endif
-
+  #ifdef ARDUINO_ESP32_DEV
+  else
+  if ((strcmp(tokens[0], "esp32") == 0) && (tokens[1] != NULL))
+  {
+    f_esp32 (tokens) ;
+  }
+  #endif
   else
   {
     strcat (reply_buf, "FAULT: Enter 'help' for commands.\r\n") ;
@@ -966,7 +996,7 @@ void setup ()
       File f_ssid = SPIFFS.open (WIFI_SSID_FILE, "r") ;
       File f_pw = SPIFFS.open (WIFI_PW_FILE, "r") ;
       if ((f_ssid) && (f_pw) &&
-          (f_ssid.size() > 0) && (f_pw.sizez() > 0) &&
+          (f_ssid.size() > 0) && (f_pw.size() > 0) &&
           (f_ssid.size() <= MAX_SSID_LEN) && (f_pw.size() <= MAX_PASSWD_LEN))
       {
         int s_amt = f_ssid.readBytes (cfg_wifi_ssid, MAX_SSID_LEN) ;
