@@ -9,6 +9,8 @@
 
    Examples
 
+     [ serial CLI ]
+
      test LED,
        hi 12
        lo 12
@@ -44,6 +46,14 @@
        fs write /wifi.ssid superman
        fs write /wifi.pw changeme
        fs write /udp.port 8266
+
+     [ REST ]
+
+     % curl 'http://esp32.example.com/v1?cmd=...'
+
+     eg,
+
+     % curl 'http://esp32.example.com/v1?cmd=wifi+status'
 
    Bugs
 
@@ -140,6 +150,10 @@ char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
 unsigned long next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 
 LiquidCrystal_I2C lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
+
+/* function prototypes */
+
+void f_action (char **tokens) ;
 
 /* ------------------------------------------------------------------------- */
 
@@ -784,14 +798,42 @@ void f_wifi (char **tokens)
   }
 }
 
-/* callback function for web server */
+/* callback functions for web server */
 
-void f_handleWeb ()
+void f_handleWeb ()                             // for uri "/"
 {
   Webs.send (200, "text/plain", "OK\n") ;
 }
 
-void f_handleWebMetrics ()
+void f_v1api ()                                 // for uri "/v1"
+{
+  if ((Webs.args() != 1) ||                     // expect exactly 1 arg
+      (Webs.argName(0) != "cmd"))
+  {
+    Webs.send (504, "text/plain", "Invalid usage\r\n") ;
+    return ;
+  }
+
+  strncpy (input_buf, Webs.arg(0).c_str(), BUF_SIZE) ;
+  int idx = 0 ;
+  char *p = strtok (input_buf, " ") ;
+  while ((p) && (idx < MAX_TOKENS))
+  {
+    tokens[idx] = p ;
+    idx++ ;
+    p = strtok (NULL, " ") ;
+  }
+  tokens[idx] = NULL ;
+  reply_buf[0] = 0 ;
+  if (idx > 0)
+    f_action(tokens) ;
+  if (strlen(reply_buf) > 0)
+    Webs.send (200, "text/plain", reply_buf) ;
+  else
+    Webs.send (504, "text/plain", "No response\r\n") ;
+}
+
+void f_handleWebMetrics ()                      // for uri "/metrics"
 {
   sprintf (line, "node_uptime_secs %ld\n", millis() / 1000) ;
   Webs.send (200, "text/plain", line) ;
@@ -1052,6 +1094,7 @@ void setup ()
     }
 
     Webs.on ("/", f_handleWeb) ;
+    Webs.on ("/v1", f_v1api) ;
     Webs.on ("/metrics", f_handleWebMetrics) ;
     Webs.begin () ;
     sprintf (line, "NOTICE: Web server started on port %d.\r\n", WEB_PORT) ;
