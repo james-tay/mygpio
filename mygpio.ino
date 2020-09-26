@@ -839,7 +839,8 @@ void f_action (char **tokens)
             "lcd clear\r\n"
             "lcd init\r\n"
             "lcd print <row> <col> <message...>\r\n"
-            "uptime\r\n") ;
+            "uptime\r\n"
+            "version\r\n") ;
 
     #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
       strcat (reply_buf,
@@ -928,6 +929,12 @@ void f_action (char **tokens)
   {
     unsigned long now = millis() / 1000 ;
     sprintf (line, "uptime - %ld secs\r\n", now) ;
+    strcat (reply_buf, line) ;
+  }
+  else
+  if (strcmp(tokens[0], "version") == 0)
+  {
+    sprintf (line, "Built: %s, %s\r\n", __DATE__, __TIME__) ;
     strcat (reply_buf, line) ;
   }
   else
@@ -1089,14 +1096,24 @@ void loop ()
       p = strtok (NULL, " ") ;
     }
     tokens[idx] = NULL ;
+
+    /*
+       now that we've tokenized "input_buf", have f_action() do something,
+       which places the response in "reply_buf". Always print an "OK" on a
+       new line to indicate that the previous command has completed.
+    */
+
+    reply_buf[0] = 0 ;
     if (tokens[0] != NULL)
-    {
-      reply_buf[0] = 0 ;
       f_action (tokens) ;
-      if (strlen(reply_buf) > 0)
-        Serial.print (reply_buf) ;
-      Serial.println ("OK") ;
+    if (strlen(reply_buf) > 0)
+    {
+      Serial.print (reply_buf) ;
+      if (reply_buf[strlen(reply_buf)-1] != '\n')
+        Serial.print ("\r\n") ;                         // add CRNL if needed
     }
+    Serial.println ("OK") ;
+
     input_buf[0] = 0 ;
     input_pos = 0 ;
   }
