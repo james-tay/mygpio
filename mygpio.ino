@@ -62,6 +62,7 @@
      - The "fs write <filename> <content>" command does not support content
        with spaces.
      - All filenames must begin with '/'.
+     - LCD row/columns should be configurable.
 
    Notes
 
@@ -148,6 +149,21 @@ char reply_buf[REPLY_SIZE+1] ;  // accumulate our reply message here
 int input_pos ;                 // index of bytes received on serial port
 char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
 unsigned long next_blink=BLINK_FREQ ; // "wall clock" time for next blink
+
+/* internal performance metrics */
+
+struct internal_metrics
+{
+  unsigned long serialInBytes ;
+  unsigned long serialCmds ;
+  unsigned long serialOverruns ;
+  unsigned long udpInBytes ;
+  unsigned long udpCmds ;
+  unsigned long restInBytes ;
+  unsigned long restCmds ;
+} ;
+typedef struct internal_metrics S_Metrics ;
+S_Metrics G_Metrics ;
 
 LiquidCrystal_I2C lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
@@ -815,6 +831,8 @@ void f_v1api ()                                 // for uri "/v1"
   }
 
   strncpy (input_buf, Webs.arg(0).c_str(), BUF_SIZE) ;
+  G_Metrics.restInBytes = G_Metrics.restInBytes + strlen(input_buf) ;
+  G_Metrics.restCmds++ ;
   int idx = 0 ;
   char *p = strtok (input_buf, " ") ;
   while ((p) && (idx < MAX_TOKENS))
@@ -835,8 +853,25 @@ void f_v1api ()                                 // for uri "/v1"
 
 void f_handleWebMetrics ()                      // for uri "/metrics"
 {
-  sprintf (line, "node_uptime_secs %ld\n", millis() / 1000) ;
-  Webs.send (200, "text/plain", line) ;
+  sprintf (reply_buf,
+           "node_uptime_secs %ld\n"
+           "serial_in_bytes %ld\n"
+           "serial_commands %ld\n"
+           "serial_overruns %ld\n"
+           "udp_in_bytes %ld\n"
+           "udp_commands %ld\n"
+           "rest_in_bytes %ld\n"
+           "rest_commands %ld\n",
+           millis() / 1000,
+           G_Metrics.serialInBytes,
+           G_Metrics.serialCmds,
+           G_Metrics.serialOverruns,
+           G_Metrics.udpInBytes,
+           G_Metrics.udpCmds,
+           G_Metrics.restInBytes,
+           G_Metrics.restCmds
+           ) ;
+  Webs.send (200, "text/plain", reply_buf) ;
 }
 
 #endif
@@ -871,9 +906,9 @@ void f_action (char **tokens)
   if ((strcmp(tokens[0], "?") == 0) || (strcmp(tokens[0], "help") == 0))
   {
     strcat (reply_buf,
-            "hi <pin 0-13>\r\n"
-            "lo <pin 0-13>\r\n"
-            "aread <pin 0-5> - analog read\r\n"
+            "hi <pin>\r\n"
+            "lo <pin>\r\n"
+            "aread <pin> - analog read\r\n"
             "bmp180\r\n"
             "dht22 <dataPin> - DHT-22 temperature/humidity sensor\r\n"
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
@@ -1105,6 +1140,7 @@ void setup ()
     digitalWrite (LED_BUILTIN, HIGH) ;
   #endif
 
+  memset (&G_Metrics, 0, sizeof(G_Metrics)) ;
   Serial.println ("NOTICE: Ready.") ;
 }
 
@@ -1119,12 +1155,20 @@ void loop ()
   {
     char c = Serial.read () ;
     input_buf[input_pos] = c ;
+    G_Metrics.serialInBytes++ ;
     if (input_buf[input_pos] == '\r')
     {
+      G_Metrics.serialCmds++ ;
       input_buf[input_pos + 1] = 0 ;
       break ;
     }
     input_pos++ ;
+  }
+  if (input_pos == BUF_SIZE)                            // buffer overrun
+  {
+    G_Metrics.serialOverruns++ ;
+    input_pos = 0 ;
+    input_buf[0] = 0 ;
   }
 
   if (input_buf[input_pos] == '\r')
@@ -1170,6 +1214,8 @@ void loop ()
 
     int amt = Udp.read (input_buf, BUF_SIZE) ;
     input_buf[amt] = 0 ;
+    G_Metrics.udpInBytes = G_Metrics.udpInBytes + amt ;
+    G_Metrics.udpCmds++ ;
 
     int idx = 0 ;
     char *p = strtok (input_buf, " ") ;
