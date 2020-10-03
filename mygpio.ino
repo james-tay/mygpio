@@ -1,9 +1,11 @@
 /*
    Build/Upload
 
+     % arduino-cli compile -b esp32:esp32:esp32 .
      % arduino-cli compile -b esp8266:esp8266:nodemcuv2 .
      % arduino-cli compile -b arduino:avr:uno .
 
+     % arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32 .
      % arduino-cli upload -v -p /dev/ttyUSB0 -b esp8266:esp8266:nodemcuv2 .
      % arduino-cli upload -v -p /dev/ttyUSB0 -b arduino:avr:uno .
 
@@ -32,6 +34,11 @@
 
      test BMP180,       (on nodemcu, SCL is D1, SDA is D2)
        bmp180
+
+     test ADXL335       (on esp32)
+       hi 23
+       adxl335 1_0 1_3 1_6 2000 20
+       lo 23
 
      test build-in LED on NodeMCU
        lo 16
@@ -882,6 +889,12 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
 
 #ifdef ARDUINO_ESP32_DEV
 
+void f_adxl335 (char **tokens)
+{
+
+
+}
+
 void f_esp32 (char **tokens)
 {
   char msg[BUF_SIZE] ;
@@ -906,6 +919,7 @@ void f_action (char **tokens)
   if ((strcmp(tokens[0], "?") == 0) || (strcmp(tokens[0], "help") == 0))
   {
     strcat (reply_buf,
+            "[Common]\r\n"
             "hi <pin>\r\n"
             "lo <pin>\r\n"
             "aread <pin> - analog read\r\n"
@@ -921,6 +935,7 @@ void f_action (char **tokens)
 
     #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
       strcat (reply_buf,
+              "\r\n[ESP8266 or ESP32]\r\n"
               "fs format\r\n"
               "fs info\r\n"
               "fs ls\r\n"
@@ -939,6 +954,8 @@ void f_action (char **tokens)
 
     #ifdef ARDUINO_ESP32_DEV
       strcat (reply_buf,
+              "\r\n[ESP32 only]\r\n"
+              "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
               "esp32 hall\r\n") ;
     #endif
   }
@@ -964,6 +981,7 @@ void f_action (char **tokens)
   if ((strcmp(tokens[0], "aread") == 0) && (tokens[1] != NULL))
   {
     int pin = atoi(tokens[1]) ;
+    pinMode (pin, INPUT) ;
     int val = analogRead (pin) ;
     sprintf (line, "analogRead pin:%d - %d\r\n", pin, val) ;
     strcat (reply_buf, line) ;
@@ -1041,7 +1059,11 @@ void f_action (char **tokens)
   #endif
   #ifdef ARDUINO_ESP32_DEV
   else
-  if ((strcmp(tokens[0], "esp32") == 0) && (tokens[1] != NULL))
+  if (strcmp(tokens[0], "adxl335") == 0)
+  {
+    f_adxl335 (tokens) ;
+  }
+  if (strcmp(tokens[0], "esp32") == 0)
   {
     f_esp32 (tokens) ;
   }
