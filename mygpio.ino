@@ -37,7 +37,7 @@
 
      test ADXL335       (on esp32)
        hi 23
-       adxl335 1_0 1_3 1_6 2000 20
+       adxl335 36 39 34 1000 50
        lo 23
 
      test build-in LED on NodeMCU
@@ -891,8 +891,73 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
 
 void f_adxl335 (char **tokens)
 {
+  #define MAX_DURATION 5000 // take readings for a maximum of 5000ms.
 
+  int x_value, y_value, z_value ;
+  int x_min, y_min, z_min ;
+  int x_max, y_max, z_max ;
 
+  int nap ;
+  int samples = 0 ;
+  int x_total = 0, y_total = 0, z_total =0 ;
+
+  int x_pin = atoi (tokens[1]) ;
+  int y_pin = atoi (tokens[2]) ;
+  int z_pin = atoi (tokens[3]) ;
+  unsigned long total_duration = atoi (tokens[4]) ;
+  unsigned long interval = atoi (tokens[5]) ;
+
+  /* sanity check some parameters first */
+
+  if (total_duration > MAX_DURATION) total_duration = MAX_DURATION ;
+  if (total_duration < 1) total_duration = 1 ;
+  if (interval < 1) interval = 1 ;
+
+  pinMode (x_pin, INPUT) ;
+  pinMode (y_pin, INPUT) ;
+  pinMode (z_pin, INPUT) ;
+
+  unsigned long start_time = millis () ;
+  unsigned long end_time = start_time + total_duration ;
+
+  while (start_time < end_time)
+  {
+    x_value = analogRead (x_pin) ;
+    y_value = analogRead (y_pin) ;
+    z_value = analogRead (z_pin) ;
+
+    if (samples == 0)
+    {
+      x_min = x_max = x_value ;
+      y_min = y_max = y_value ;
+      z_min = z_max = z_value ;
+    }
+    else
+    {
+      if (x_value < x_min) x_min = x_value ;
+      if (y_value < y_min) y_min = y_value ;
+      if (z_value < z_min) z_min = z_value ;
+
+      if (x_value > x_max) x_max = x_value ;
+      if (y_value > y_max) y_max = y_value ;
+      if (z_value > z_max) z_max = z_value ;
+    }
+    x_total = x_total + x_value ;
+    y_total = y_total + y_value ;
+    z_total = z_total + z_value ;
+
+    start_time = start_time + interval ;
+    nap = start_time - millis() ;
+    if (nap > 0)
+      delay (nap) ;
+    samples++ ;
+  }
+
+  sprintf (line, "samples:%d x:%d/%d/%d y:%d/%d/%d z:%d/%d/%d\r\n", samples,
+           x_min, x_total / samples, x_max,
+           y_min, y_total / samples, y_max,
+           z_min, z_total / samples, z_max) ;
+  strcat (reply_buf, line) ;
 }
 
 void f_esp32 (char **tokens)
@@ -1059,10 +1124,13 @@ void f_action (char **tokens)
   #endif
   #ifdef ARDUINO_ESP32_DEV
   else
-  if (strcmp(tokens[0], "adxl335") == 0)
+  if ((strcmp(tokens[0], "adxl335") == 0) && (tokens[1] != NULL) &&
+      (tokens[2] != NULL) && (tokens[3] != NULL) &&
+      (tokens[4] != NULL) && (tokens[5] != NULL))
   {
     f_adxl335 (tokens) ;
   }
+  else
   if (strcmp(tokens[0], "esp32") == 0)
   {
     f_esp32 (tokens) ;
