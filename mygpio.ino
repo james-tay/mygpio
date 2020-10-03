@@ -116,7 +116,8 @@
 
   #include <SPIFFS.h>
   #include <WebServer.h>
-  WebServer Webs(WEB_PORT) ;     // our built-in webserver
+  WebServer Webs(WEB_PORT) ;    // our built-in webserver
+  int G_sleep = 0 ;             // a flag to tell us to enter sleep mode
 #endif
 
 #ifdef ARDUINO_ESP8266_NODEMCU
@@ -970,6 +971,15 @@ void f_esp32 (char **tokens)
     strcat (reply_buf, msg) ;
   }
   else
+  if ((strcmp(tokens[1], "sleep") == 0) && (tokens[2] != NULL))
+  {
+    unsigned long duration = atoi (tokens[2]) ; // in seconds
+    esp_sleep_enable_timer_wakeup (duration * 1000 * 1000) ;
+    sprintf (line, "Sleeping for %d secs.\r\n", duration) ;
+    strcat (reply_buf, line) ;
+    G_sleep = 1 ;
+  }
+  else
   {
     strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
@@ -1021,7 +1031,8 @@ void f_action (char **tokens)
       strcat (reply_buf,
               "\r\n[ESP32 only]\r\n"
               "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
-              "esp32 hall\r\n") ;
+              "esp32 hall\r\n"
+              "esp32 sleep <secs>\r\n") ;
     #endif
   }
   else
@@ -1341,5 +1352,16 @@ void loop ()
   #endif
 
   delay (50) ; // mandatory sleep to prevent excessive power drain
+
+  #ifdef ARDUINO_ESP32_DEV
+    if (G_sleep)
+    {
+      G_sleep = 0 ;
+      Serial.println ("NOTICE: entering sleep mode.") ;
+      delay (100) ; // allow serial buffer to flush
+      esp_light_sleep_start () ;
+      Serial.println ("NOTICE: exiting sleep mode.") ;
+    }
+  #endif
 }
 
