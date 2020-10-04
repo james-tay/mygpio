@@ -892,7 +892,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
 
 void f_adxl335 (char **tokens)
 {
-  #define MAX_DURATION 5000 // take readings for a maximum of 5000ms.
+  #define MAX_DURATION 60000 // take readings for a maximum of 60 secs
 
   int x_value, y_value, z_value ;
   int x_min, y_min, z_min ;
