@@ -1487,16 +1487,29 @@ void loop ()
   while ((Serial.available() > 0) && (serial_pos < BUF_SIZE - 1))
   {
     char c = (char) Serial.read () ;
-    serial_buf[serial_pos] = c ;
-    serial_buf[serial_pos+1] = 0 ;
-    Serial.print (c) ;
     G_Metrics.serialInBytes++ ;
-    if (serial_buf[serial_pos] == '\r')
+    if ((c == '\b') && (serial_pos > 0))                // delete previous char
+    {
+      Serial.print (c) ;
+      Serial.print (" ") ;
+      Serial.print (c) ;
+      serial_pos-- ;
+      serial_buf[serial_pos] = 0 ;
+    }
+    if (c != '\b')                                      // add non-BS char
+    {
+      serial_buf[serial_pos] = c ;
+      serial_buf[serial_pos+1] = 0 ;
+      Serial.print (c) ;
+    }
+
+    if (c == '\r')
     {
       G_Metrics.serialCmds++ ;
       break ;
     }
-    else
+
+    if ((c != '\r') && (c != '\b'))
       serial_pos++ ;
   }
   if (serial_pos == BUF_SIZE-1)                          // buffer overrun
