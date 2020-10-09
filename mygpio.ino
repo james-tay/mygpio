@@ -56,6 +56,7 @@
 
      [ REST ]
 
+     % curl 'http://esp32.example.com/metrics'
      % curl 'http://esp32.example.com/v1?cmd=...'
 
      eg,
@@ -71,13 +72,51 @@
      - All filenames must begin with '/'.
      - LCD row/columns should be configurable.
 
+   Threads
+
+     - Background threads can be dynamically started/stopped by the user. The
+       expectation is that each thread runs some task at fixed cycle times.
+     - Array of "G_thread_entry" tracks state, tid and parameters of all
+       threads. We want to avoid using malloc().
+     - Each thread must be given a unique user defined "name". This "name" is
+       used when sending results over the network.
+     - Each thread may periodically save its results in memory which can be
+       viewed at the "/metrics" URI.
+     - Each thread could report multiple result values. Each value is reported
+       with multiple (optional) tags, for example :
+         <name>{tid=<tid>,[<meta1>=<data1>,...]} <value>
+       eg:
+         mycar_accel{tid=5,axis="x",sample="ave"} 1791
+     - The above metric(s) is only displayed in the "/metrics" URI if its data
+       is fresh (ie, last update within 2x cycle time)
+     - Traditional task functions are named f_<task>, while thread safe tasks
+       are named ft_<task>.
+     - Thread life cycle is as follows :
+         initialization by f_thread_create()
+         `-> the tread function f_thread_lifecycle()
+             `- main loop
+                |-> for() loop to collect samples
+                `-> update results in G_thread_entry structure
+     - Each ft_<task> may return up to MAX_THREAD_RESULTS values, thus we
+       need to label up to MAX_THREAD_RESULTS "meta" and "data" key/value
+       pairs.
+     - Arguments to ft_<task> must be stored in a file "/thread-<name>",
+       which are read by f_thread_create().
+     - This file must contain 1 line with the parameters :
+         <ft_task> [<arg> ...]
+     - Thus the first argument specifies the <ft_task> the thread will
+       execute, the specified arguments are all passed to <ft_task> as a
+       NULL terminated array of (char*).
+     - Thread management (ie, create/stop/list) is single threaded.
+
    Notes
 
      - pin numbering goes by GPIO number, thus "hi 5" means GPIO pin 5, not
        the physical pin number.
 
      - LCD implementation reference :
-       https://create.arduino.cc/projecthub/arduino_uno_guy/i2c-liquid-crystal-displays-5b806c
+       https://create.arduino.cc/projecthub/arduino_uno_guy/
+         (navigate to "I2C Liquid Crystal Displays")
 
      - ESP32 hardware API reference
        https://github.com/espressif/arduino-esp32
@@ -109,18 +148,68 @@
 
 /* ====== STUFF SPECIFIC TO ESP32 and ESP8266 ====== */
 
-#ifdef ARDUINO_ESP32_DEV
+#ifdef ARDUINO_ESP32_DEV        // ***** ESP32 Only ******
   #define LED_BUILTIN 2
   #define BLINK_ON HIGH
   #define BLINK_OFF LOW
 
+  #include <pthread.h>
   #include <SPIFFS.h>
   #include <WebServer.h>
   WebServer Webs(WEB_PORT) ;    // our built-in webserver
   int G_sleep = 0 ;             // a flag to tell us to enter sleep mode
+
+  #define MAX_THREADS 16
+  #define MAX_THREAD_NAME 40
+  #define MAX_THREAD_ARGS 8
+  #define MAX_THREAD_RESULT_TAGS 8
+  #define MAX_THREAD_RESULT_VALUES 16
+
+  /* various states for S_thread_entry.state */
+
+  #define THREAD_STOPPED        0       // ready to be started
+  #define THREAD_STARTING       1       // pthread_create() just got called
+  #define THREAD_RUNNING        2       // thread in f_thread_lifecycle()
+  #define THREAD_STOPPING       3       // awaiting pthread_join()
+
+  /* Data structure of a single thread result value (with multiple tags) */
+
+  struct thread_result_s
+  {
+    char *metric ;                      // the metric we're displaying
+    int num_tags ;                      // number of meta data tags
+    char *meta[MAX_THREAD_RESULT_TAGS] ;  // array of meta tags
+    char *data[MAX_THREAD_RESULT_TAGS] ;  // array of data tags
+    float f_value ;                     // this result's value
+  } ;
+  typedef struct thread_result_s S_thread_result ;
+
+  /* Data structure to track a single thread, as well as its in/out data */
+
+  struct thread_entry_s
+  {
+    char name[MAX_THREAD_NAME] ;
+    unsigned char state ;
+    pthread_t tid ;
+    pthread_mutex_t lock ;              // lock this before making changes
+
+    /* input arguments to <ft_task> */
+
+    int num_args ;                      // number of input arguments
+    char *in_args[MAX_THREAD_ARGS] ;    // array of string pointers
+
+    int num_int_results ;               // number of actual results returned
+    S_thread_result results[MAX_THREAD_RESULT_VALUES] ;
+
+    unsigned long last_updated ;        // millis() timestamp of results update
+    void (*ft_addr)(int) ;              // the <ft_task> this thread runs
+  } ;
+  typedef struct thread_entry_s S_thread_entry ;
+
+  S_thread_entry G_thread_entry[MAX_THREADS] ;
 #endif
 
-#ifdef ARDUINO_ESP8266_NODEMCU
+#ifdef ARDUINO_ESP8266_NODEMCU  // ***** ESP8266 Only *****
   #define BLINK_ON LOW
   #define BLINK_OFF HIGH
 
@@ -879,6 +968,20 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            G_Metrics.restInBytes,
            G_Metrics.restCmds
            ) ;
+
+  #ifdef ARDUINO_ESP32_DEV
+    int i, threads=0 ;
+    for (i=0 ; i < MAX_THREADS ; i++)
+      if (G_thread_entry[i].state == THREAD_RUNNING)
+        threads++ ;
+    sprintf (line,
+             "free_heap_bytes %ld\n"
+             "threads_running %d\n",
+             xPortGetFreeHeapSize(),
+             threads) ;
+    strcat (reply_buf, line) ;
+  #endif
+
   Webs.send (200, "text/plain", reply_buf) ;
 }
 
@@ -961,6 +1064,91 @@ void f_adxl335 (char **tokens)
   strcat (reply_buf, line) ;
 }
 
+void *f_thread_lifecycle (void *p)
+{
+  int i ;
+  char mybuf[80] ;
+  S_thread_entry *entry = (S_thread_entry*) p ;
+
+  pthread_mutex_lock (&entry->lock) ;
+  entry->state = THREAD_RUNNING ;
+  pthread_mutex_unlock (&entry->lock) ;
+
+  for (i=0 ; i < 10 ; i++)
+  {
+    sprintf (mybuf, "tid:%d core:%d", entry->tid, xPortGetCoreID()) ;
+    Serial.println (mybuf) ;
+    delay (1000) ;
+  }
+
+
+  sprintf (mybuf, "tid:%d terminating.", entry->tid) ;
+  Serial.println (mybuf) ;
+
+  pthread_mutex_lock (&entry->lock) ;
+  entry->state = THREAD_STOPPING ;
+  pthread_mutex_unlock (&entry->lock) ;
+}
+
+void f_thread_create (char *name)
+{
+  int idx ;
+
+  /* do validations first */
+
+  if (strlen(name) > MAX_THREAD_NAME)
+  {
+    sprintf (line, "FAULT: thread name is too long, %d bytes max.\r\n",
+             MAX_THREAD_NAME) ;
+    strcat (reply_buf, line) ;
+    return ;
+  }
+
+  for (idx=0 ; idx < MAX_THREADS ; idx++)
+    if (strcmp (G_thread_entry[idx].name, name) == 0)
+    {
+      strcat (reply_buf, "FAULT: Duplicate thread name.\r\n") ;
+      return ;
+    }
+
+  /* before we try creating threads, try reap dead ones (releases memory) */
+
+  for (idx=0 ; idx < MAX_THREADS ; idx++)
+    if (G_thread_entry[idx].state == THREAD_STOPPING)
+    {
+      pthread_mutex_lock (&G_thread_entry[idx].lock) ;
+      pthread_join (G_thread_entry[idx].tid, NULL) ;
+      G_thread_entry[idx].state = THREAD_STOPPED ;
+      pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
+    }
+
+  /* start by looking for a free G_thread_entry */
+
+  pthread_t tid ;
+  for (idx=0 ; idx < MAX_THREADS ; idx++)
+    if (G_thread_entry[idx].state == THREAD_STOPPED)
+      break ;
+  if (idx == MAX_THREADS)
+  {
+    strcat (reply_buf, "Maximum number of threads reached.\r\n") ;
+    return ;
+  }
+
+  /* found an available G_thread_entry, lock it, update and fire it up */
+
+  pthread_mutex_lock (&G_thread_entry[idx].lock) ;
+  strcpy (G_thread_entry[idx].name, name) ;
+  G_thread_entry[idx].state = THREAD_STARTING ;
+
+  pthread_create (&tid, NULL, f_thread_lifecycle,
+                  (void*) &G_thread_entry[idx]) ;
+  G_thread_entry[idx].tid = tid ;
+  pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
+
+  sprintf (line, "thread '%s' created with tid:%d\r\n", name, tid) ;
+  strcat (reply_buf, line) ;
+}
+
 void f_esp32 (char **tokens)
 {
   char msg[BUF_SIZE] ;
@@ -978,6 +1166,23 @@ void f_esp32 (char **tokens)
     sprintf (line, "Sleeping for %d secs.\r\n", duration) ;
     strcat (reply_buf, line) ;
     G_sleep = 1 ;
+  }
+  else
+  if (strcmp(tokens[1], "thread_list") == 0)                    // thread_list
+  {
+
+
+  }
+  else
+  if ((strcmp(tokens[1], "thread_start") == 0) && (tokens[2] != NULL)) // start
+  {
+    f_thread_create (tokens[2]) ;
+  }
+  else
+  if ((strcmp(tokens[1], "thread_stop") == 0) && (tokens[2] != NULL))  // stop
+  {
+
+
   }
   else
   {
@@ -1032,7 +1237,10 @@ void f_action (char **tokens)
               "\r\n[ESP32 only]\r\n"
               "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
               "esp32 hall\r\n"
-              "esp32 sleep <secs>\r\n") ;
+              "esp32 sleep <secs>\r\n"
+              "esp32 thread_list\r\n"
+              "esp32 thread_start <name>\r\n"
+              "esp32 thread_stop <name>\r\n") ;
     #endif
   }
   else
@@ -1236,6 +1444,15 @@ void setup ()
     sprintf (line, "NOTICE: Web server started on port %d.\r\n", WEB_PORT) ;
     Serial.print (line) ;
 
+    #if defined ARDUINO_ESP32_DEV
+     int i ;
+     for (i=0 ; i < MAX_THREADS ; i++)
+       memset (&G_thread_entry[i], 0, sizeof(S_thread_entry)) ;
+       pthread_mutex_init (&G_thread_entry[i].lock, NULL) ;
+     sprintf (line, "NOTICE: Max allowed threads %d.", MAX_THREADS) ;
+     Serial.println (line) ;
+    #endif
+
     digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
     delay (1000) ;
     digitalWrite (LED_BUILTIN, HIGH) ;
@@ -1256,6 +1473,7 @@ void loop ()
   {
     char c = Serial.read () ;
     input_buf[input_pos] = c ;
+    Serial.print (c) ;
     G_Metrics.serialInBytes++ ;
     if (input_buf[input_pos] == '\r')
     {
@@ -1274,6 +1492,7 @@ void loop ()
 
   if (input_buf[input_pos] == '\r')
   {
+    Serial.print ("\n") ;
     input_buf[input_pos] = 0 ;
     int idx = 0 ;
     char *p = strtok (input_buf, " ") ;
