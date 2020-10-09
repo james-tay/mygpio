@@ -201,8 +201,9 @@
     int num_int_results ;               // number of actual results returned
     S_thread_result results[MAX_THREAD_RESULT_VALUES] ;
 
-    unsigned long last_updated ;        // millis() timestamp of results update
-    void (*ft_addr)(int) ;              // the <ft_task> this thread runs
+    unsigned long ts_started ;        // millis() timestamp of pthread_create()
+    unsigned long ts_updated ;        // millis() timestamp of results update
+    void (*ft_addr)(int) ;            // the <ft_task> this thread runs
   } ;
   typedef struct thread_entry_s S_thread_entry ;
 
@@ -241,9 +242,10 @@
 /* global variables */
 
 char line[BUF_SIZE] ;           // general purpose string buffer
-char input_buf[BUF_SIZE+1] ;    // bytes received on serial port
+char input_buf[BUF_SIZE+1] ;    // bytes received on the network
+char serial_buf[BUF_SIZE+1] ;   // bytes received on the network
 char reply_buf[REPLY_SIZE+1] ;  // accumulate our reply message here
-int input_pos ;                 // index of bytes received on serial port
+int serial_pos ;                // index of bytes received on serial port
 char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
 unsigned long next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 
@@ -1076,14 +1078,8 @@ void *f_thread_lifecycle (void *p)
 
   for (i=0 ; i < 10 ; i++)
   {
-    sprintf (mybuf, "tid:%d core:%d", entry->tid, xPortGetCoreID()) ;
-    Serial.println (mybuf) ;
     delay (1000) ;
   }
-
-
-  sprintf (mybuf, "tid:%d terminating.", entry->tid) ;
-  Serial.println (mybuf) ;
 
   pthread_mutex_lock (&entry->lock) ;
   entry->state = THREAD_STOPPING ;
@@ -1139,7 +1135,7 @@ void f_thread_create (char *name)
   pthread_mutex_lock (&G_thread_entry[idx].lock) ;
   strcpy (G_thread_entry[idx].name, name) ;
   G_thread_entry[idx].state = THREAD_STARTING ;
-
+  G_thread_entry[idx].ts_started = millis () ;
   pthread_create (&tid, NULL, f_thread_lifecycle,
                   (void*) &G_thread_entry[idx]) ;
   G_thread_entry[idx].tid = tid ;
@@ -1153,6 +1149,14 @@ void f_esp32 (char **tokens)
 {
   char msg[BUF_SIZE] ;
 
+  /* we definitely need at least 2x tokens, otherwise something is wrong */
+
+  if (tokens[1] == NULL)
+  {
+    strcat (reply_buf, "FAULT: Invalid esp32 command.\r\n") ;
+    return ;
+  }
+
   if (strcmp(tokens[1], "hall") == 0)                           // hall
   {
     sprintf (msg, "%d\r\n", hallRead()) ;
@@ -1163,15 +1167,25 @@ void f_esp32 (char **tokens)
   {
     unsigned long duration = atoi (tokens[2]) ; // in seconds
     esp_sleep_enable_timer_wakeup (duration * 1000 * 1000) ;
-    sprintf (line, "Sleeping for %d secs.\r\n", duration) ;
-    strcat (reply_buf, line) ;
+    sprintf (msg, "Sleeping for %d secs.\r\n", duration) ;
+    strcat (reply_buf, msg) ;
     G_sleep = 1 ;
   }
   else
   if (strcmp(tokens[1], "thread_list") == 0)                    // thread_list
   {
-
-
+    int i, num=1 ;
+    unsigned long now = millis () ;
+    for (i=0 ; i < MAX_THREADS ; i++)
+      if (G_thread_entry[i].state == THREAD_RUNNING)
+      {
+        sprintf (msg, "%d. tid:%d %s age:%ld\r\n", num,
+                 G_thread_entry[i].tid,
+                 G_thread_entry[i].name,
+                 (now - G_thread_entry[i].ts_started) / 1000) ;
+        strcat (reply_buf, msg) ;
+        num++ ;
+      }
   }
   else
   if ((strcmp(tokens[1], "thread_start") == 0) && (tokens[2] != NULL)) // start
@@ -1370,7 +1384,8 @@ void setup ()
   Serial.setTimeout (SERIAL_TIMEOUT) ;
   Serial.println ("\nNOTICE: System boot.") ;
   input_buf[0] = 0 ;
-  input_pos = 0 ;
+  serial_buf[0] = 0 ;
+  serial_pos = 0 ;
 
   #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
@@ -1441,8 +1456,8 @@ void setup ()
     Webs.on ("/v1", f_v1api) ;
     Webs.on ("/metrics", f_handleWebMetrics) ;
     Webs.begin () ;
-    sprintf (line, "NOTICE: Web server started on port %d.\r\n", WEB_PORT) ;
-    Serial.print (line) ;
+    sprintf (line, "NOTICE: Web server started on port %d.", WEB_PORT) ;
+    Serial.println (line) ;
 
     #if defined ARDUINO_ESP32_DEV
      int i ;
@@ -1469,33 +1484,35 @@ void loop ()
      presses ENTER)
   */
 
-  while ((Serial.available() > 0) && (input_pos < BUF_SIZE))
+  while ((Serial.available() > 0) && (serial_pos < BUF_SIZE - 1))
   {
-    char c = Serial.read () ;
-    input_buf[input_pos] = c ;
+    char c = (char) Serial.read () ;
+    serial_buf[serial_pos] = c ;
+    serial_buf[serial_pos+1] = 0 ;
     Serial.print (c) ;
     G_Metrics.serialInBytes++ ;
-    if (input_buf[input_pos] == '\r')
+    if (serial_buf[serial_pos] == '\r')
     {
       G_Metrics.serialCmds++ ;
-      input_buf[input_pos + 1] = 0 ;
       break ;
     }
-    input_pos++ ;
+    else
+      serial_pos++ ;
   }
-  if (input_pos == BUF_SIZE)                            // buffer overrun
+  if (serial_pos == BUF_SIZE-1)                          // buffer overrun
   {
+    Serial.println ("FAULT: Input overrun.") ;
     G_Metrics.serialOverruns++ ;
-    input_pos = 0 ;
-    input_buf[0] = 0 ;
+    serial_pos = 0 ;
+    serial_buf[0] = 0 ;
   }
 
-  if (input_buf[input_pos] == '\r')
+  if (serial_buf[serial_pos] == '\r')
   {
     Serial.print ("\n") ;
-    input_buf[input_pos] = 0 ;
+    serial_buf[serial_pos] = 0 ;
     int idx = 0 ;
-    char *p = strtok (input_buf, " ") ;
+    char *p = strtok (serial_buf, " ") ;
     while ((p) && (idx < MAX_TOKENS))
     {
       tokens[idx] = p ;
@@ -1505,7 +1522,7 @@ void loop ()
     tokens[idx] = NULL ;
 
     /*
-       now that we've tokenized "input_buf", have f_action() do something,
+       now that we've tokenized "serial_buf", have f_action() do something,
        which places the response in "reply_buf". Always print an "OK" on a
        new line to indicate that the previous command has completed.
     */
@@ -1520,9 +1537,8 @@ void loop ()
         Serial.print ("\r\n") ;                         // add CRNL if needed
     }
     Serial.println ("OK") ;
-
-    input_buf[0] = 0 ;
-    input_pos = 0 ;
+    serial_buf[0] = 0 ;
+    serial_pos = 0 ;
   }
 
   #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
