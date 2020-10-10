@@ -170,7 +170,8 @@
   #define THREAD_STOPPED        0       // ready to be started
   #define THREAD_STARTING       1       // pthread_create() just got called
   #define THREAD_RUNNING        2       // thread in f_thread_lifecycle()
-  #define THREAD_STOPPING       3       // awaiting pthread_join()
+  #define THREAD_WRAPUP         3       // tell a thread to terminate
+  #define THREAD_STOPPING       4       // awaiting pthread_join()
 
   /* Data structure of a single thread result value (with multiple tags) */
 
@@ -180,7 +181,7 @@
     int num_tags ;                      // number of meta data tags
     char *meta[MAX_THREAD_RESULT_TAGS] ;  // array of meta tags
     char *data[MAX_THREAD_RESULT_TAGS] ;  // array of data tags
-    float f_value ;                     // this result's value
+    int i_value ;                       // this result's value
   } ;
   typedef struct thread_result_s S_thread_result ;
 
@@ -203,7 +204,7 @@
 
     unsigned long ts_started ;        // millis() timestamp of pthread_create()
     unsigned long ts_updated ;        // millis() timestamp of results update
-    void (*ft_addr)(int) ;            // the <ft_task> this thread runs
+    void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
   } ;
   typedef struct thread_entry_s S_thread_entry ;
 
@@ -1066,19 +1067,50 @@ void f_adxl335 (char **tokens)
   strcat (reply_buf, line) ;
 }
 
+/* ===================== */
+/* thread safe functions */
+/* ===================== */
+
+void ft_counter (S_thread_entry *p)
+{
+  p->num_int_results = 1 ;
+  p->results[0].i_value++ ;
+
+  if (p->results[0].i_value % 5000 == 0)
+  {
+    char msg[80] ;
+    sprintf (msg, "tid:%d i_value:%d core:%d",
+             p->tid, p->results[0].i_value, xPortGetCoreID()) ;
+    Serial.println (msg) ;
+  }
+}
+
+/* =========================== */
+/* thread management functions */
+/* =========================== */
+
 void *f_thread_lifecycle (void *p)
 {
   int i ;
   char mybuf[80] ;
   S_thread_entry *entry = (S_thread_entry*) p ;
 
+  /* initialize thread info, input and output fields */
+
   pthread_mutex_lock (&entry->lock) ;
   entry->state = THREAD_RUNNING ;
+  entry->ft_addr = ft_counter ;
+
+  for (i=0 ; i < MAX_THREAD_ARGS ; i++)
+    entry->in_args[i] = 0 ;
+  for (i=0 ; i < MAX_THREAD_RESULT_VALUES ; i++)
+    memset (&entry->results[i], 0, sizeof(S_thread_result)) ;
   pthread_mutex_unlock (&entry->lock) ;
 
-  for (i=0 ; i < 10 ; i++)
+  while (entry->state == THREAD_RUNNING)
   {
-    delay (1000) ;
+    entry->ft_addr (entry) ;
+    delay (1) ;
   }
 
   pthread_mutex_lock (&entry->lock) ;
@@ -1089,6 +1121,18 @@ void *f_thread_lifecycle (void *p)
 void f_thread_create (char *name)
 {
   int idx ;
+
+  /* before we try creating threads, try reap dead ones (releases memory) */
+
+  for (idx=0 ; idx < MAX_THREADS ; idx++)
+    if (G_thread_entry[idx].state == THREAD_STOPPING)
+    {
+      pthread_mutex_lock (&G_thread_entry[idx].lock) ;
+      pthread_join (G_thread_entry[idx].tid, NULL) ;
+      G_thread_entry[idx].state = THREAD_STOPPED ;
+      G_thread_entry[idx].name[0] = 0 ;
+      pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
+    }
 
   /* do validations first */
 
@@ -1105,17 +1149,6 @@ void f_thread_create (char *name)
     {
       strcat (reply_buf, "FAULT: Duplicate thread name.\r\n") ;
       return ;
-    }
-
-  /* before we try creating threads, try reap dead ones (releases memory) */
-
-  for (idx=0 ; idx < MAX_THREADS ; idx++)
-    if (G_thread_entry[idx].state == THREAD_STOPPING)
-    {
-      pthread_mutex_lock (&G_thread_entry[idx].lock) ;
-      pthread_join (G_thread_entry[idx].tid, NULL) ;
-      G_thread_entry[idx].state = THREAD_STOPPED ;
-      pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
     }
 
   /* start by looking for a free G_thread_entry */
@@ -1142,6 +1175,28 @@ void f_thread_create (char *name)
   pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
 
   sprintf (line, "thread '%s' created with tid:%d\r\n", name, tid) ;
+  strcat (reply_buf, line) ;
+}
+
+void f_thread_stop (char *name)
+{
+  int idx ;
+
+  /* let's see if this thread exists */
+
+  for (idx=0 ; idx < MAX_THREADS ; idx++)
+    if ((G_thread_entry[idx].state == THREAD_RUNNING) &&
+        (strcmp(G_thread_entry[idx].name, name) == 0))
+    {
+      G_thread_entry[idx].state = THREAD_WRAPUP ;
+      pthread_join (G_thread_entry[idx].tid, NULL) ;
+      sprintf (line, "tid:%d '%s' stopped.\r\n",
+               G_thread_entry[idx].tid, name) ;
+      strcat (reply_buf, line) ;
+      return ;
+    }
+
+  sprintf (line, "Thread '%s' not currently running.\r\n", name) ;
   strcat (reply_buf, line) ;
 }
 
@@ -1195,8 +1250,7 @@ void f_esp32 (char **tokens)
   else
   if ((strcmp(tokens[1], "thread_stop") == 0) && (tokens[2] != NULL))  // stop
   {
-
-
+    f_thread_stop (tokens[2]) ;
   }
   else
   {
