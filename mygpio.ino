@@ -973,10 +973,39 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            ) ;
 
   #ifdef ARDUINO_ESP32_DEV
-    int i, threads=0 ;
-    for (i=0 ; i < MAX_THREADS ; i++)
-      if (G_thread_entry[i].state == THREAD_RUNNING)
+    int idx, threads=0 ;
+    char one_tag[BUF_SIZE], all_tags[BUF_SIZE] ;
+
+    for (idx=0 ; idx < MAX_THREADS ; idx++)
+      if (G_thread_entry[idx].state == THREAD_RUNNING)
+      {
+        /* this thread is running, print all result values, including tags */
+
+        int r, t ;
+        for (r=0 ; r < G_thread_entry[idx].num_int_results ; r++)
+        {
+          all_tags[0] = 0 ;
+          for (t=0 ; t < G_thread_entry[idx].results[r].num_tags ; t++)
+          {
+            sprintf (one_tag, "%s=%s",
+                     G_thread_entry[idx].results[r].meta[t],
+                     G_thread_entry[idx].results[r].data[t]) ;
+            if (strlen(all_tags) > 0)
+              strcat (all_tags, ",") ;
+            strcat (all_tags, one_tag) ;
+          }
+          if (strlen(all_tags) > 0)
+            sprintf (line, "%s{%s} %d\r\n",
+                     G_thread_entry[idx].name, all_tags,
+                     G_thread_entry[idx].results[r].i_value) ;
+          else
+            sprintf (line, "%s %d\r\n",
+                     G_thread_entry[idx].name,
+                     G_thread_entry[idx].results[r].i_value) ;
+          strcat (reply_buf, line) ;
+        }
         threads++ ;
+      }
     sprintf (line,
              "free_heap_bytes %ld\n"
              "threads_running %d\n",
@@ -1073,9 +1102,17 @@ void f_adxl335 (char **tokens)
 
 void ft_counter (S_thread_entry *p)
 {
-  p->num_int_results = 1 ;
-  p->results[0].i_value++ ;
+  /* if "num_int_results" is 0, this is our first call, initialize stuff */
 
+  if (p->num_int_results == 0)
+  {
+    p->num_int_results = 1 ;
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "myType" ;
+    p->results[0].data[0] = "myCounter" ;
+  }
+
+  p->results[0].i_value++ ;
   if (p->results[0].i_value % 5000 == 0)
   {
     char msg[80] ;
@@ -1095,7 +1132,7 @@ void *f_thread_lifecycle (void *p)
   char mybuf[80] ;
   S_thread_entry *entry = (S_thread_entry*) p ;
 
-  /* initialize thread info, input and output fields */
+  /* initialize thread info, input and output(result) fields */
 
   pthread_mutex_lock (&entry->lock) ;
   entry->state = THREAD_RUNNING ;
@@ -1166,12 +1203,22 @@ void f_thread_create (char *name)
   /* found an available G_thread_entry, lock it, update and fire it up */
 
   pthread_mutex_lock (&G_thread_entry[idx].lock) ;
+
   strcpy (G_thread_entry[idx].name, name) ;
   G_thread_entry[idx].state = THREAD_STARTING ;
+  G_thread_entry[idx].num_args = 0 ;
+  memset (&G_thread_entry[idx].in_args, 0, MAX_THREAD_ARGS * sizeof(char*)) ;
+  G_thread_entry[idx].num_int_results = 0 ;
+  memset (&G_thread_entry[idx].results, 0,
+          MAX_THREAD_RESULT_VALUES * sizeof(S_thread_result)) ;
+
   G_thread_entry[idx].ts_started = millis () ;
+  G_thread_entry[idx].ts_updated = 0 ;
+
   pthread_create (&tid, NULL, f_thread_lifecycle,
                   (void*) &G_thread_entry[idx]) ;
   G_thread_entry[idx].tid = tid ;
+
   pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
 
   sprintf (line, "thread '%s' created with tid:%d\r\n", name, tid) ;
