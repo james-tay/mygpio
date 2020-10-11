@@ -75,27 +75,26 @@
    Threads
 
      - Background threads can be dynamically started/stopped by the user. The
-       expectation is that each thread runs some task at fixed cycle times.
+       expectation is that each thread runs some task at fixed cycle times,
+       the cycle time is up to the thread author to implement.
      - Array of "G_thread_entry" tracks state, tid and parameters of all
        threads. We want to avoid using malloc().
-     - Each thread must be given a unique user defined "name". This "name" is
-       used when sending results over the network.
-     - Each thread may periodically save its results in memory which can be
-       viewed at the "/metrics" URI.
+     - Each thread must be given a unique user defined instance "name". This
+       "name" is used if sending results over the network.
+     - Each thread may periodically save its output in the "results" array
+       which can be viewed at the "/metrics" URI.
      - Each thread could report multiple result values. Each value is reported
        with multiple (optional) tags, for example :
          <name>{tid=<tid>,[<meta1>=<data1>,...]} <value>
        eg:
          mycar_accel{tid=5,axis="x",sample="ave"} 1791
-     - The above metric(s) is only displayed in the "/metrics" URI if its data
-       is fresh (ie, last update within 2x cycle time)
      - Traditional task functions are named f_<task>, while thread safe tasks
-       are named ft_<task>.
+       are named ft_<task>. This is a naming convention.
      - Thread life cycle is as follows :
          initialization by f_thread_create()
          `-> the tread function f_thread_lifecycle()
-             `- main loop
-                |-> for() loop to collect samples
+             `- main loop, call ft_<task>()
+                |-> run user code, complete within 1 second (recommended)
                 `-> update results in G_thread_entry structure
      - Each ft_<task> may return up to MAX_THREAD_RESULTS values, thus we
        need to label up to MAX_THREAD_RESULTS "meta" and "data" key/value
@@ -104,10 +103,16 @@
        which are read by f_thread_create().
      - This file must contain 1 line with the parameters :
          <ft_task> [<arg> ...]
-     - Thus the first argument specifies the <ft_task> the thread will
-       execute, the specified arguments are all passed to <ft_task> as a
-       NULL terminated array of (char*).
+     - The first argument is the ft_<task> that f_thread_lifecycle() will
+       execute, the specified arguments are all passed to ft_<task> as a
+       "num_args" array of (char*).
      - Thread management (ie, create/stop/list) is single threaded.
+
+   Writing ft_<tasks>
+
+     a) write function code : "void ft_<task> (S_thread_entry *p)"
+     b) document call and its arguments in "help"
+     c) update f_thread_lifecycle() to identify function address
 
    Notes
 
@@ -120,6 +125,11 @@
 
      - ESP32 hardware API reference
        https://github.com/espressif/arduino-esp32
+
+   Bugs
+
+     - tons of buffer overrun opportunities due to static buffers with not
+       much buffer length checking.
 */
 
 #include <Wire.h>
@@ -192,19 +202,20 @@
     char name[MAX_THREAD_NAME] ;
     unsigned char state ;
     pthread_t tid ;
-    pthread_mutex_t lock ;              // lock this before making changes
+    pthread_mutex_t lock ;              // lock before making changes here
 
     /* input arguments to <ft_task> */
 
     int num_args ;                      // number of input arguments
     char *in_args[MAX_THREAD_ARGS] ;    // array of string pointers
+    unsigned long loops ;               // number of <ft_task> calls so far
+    unsigned long ts_started ;        // millis() timestamp of pthread_create()
+    void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
+
+    /* IMPORTANT !!! <ft_task> may modify anything below this point */
 
     int num_int_results ;               // number of actual results returned
     S_thread_result results[MAX_THREAD_RESULT_VALUES] ;
-
-    unsigned long ts_started ;        // millis() timestamp of pthread_create()
-    unsigned long ts_updated ;        // millis() timestamp of results update
-    void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
   } ;
   typedef struct thread_entry_s S_thread_entry ;
 
@@ -1102,9 +1113,9 @@ void f_adxl335 (char **tokens)
 
 void ft_counter (S_thread_entry *p)
 {
-  /* if "num_int_results" is 0, this is our first call, initialize stuff */
+  /* if "loops" is 0, this is our first call, initialize stuff */
 
-  if (p->num_int_results == 0)
+  if (p->loops == 0)
   {
     p->num_int_results = 1 ;
     p->results[0].num_tags = 1 ;
@@ -1113,13 +1124,6 @@ void ft_counter (S_thread_entry *p)
   }
 
   p->results[0].i_value++ ;
-  if (p->results[0].i_value % 5000 == 0)
-  {
-    char msg[80] ;
-    sprintf (msg, "tid:%d i_value:%d core:%d",
-             p->tid, p->results[0].i_value, xPortGetCoreID()) ;
-    Serial.println (msg) ;
-  }
 }
 
 /* =========================== */
@@ -1147,6 +1151,7 @@ void *f_thread_lifecycle (void *p)
   while (entry->state == THREAD_RUNNING)
   {
     entry->ft_addr (entry) ;
+    entry->loops++ ;
     delay (1) ;
   }
 
@@ -1211,9 +1216,8 @@ void f_thread_create (char *name)
   G_thread_entry[idx].num_int_results = 0 ;
   memset (&G_thread_entry[idx].results, 0,
           MAX_THREAD_RESULT_VALUES * sizeof(S_thread_result)) ;
-
+  G_thread_entry[idx].loops = 0 ;
   G_thread_entry[idx].ts_started = millis () ;
-  G_thread_entry[idx].ts_updated = 0 ;
 
   pthread_create (&tid, NULL, f_thread_lifecycle,
                   (void*) &G_thread_entry[idx]) ;
