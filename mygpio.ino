@@ -54,6 +54,9 @@
        fs write /wifi.pw changeme
        fs write /udp.port 8266
 
+     test thread creation
+       esp32 thread_start count1
+
      [ REST ]
 
      % curl 'http://esp32.example.com/metrics'
@@ -80,9 +83,13 @@
      - Array of "G_thread_entry" tracks state, tid and parameters of all
        threads. We want to avoid using malloc().
      - Each thread must be given a unique user defined instance "name". This
-       "name" is used if sending results over the network.
+       "name" is used to:
+         a) identify which file stores the thread's configuration
+         b) specify which thread to start/stop
      - Each thread may periodically save its output in the "results" array
        which can be viewed at the "/metrics" URI.
+     - Each thread may write a status "msg", which can be viewed via the
+       "esp32 thread_list" command.
      - Each thread could report multiple result values. Each value is reported
        with multiple (optional) tags, for example :
          <name>{tid=<tid>,[<meta1>=<data1>,...]} <value>
@@ -101,8 +108,8 @@
        pairs.
      - Arguments to ft_<task> must be stored in a file "/thread-<name>",
        which are read by f_thread_create().
-     - This file must contain 1 line with the parameters :
-         <ft_task> [<arg> ...]
+     - This file must contain 1 line with comma separated parameters :
+         <ft_task>[,<arg>,...]
      - The first argument is the ft_<task> that f_thread_lifecycle() will
        execute, the specified arguments are all passed to ft_<task> as a
        "num_args" array of (char*).
@@ -113,6 +120,8 @@
      a) write function code : "void ft_<task> (S_thread_entry *p)"
      b) document call and its arguments in "help"
      c) update f_thread_lifecycle() to identify function address
+     d) a thread may set its state to THREAD_STOPPED if it chooses to
+        terminate (eg, encountering an error state).
 
    Notes
 
@@ -171,17 +180,19 @@
 
   #define MAX_THREADS 16
   #define MAX_THREAD_NAME 40
-  #define MAX_THREAD_ARGS 8
-  #define MAX_THREAD_RESULT_TAGS 8
-  #define MAX_THREAD_RESULT_VALUES 16
+  #define MAX_THREAD_ARGS 8             // number of input args
+  #define MAX_THREAD_RESULT_TAGS 8      // meta data tags
+  #define MAX_THREAD_RESULT_VALUES 16   // output values
+  #define MAX_THREAD_CONF_BUF 80        // length of thread's "conf"
+  #define MAX_THREAD_MSG_BUF 80         // length of thread's "msg"
 
   /* various states for S_thread_entry.state */
 
-  #define THREAD_STOPPED        0       // ready to be started
+  #define THREAD_READY          0       // ready to be started
   #define THREAD_STARTING       1       // pthread_create() just got called
   #define THREAD_RUNNING        2       // thread in f_thread_lifecycle()
   #define THREAD_WRAPUP         3       // tell a thread to terminate
-  #define THREAD_STOPPING       4       // awaiting pthread_join()
+  #define THREAD_STOPPED        4       // awaiting pthread_join()
 
   /* Data structure of a single thread result value (with multiple tags) */
 
@@ -207,7 +218,8 @@
     /* input arguments to <ft_task> */
 
     int num_args ;                      // number of input arguments
-    char *in_args[MAX_THREAD_ARGS] ;    // array of string pointers
+    char *in_args[MAX_THREAD_ARGS] ;    // array of pointers into "conf"
+    char conf[MAX_THREAD_CONF_BUF] ;    // main config buffer
     unsigned long loops ;               // number of <ft_task> calls so far
     unsigned long ts_started ;        // millis() timestamp of pthread_create()
     void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
@@ -216,6 +228,7 @@
 
     int num_int_results ;               // number of actual results returned
     S_thread_result results[MAX_THREAD_RESULT_VALUES] ;
+    char msg[MAX_THREAD_MSG_BUF] ;      // provide some optional feedback
   } ;
   typedef struct thread_entry_s S_thread_entry ;
 
@@ -1113,6 +1126,16 @@ void f_adxl335 (char **tokens)
 
 void ft_counter (S_thread_entry *p)
 {
+  /* determine our parameters from "in_args" */
+
+  if (p->num_args != 2)
+  {
+    strcpy (p->msg, "FATAL! Expecting 2x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+  int delay_ms = atoi (p->in_args[0]) ;
+
   /* if "loops" is 0, this is our first call, initialize stuff */
 
   if (p->loops == 0)
@@ -1121,9 +1144,12 @@ void ft_counter (S_thread_entry *p)
     p->results[0].num_tags = 1 ;
     p->results[0].meta[0] = "myType" ;
     p->results[0].data[0] = "myCounter" ;
+    p->results[0].i_value = atoi (p->in_args[1]) ;
+    strcpy (p->msg, "ok") ;
   }
 
   p->results[0].i_value++ ;
+  delay (delay_ms) ;
 }
 
 /* =========================== */
@@ -1136,27 +1162,20 @@ void *f_thread_lifecycle (void *p)
   char mybuf[80] ;
   S_thread_entry *entry = (S_thread_entry*) p ;
 
-  /* initialize thread info, input and output(result) fields */
+  /* initialize thread info, indicate thread is now running */
 
   pthread_mutex_lock (&entry->lock) ;
   entry->state = THREAD_RUNNING ;
-  entry->ft_addr = ft_counter ;
-
-  for (i=0 ; i < MAX_THREAD_ARGS ; i++)
-    entry->in_args[i] = 0 ;
-  for (i=0 ; i < MAX_THREAD_RESULT_VALUES ; i++)
-    memset (&entry->results[i], 0, sizeof(S_thread_result)) ;
   pthread_mutex_unlock (&entry->lock) ;
 
   while (entry->state == THREAD_RUNNING)
   {
     entry->ft_addr (entry) ;
     entry->loops++ ;
-    delay (1) ;
   }
 
   pthread_mutex_lock (&entry->lock) ;
-  entry->state = THREAD_STOPPING ;
+  entry->state = THREAD_STOPPED ;
   pthread_mutex_unlock (&entry->lock) ;
 }
 
@@ -1167,11 +1186,11 @@ void f_thread_create (char *name)
   /* before we try creating threads, try reap dead ones (releases memory) */
 
   for (idx=0 ; idx < MAX_THREADS ; idx++)
-    if (G_thread_entry[idx].state == THREAD_STOPPING)
+    if (G_thread_entry[idx].state == THREAD_STOPPED)
     {
       pthread_mutex_lock (&G_thread_entry[idx].lock) ;
       pthread_join (G_thread_entry[idx].tid, NULL) ;
-      G_thread_entry[idx].state = THREAD_STOPPED ;
+      G_thread_entry[idx].state = THREAD_READY;
       G_thread_entry[idx].name[0] = 0 ;
       pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
     }
@@ -1193,11 +1212,27 @@ void f_thread_create (char *name)
       return ;
     }
 
+  /*
+      try read configuration from file, hold it in "config" for now. we'll
+      copy it into G_thread_entry[].conf after all validation is complete.
+   */
+
+  char filename[BUF_SIZE], config[MAX_THREAD_CONF_BUF] ;
+  sprintf (filename, "/thread-%s", name) ;
+  File f = SPIFFS.open (filename, "r") ;
+  int amt = f.readBytes (config, MAX_THREAD_CONF_BUF-1) ;
+  f.close () ;
+  if (amt < 1)
+  {
+    sprintf (line, "FAULT: Cannot read config file '%s'.\r\n", filename) ;
+    return ;
+  }
+  config[amt] = 0 ;
+
   /* start by looking for a free G_thread_entry */
 
-  pthread_t tid ;
   for (idx=0 ; idx < MAX_THREADS ; idx++)
-    if (G_thread_entry[idx].state == THREAD_STOPPED)
+    if (G_thread_entry[idx].state == THREAD_READY)
       break ;
   if (idx == MAX_THREADS)
   {
@@ -1207,25 +1242,59 @@ void f_thread_create (char *name)
 
   /* found an available G_thread_entry, lock it, update and fire it up */
 
-  pthread_mutex_lock (&G_thread_entry[idx].lock) ;
+  pthread_mutex_lock (&G_thread_entry[idx].lock) ; /* START CRITICAL SECTION */
+
+  /* initialize data structure fields */
 
   strcpy (G_thread_entry[idx].name, name) ;
-  G_thread_entry[idx].state = THREAD_STARTING ;
+  strcpy (G_thread_entry[idx].conf, config) ;
   G_thread_entry[idx].num_args = 0 ;
-  memset (&G_thread_entry[idx].in_args, 0, MAX_THREAD_ARGS * sizeof(char*)) ;
   G_thread_entry[idx].num_int_results = 0 ;
-  memset (&G_thread_entry[idx].results, 0,
-          MAX_THREAD_RESULT_VALUES * sizeof(S_thread_result)) ;
   G_thread_entry[idx].loops = 0 ;
   G_thread_entry[idx].ts_started = millis () ;
+  G_thread_entry[idx].msg[0] = 0 ;
+  G_thread_entry[idx].ft_addr = NULL ;
+  memset (&G_thread_entry[idx].in_args, 0, MAX_THREAD_ARGS * sizeof(char*)) ;
+  memset (&G_thread_entry[idx].results, 0,
+          MAX_THREAD_RESULT_VALUES * sizeof(S_thread_result)) ;
 
+  /* tokenize thread's configuration */
+
+  int num_args ;
+  char *ft_taskname = strtok (G_thread_entry[idx].conf, ",") ;
+  for (num_args=0 ; num_args < MAX_THREAD_ARGS ; num_args++)
+  {
+    G_thread_entry[idx].in_args[num_args] = strtok (NULL, ",") ;
+    if (G_thread_entry[idx].in_args[num_args] == NULL)
+      break ;
+  }
+  G_thread_entry[idx].num_args = num_args ;
+
+  /* figure out the ft_<task> function address */
+
+  if (strcmp (ft_taskname, "ft_counter") == 0)
+    G_thread_entry[idx].ft_addr = ft_counter ;
+
+  if (G_thread_entry[idx].ft_addr == NULL)
+  {
+    sprintf (line, "FAULT: no such ft_task '%s'.\r\n", name) ;
+    strcat (reply_buf, line) ;
+    pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
+    return ;
+  }
+
+  /* (almost) everything prep'ed ... finally create the thread */
+
+  pthread_t tid ;
+  G_thread_entry[idx].state = THREAD_STARTING ;
   pthread_create (&tid, NULL, f_thread_lifecycle,
                   (void*) &G_thread_entry[idx]) ;
   G_thread_entry[idx].tid = tid ;
 
-  pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
+  pthread_mutex_unlock (&G_thread_entry[idx].lock) ; /* END CRITICAL SECTION */
 
-  sprintf (line, "thread '%s' created with tid:%d\r\n", name, tid) ;
+  sprintf (line, "thread '%s' created with tid:%d in_args:%d\r\n",
+           name, tid, num_args) ;
   strcat (reply_buf, line) ;
 }
 
@@ -1283,12 +1352,18 @@ void f_esp32 (char **tokens)
     int i, num=1 ;
     unsigned long now = millis () ;
     for (i=0 ; i < MAX_THREADS ; i++)
-      if (G_thread_entry[i].state == THREAD_RUNNING)
+      if ((G_thread_entry[i].state == THREAD_RUNNING) ||
+          (G_thread_entry[i].state == THREAD_STOPPED))
       {
-        sprintf (msg, "%d. tid:%d %s age:%ld\r\n", num,
+        char *state = "running" ;
+        if (G_thread_entry[i].state == THREAD_STOPPED)
+          state = "stopped" ;
+
+        sprintf (msg, "%d. %s tid:%d %s age:%ld msg:%s\r\n", num, state,
                  G_thread_entry[i].tid,
                  G_thread_entry[i].name,
-                 (now - G_thread_entry[i].ts_started) / 1000) ;
+                 (now - G_thread_entry[i].ts_started) / 1000,
+                 G_thread_entry[i].msg) ;
         strcat (reply_buf, msg) ;
         num++ ;
       }
@@ -1359,7 +1434,9 @@ void f_action (char **tokens)
               "esp32 sleep <secs>\r\n"
               "esp32 thread_list\r\n"
               "esp32 thread_start <name>\r\n"
-              "esp32 thread_stop <name>\r\n") ;
+              "esp32 thread_stop <name>\r\n"
+              "\r\n[<ft_tasks> - params in file(s) '/thread-<name>']\r\n"
+              "ft_counter,<delay(ms)>,<start_value>\r\n") ;
     #endif
   }
   else
