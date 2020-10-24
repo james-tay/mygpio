@@ -125,10 +125,10 @@
 
    Delivering events from threads
 
-     - A thread may deliver data when appropriate by calling f_deliver().
-     - The f_deliver() function does the following :
+     - A thread may deliver data when appropriate by calling f_delivery().
+     - The f_delivery() function does the following :
        - reads the file "/delivery.host" which is expected to contain the
-         string "<ip>:<port>".
+         string "<fqdn>:<port>".
        - opens a TCP connection and sends the string :
            "<name> <data>"
 
@@ -266,7 +266,7 @@
 #define BUF_SIZE 80
 
 #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-  #define REPLY_SIZE 512
+  #define REPLY_SIZE 1024
 #else
   #define REPLY_SIZE 192
 #endif
@@ -1415,22 +1415,66 @@ void f_esp32 (char **tokens)
 
 /*
    deliver "<name> <msg>" to DELIVERY_HOST_FILE, return number of bytes
-   successfully delivered
+   successfully delivered or -1 if something went wrong.
 */
 
 int f_delivery (char *name, char *msg)
 {
+  char err[BUF_SIZE] ;
+
   if ((name == NULL) || (msg == NULL))
     return (0) ;
   File f = SPIFFS.open (DELIVERY_HOST_FILE, "r") ;
   if (f == NULL)
+  {
+    sprintf (err, "WARNING: No delivery file '%s'.", DELIVERY_HOST_FILE) ;
+    Serial.println (err) ;
     return (0) ;
+  }
 
+  /* parse out "<fqdn>:<port>" and (try) open a TCP connection to it */
 
+  char buf[BUF_SIZE], host[BUF_SIZE] ;
+  int port ;
+  buf[0] = 0 ;
 
-
+  int amt = f.readBytes (buf, BUF_SIZE-1) ;
+  if (amt < 1)
+  {
+    sprintf (err, "WARNING: Could not read delivery file '%s'.",
+             DELIVERY_HOST_FILE) ;
+    Serial.println (err) ;
+    f.close () ;
+    return (-1) ;
+  }
+  buf[amt] = 0 ;
+  if (sscanf (buf, "%[^:]:%d", host, &port) != 2)
+  {
+    sprintf (err, "WARNING: Could not parse delivery file '%s' - %s",
+             DELIVERY_HOST_FILE, buf) ;
+    Serial.println (err) ;
+    f.close () ;
+    return (-1) ;
+  }
   f.close () ;
-  return (0) ;
+
+  WiFiClient client ;
+  if (client.connect (host, port))
+  {
+    if (msg[strlen(msg)-1] == '\n')
+      snprintf (buf, BUF_SIZE-1, "%s %s", name, msg) ;
+    else
+      snprintf (buf, BUF_SIZE-1, "%s %s\n", name, msg) ;
+    amt = client.write (buf) ;
+    client.stop () ;
+    return (amt) ;
+  }
+  else
+  {
+    sprintf (err, "WARNING: Cannot connect to %s:%d", host, port) ;
+    Serial.println (err) ;
+    return (-1) ;
+  }
 }
 
 #endif
