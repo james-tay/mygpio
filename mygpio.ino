@@ -123,6 +123,15 @@
      d) a thread may set its state to THREAD_STOPPED if it chooses to
         terminate (eg, encountering an error state).
 
+   Delivering events from threads
+
+     - A thread may deliver data when appropriate by calling f_deliver().
+     - The f_deliver() function does the following :
+       - reads the file "/delivery.host" which is expected to contain the
+         string "<ip>:<port>".
+       - opens a TCP connection and sends the string :
+           "<name> <data>"
+
    Notes
 
      - pin numbering goes by GPIO number, thus "hi 5" means GPIO pin 5, not
@@ -231,8 +240,12 @@
     char msg[MAX_THREAD_MSG_BUF] ;      // provide some optional feedback
   } ;
   typedef struct thread_entry_s S_thread_entry ;
-
   S_thread_entry G_thread_entry[MAX_THREADS] ;
+
+  /* declarations for esp32 only functions */
+
+  #define DELIVERY_HOST_FILE "/delivery.host"
+  int f_delivery (char *name, char *msg) ;
 #endif
 
 #ifdef ARDUINO_ESP8266_NODEMCU  // ***** ESP8266 Only *****
@@ -1148,6 +1161,22 @@ void ft_counter (S_thread_entry *p)
     strcpy (p->msg, "ok") ;
   }
 
+  /*
+     We want to call f_delivery() every REPORT_INTERVAL millisecs. Calculate
+     how often this will happen based on "delay_ms".
+  */
+
+  #define REPORT_INTERVAL 10 * 1000
+  int num_cycles = REPORT_INTERVAL / delay_ms ;
+  if (p->results[0].i_value % num_cycles == 0)
+  {
+    char s[BUF_SIZE] ;
+    sprintf (s, "counter:%d", p->results[0].i_value) ;
+    f_delivery (p->name, s) ;
+  }
+
+  /* at this point, just increment our counter and take a break. */
+
   p->results[0].i_value++ ;
   delay (delay_ms) ;
 }
@@ -1382,6 +1411,26 @@ void f_esp32 (char **tokens)
   {
     strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
+}
+
+/*
+   deliver "<name> <msg>" to DELIVERY_HOST_FILE, return number of bytes
+   successfully delivered
+*/
+
+int f_delivery (char *name, char *msg)
+{
+  if ((name == NULL) || (msg == NULL))
+    return (0) ;
+  File f = SPIFFS.open (DELIVERY_HOST_FILE, "r") ;
+  if (f == NULL)
+    return (0) ;
+
+
+
+
+  f.close () ;
+  return (0) ;
 }
 
 #endif
