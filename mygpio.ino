@@ -92,9 +92,9 @@
        "esp32 thread_list" command.
      - Each thread could report multiple result values. Each value is reported
        with multiple (optional) tags, for example :
-         <name>{tid=<tid>,[<meta1>=<data1>,...]} <value>
+         <name>{[<meta1>=<data1>,...]} <value>
        eg:
-         mycar_accel{tid=5,axis="x",sample="ave"} 1791
+         mycar_accel{axis="x",sample="ave"} 1791
      - Traditional task functions are named f_<task>, while thread safe tasks
        are named ft_<task>. This is a naming convention.
      - Thread life cycle is as follows :
@@ -105,11 +105,13 @@
                 `-> update results in G_thread_entry structure
      - Each ft_<task> may return up to MAX_THREAD_RESULTS values, thus we
        need to label up to MAX_THREAD_RESULTS "meta" and "data" key/value
-       pairs.
+       pairs. This is the ft_<task>'s responsibility.
      - Arguments to ft_<task> must be stored in a file "/thread-<name>",
-       which are read by f_thread_create().
+       which are read by f_thread_create(). This is the user's responsibility.
      - This file must contain 1 line with comma separated parameters :
          <ft_task>[,<arg>,...]
+       Eg,
+         ft_counter,200,1
      - The first argument is the ft_<task> that f_thread_lifecycle() will
        execute, the specified arguments are all passed to ft_<task> as a
        "num_args" array of (char*).
@@ -121,7 +123,7 @@
      b) document call and its arguments in "help"
      c) update f_thread_lifecycle() to identify function address
      d) a thread may set its state to THREAD_STOPPED if it chooses to
-        terminate (eg, encountering an error state).
+        terminate early (eg, encountering a critical error state).
 
    Delivering events from threads
 
