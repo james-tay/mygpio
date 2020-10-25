@@ -120,8 +120,10 @@
    Writing ft_<tasks>
 
      a) write function code : "void ft_<task> (S_thread_entry *p)"
-     b) document call and its arguments in "help"
-     c) update f_thread_lifecycle() to identify function address
+       - ft_<task> will be called repeatedly by f_thread_lifecycle()
+       - ft_<task> should introduce its own delay to limit cpu load
+     b) document call and its arguments in "thread_help"
+     c) update f_thread_create() to identify function address
      d) a thread may set its state to THREAD_STOPPED if it chooses to
         terminate early (eg, encountering a critical error state).
 
@@ -188,6 +190,7 @@
   #include <WebServer.h>
   WebServer Webs(WEB_PORT) ;    // our built-in webserver
   int G_sleep = 0 ;             // a flag to tell us to enter sleep mode
+  pthread_mutex_t G_delivery_lock ;     // lock for f_delivery()
 
   #define MAX_THREADS 16
   #define MAX_THREAD_NAME 40
@@ -270,7 +273,7 @@
 #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
   #define REPLY_SIZE 1024
 #else
-  #define REPLY_SIZE 192
+  #define REPLY_SIZE 192        // arduino uno has only 2x of SRAM.
 #endif
 
 /* LCD definitions */
@@ -284,7 +287,7 @@
 char line[BUF_SIZE] ;           // general purpose string buffer
 char input_buf[BUF_SIZE+1] ;    // bytes received on the network
 char serial_buf[BUF_SIZE+1] ;   // bytes received on the network
-char reply_buf[REPLY_SIZE+1] ;  // accumulate our reply message here
+char *reply_buf ;               // accumulate our reply message here
 int serial_pos ;                // index of bytes received on serial port
 char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
 unsigned long next_blink=BLINK_FREQ ; // "wall clock" time for next blink
@@ -1183,6 +1186,53 @@ void ft_counter (S_thread_entry *p)
   delay (delay_ms) ;
 }
 
+/*
+   This function writes the analogRead value in p->results[0].i_value but
+   also uses p->results[1].i_value to store our next f_delivery() time.
+*/
+
+void ft_aread (S_thread_entry *p)
+{
+  /* get ready our configuration */
+
+  if (p->num_args != 3)
+  {
+    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+  int delay_ms = atoi (p->in_args[0]) ;
+  int postInterval_ms = atoi (p->in_args[1]) ;
+  int pin = atoi (p->in_args[2]) ;
+
+  /* if "loops" is 0, this is our first call, initialize stuff */
+
+  if (p->loops == 0)
+  {
+    p->num_int_results = 1 ;
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "pin" ;
+    p->results[0].data[0] = p->in_args[2] ;
+    p->results[1].i_value = millis () + postInterval_ms ;
+    strcpy (p->msg, "ok") ;
+  }
+
+  pinMode (pin, INPUT) ;
+  p->results[0].i_value = analogRead (pin) ;
+
+  /* check if it's time to do f_delivery(), postInterval of "0" disables */
+
+  if ((postInterval_ms > 0) && (millis() > p->results[1].i_value))
+  {
+    char s[BUF_SIZE] ;
+    sprintf (s, "%d", p->results[0].i_value) ;
+    f_delivery (p->name, s) ;
+    p->results[1].i_value = p->results[1].i_value + postInterval_ms ;
+  }
+
+  delay (delay_ms) ;
+}
+
 /* =========================== */
 /* thread management functions */
 /* =========================== */
@@ -1190,7 +1240,6 @@ void ft_counter (S_thread_entry *p)
 void *f_thread_lifecycle (void *p)
 {
   int i ;
-  char mybuf[80] ;
   S_thread_entry *entry = (S_thread_entry*) p ;
 
   /* initialize thread info, indicate thread is now running */
@@ -1305,6 +1354,8 @@ void f_thread_create (char *name)
 
   if (strcmp (ft_taskname, "ft_counter") == 0)
     G_thread_entry[idx].ft_addr = ft_counter ;
+  if (strcmp (ft_taskname, "ft_aread") == 0)
+    G_thread_entry[idx].ft_addr = ft_aread ;
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
@@ -1378,6 +1429,14 @@ void f_esp32 (char **tokens)
     G_sleep = 1 ;
   }
   else
+  if (strcmp(tokens[1], "thread_help") == 0)                    // thread_help
+  {
+    strcat (reply_buf,
+            "[<ft_tasks> - params in files '/thread-<name>']\r\n"
+            "ft_aread,<delay(ms)>,<postInterval(ms)>,<pin>\r\n"
+            "ft_counter,<delay(ms)>,<start_value>\r\n") ;
+  }
+  else
   if (strcmp(tokens[1], "thread_list") == 0)                    // thread_list
   {
     int i, num=1 ;
@@ -1417,51 +1476,62 @@ void f_esp32 (char **tokens)
 
 /*
    deliver "<name> <msg>" to DELIVERY_HOST_FILE, return number of bytes
-   successfully delivered or -1 if something went wrong.
+   successfully delivered or -1 if something went wrong. We force this
+   function to lock a mutex because we don't know if WiFiClient is thread
+   safe.
 */
 
 int f_delivery (char *name, char *msg)
 {
-  char err[BUF_SIZE] ;
+  int amt ;
+  char err[BUF_SIZE], buf[BUF_SIZE] ;
+  static int dport=0 ;
+  static char dhost[BUF_SIZE] ;
 
   if ((name == NULL) || (msg == NULL))
     return (0) ;
-  File f = SPIFFS.open (DELIVERY_HOST_FILE, "r") ;
-  if (f == NULL)
-  {
-    sprintf (err, "WARNING: No delivery file '%s'.", DELIVERY_HOST_FILE) ;
-    Serial.println (err) ;
-    return (0) ;
-  }
 
-  /* parse out "<fqdn>:<port>" and (try) open a TCP connection to it */
+  pthread_mutex_lock (&G_delivery_lock) ;
 
-  char buf[BUF_SIZE], host[BUF_SIZE] ;
-  int port ;
   buf[0] = 0 ;
+  if (dport == 0)       // lazy parse host:port to reduce filesystem reads
+  {
+    File f = SPIFFS.open (DELIVERY_HOST_FILE, "r") ;
+    if (f == NULL)
+    {
+      sprintf (err, "WARNING: No delivery file '%s'.", DELIVERY_HOST_FILE) ;
+      Serial.println (err) ;
+      pthread_mutex_unlock (&G_delivery_lock) ;
+      return (0) ;
+    }
 
-  int amt = f.readBytes (buf, BUF_SIZE-1) ;
-  if (amt < 1)
-  {
-    sprintf (err, "WARNING: Could not read delivery file '%s'.",
-             DELIVERY_HOST_FILE) ;
-    Serial.println (err) ;
+    /* parse out "<fqdn>:<port>" and (try) open a TCP connection to it */
+
+    amt = f.readBytes (buf, BUF_SIZE-1) ;
+    if (amt < 1)
+    {
+      sprintf (err, "WARNING: Could not read delivery file '%s'.",
+               DELIVERY_HOST_FILE) ;
+      Serial.println (err) ;
+      f.close () ;
+      pthread_mutex_unlock (&G_delivery_lock) ;
+      return (-1) ;
+    }
+    buf[amt] = 0 ;
+    if (sscanf (buf, "%[^:]:%d", dhost, &dport) != 2)
+    {
+      sprintf (err, "WARNING: Could not parse delivery file '%s' - %s",
+               DELIVERY_HOST_FILE, buf) ;
+      Serial.println (err) ;
+      f.close () ;
+      pthread_mutex_unlock (&G_delivery_lock) ;
+      return (-1) ;
+    }
     f.close () ;
-    return (-1) ;
   }
-  buf[amt] = 0 ;
-  if (sscanf (buf, "%[^:]:%d", host, &port) != 2)
-  {
-    sprintf (err, "WARNING: Could not parse delivery file '%s' - %s",
-             DELIVERY_HOST_FILE, buf) ;
-    Serial.println (err) ;
-    f.close () ;
-    return (-1) ;
-  }
-  f.close () ;
 
   WiFiClient client ;
-  if (client.connect (host, port))
+  if (client.connect (dhost, dport))
   {
     if (msg[strlen(msg)-1] == '\n')
       snprintf (buf, BUF_SIZE-1, "%s %s", name, msg) ;
@@ -1469,12 +1539,14 @@ int f_delivery (char *name, char *msg)
       snprintf (buf, BUF_SIZE-1, "%s %s\n", name, msg) ;
     amt = client.write (buf) ;
     client.stop () ;
+    pthread_mutex_unlock (&G_delivery_lock) ;
     return (amt) ;
   }
   else
   {
-    sprintf (err, "WARNING: Cannot connect to %s:%d", host, port) ;
+    sprintf (err, "WARNING: Cannot connect to %s:%d", dhost, dport) ;
     Serial.println (err) ;
+    pthread_mutex_unlock (&G_delivery_lock) ;
     return (-1) ;
   }
 }
@@ -1527,11 +1599,10 @@ void f_action (char **tokens)
               "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
               "esp32 hall\r\n"
               "esp32 sleep <secs>\r\n"
+              "esp32 thread_help\r\n"
               "esp32 thread_list\r\n"
               "esp32 thread_start <name>\r\n"
-              "esp32 thread_stop <name>\r\n"
-              "\r\n[<ft_tasks> - params in file(s) '/thread-<name>']\r\n"
-              "ft_counter,<delay(ms)>,<start_value>\r\n") ;
+              "esp32 thread_stop <name>\r\n") ;
     #endif
   }
   else
@@ -1606,6 +1677,13 @@ void f_action (char **tokens)
   {
     sprintf (line, "Built: %s, %s\r\n", __DATE__, __TIME__) ;
     strcat (reply_buf, line) ;
+    sprintf (line, "Data sizes: ptr:%d char:%d "
+                   "short:%d int:%d long:%d longlong:%d "
+                   "float:%d double:%d\r\n",
+             sizeof(void*), sizeof(char),
+             sizeof(short), sizeof(int), sizeof(long), sizeof(long long),
+             sizeof(float), sizeof(double)) ;
+    strcat (reply_buf, line) ;
   }
   else
   if (strcmp(tokens[0], "lcd") == 0)
@@ -1663,6 +1741,8 @@ void setup ()
   input_buf[0] = 0 ;
   serial_buf[0] = 0 ;
   serial_pos = 0 ;
+  reply_buf = (char*) malloc (REPLY_SIZE+1) ;
+  reply_buf[0] = 0 ;
 
   #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
@@ -1743,6 +1823,7 @@ void setup ()
        pthread_mutex_init (&G_thread_entry[i].lock, NULL) ;
      sprintf (line, "NOTICE: Max allowed threads %d.", MAX_THREADS) ;
      Serial.println (line) ;
+     pthread_mutex_init (&G_delivery_lock, NULL) ;
     #endif
 
     digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
