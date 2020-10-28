@@ -28,9 +28,9 @@
        lo 4
 
      test DHT22,
-       hi 7
-       dht22 6
-       lo 7
+       hi 12
+       dht22 13
+       lo 12
 
      test BMP180,       (on nodemcu, SCL is D1, SDA is D2)
        bmp180
@@ -1561,9 +1561,10 @@ void f_action (char **tokens)
   {
     strcat (reply_buf,
             "[Common]\r\n"
-            "hi <pin>\r\n"
-            "lo <pin>\r\n"
+            "hi <GPIO pin>\r\n"
+            "lo <GPIO pin>\r\n"
             "aread <pin> - analog read\r\n"
+            "dread <GPIO pin> - digital read\r\n"
             "bmp180\r\n"
             "dht22 <dataPin> - DHT-22 temperature/humidity sensor\r\n"
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
@@ -1630,6 +1631,15 @@ void f_action (char **tokens)
     pinMode (pin, INPUT) ;
     int val = analogRead (pin) ;
     sprintf (line, "analogRead pin:%d - %d\r\n", pin, val) ;
+    strcat (reply_buf, line) ;
+  }
+  else
+  if ((strcmp(tokens[0], "dread") == 0) && (tokens[1] != NULL))
+  {
+    int pin = atoi(tokens[1]) ;
+    pinMode (pin, INPUT) ;
+    int val = digitalRead (pin) ;
+    sprintf (line, "digitalRead pin:%d - %d\r\n", pin, val) ;
     strcat (reply_buf, line) ;
   }
   else
