@@ -1067,7 +1067,15 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
 
 #ifdef ARDUINO_ESP32_DEV
 
-void f_adxl335 (char **tokens)
+/*
+   "tokens" is a string array of 6x params :
+     <don't_care> <x_pin> <y_pin> <z_pin> <total_dur> <interval>
+
+   "i_results" is an array of 10x ints which store the number of samples
+   examined, folled by min/ave/max values of the X/Y/Z axis respectively.
+*/
+
+void f_adxl335 (char **tokens, int *i_results)
 {
   #define MAX_DURATION 60000 // take readings for a maximum of 60 secs
 
@@ -1075,7 +1083,6 @@ void f_adxl335 (char **tokens)
   int x_min, y_min, z_min ;
   int x_max, y_max, z_max ;
 
-  int nap ;
   int samples = 0 ;
   int x_total = 0, y_total = 0, z_total =0 ;
 
@@ -1124,18 +1131,30 @@ void f_adxl335 (char **tokens)
     y_total = y_total + y_value ;
     z_total = z_total + z_value ;
 
-    start_time = start_time + interval ;
-    nap = start_time - millis() ;
-    if (nap > 0)
-      delay (nap) ;
+    if (interval == 0)
+      start_time = millis () ;
+    else
+    {
+      start_time = start_time + interval ;
+      int nap = start_time - millis() ;
+      if (nap > 0)
+        delay (nap) ;
+    }
     samples++ ;
   }
 
-  sprintf (line, "samples:%d x:%d/%d/%d y:%d/%d/%d z:%d/%d/%d\r\n", samples,
-           x_min, x_total / samples, x_max,
-           y_min, y_total / samples, y_max,
-           z_min, z_total / samples, z_max) ;
-  strcat (reply_buf, line) ;
+  /* now write our results into the int array */
+
+  i_results[0] = samples ;
+  i_results[1] = x_min ;
+  i_results[2] = x_total / samples ;
+  i_results[3] = x_max ;
+  i_results[4] = y_min ;
+  i_results[5] = y_total / samples ;
+  i_results[6] = y_max ;
+  i_results[7] = z_min ;
+  i_results[8] = z_total / samples ;
+  i_results[9] = z_max ;
 }
 
 /* ===================== */
@@ -1231,6 +1250,59 @@ void ft_aread (S_thread_entry *p)
   }
 
   delay (delay_ms) ;
+}
+
+void ft_adxl335 (S_thread_entry *p)
+{
+  /* get ready our configuration */
+
+  if (p->num_args != 6)
+  {
+    strcpy (p->msg, "FATAL! Expecting 6x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+  if (p->loops == 0)
+  {
+    int pwrPin = atoi (p->in_args[5]) ;
+    pinMode (pwrPin, OUTPUT) ;
+    digitalWrite (pwrPin, HIGH) ;
+    delay (50) ;
+
+    p->num_int_results = 3 ;
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "axis" ;
+    p->results[0].data[0] = "\"x\"" ;
+    p->results[1].num_tags = 1 ;
+    p->results[1].meta[0] = "axis" ;
+    p->results[1].data[0] = "\"y\"" ;
+    p->results[2].num_tags = 1 ;
+    p->results[2].meta[0] = "axis" ;
+    p->results[2].data[0] = "\"z\"" ;
+    strcpy (p->msg, "ok") ;
+  }
+
+  int r[10] ;
+  char *t[6], s[BUF_SIZE] ;
+
+  t[0] = NULL ;                 // don't care
+  t[1] = p->in_args[2] ;        // x pin
+  t[2] = p->in_args[3] ;        // y pin
+  t[3] = p->in_args[4] ;        // z pin
+  t[4] = p->in_args[1] ;        // total duration (ms)
+  t[5] = p->in_args[0] ;        // interval (ms)
+
+  f_adxl335 (t, (int*) &r) ;
+  p->results[0].i_value = r[2] ;
+  p->results[1].i_value = r[5] ;
+  p->results[2].i_value = r[8] ;
+
+  if (strcmp(p->in_args[1], "0") != 0)  // if "postInterval" is non-zero
+  {
+    sprintf (s, "samples:%d x:%d/%d/%d y:%d/%d/%d z:%d/%d/%d\r\n",
+             r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9]) ;
+    f_delivery (p->name, s) ;
+  }
 }
 
 /* =========================== */
@@ -1356,10 +1428,12 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_counter ;
   if (strcmp (ft_taskname, "ft_aread") == 0)
     G_thread_entry[idx].ft_addr = ft_aread ;
+  if (strcmp (ft_taskname, "ft_adxl335") == 0)
+    G_thread_entry[idx].ft_addr = ft_adxl335 ;
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
-    sprintf (line, "FAULT: no such ft_task '%s'.\r\n", name) ;
+    sprintf (line, "FAULT: no such ft_task '%s'.\r\n", ft_taskname) ;
     strcat (reply_buf, line) ;
     pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
     return ;
@@ -1432,9 +1506,10 @@ void f_esp32 (char **tokens)
   if (strcmp(tokens[1], "thread_help") == 0)                    // thread_help
   {
     strcat (reply_buf,
-            "[<ft_tasks> - params in files '/thread-<name>']\r\n"
-            "ft_aread,<delay(ms)>,<postInterval(ms)>,<pin>\r\n"
-            "ft_counter,<delay(ms)>,<start_value>\r\n") ;
+      "[<ft_tasks> - params in files '/thread-<name>']\r\n"
+      "ft_adxl335,<delay_ms>,<postInterval_ms>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
+      "ft_aread,<delay_ms>,<postInterval_ms>,<pin>\r\n"
+      "ft_counter,<delay_ms>,<start_value>\r\n") ;
   }
   else
   if (strcmp(tokens[1], "thread_list") == 0)                    // thread_list
@@ -1726,7 +1801,11 @@ void f_action (char **tokens)
       (tokens[2] != NULL) && (tokens[3] != NULL) &&
       (tokens[4] != NULL) && (tokens[5] != NULL))
   {
-    f_adxl335 (tokens) ;
+    int r[10] ;
+    f_adxl335 (tokens, (int*) &r) ;
+    sprintf (line, "samples:%d x:%d/%d/%d y:%d/%d/%d z:%d/%d/%d\r\n",
+             r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9]) ;
+    strcat (reply_buf, line) ;
   }
   else
   if (strcmp(tokens[0], "esp32") == 0)
