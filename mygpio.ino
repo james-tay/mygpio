@@ -167,6 +167,7 @@
 
   #define MAX_SSID_LEN 32
   #define MAX_PASSWD_LEN 64             // maximum wifi password length
+  #define MAX_MQTT_LEN 80               // maximum mqtt message we receive
   #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
   #define WEB_PORT 80
 
@@ -174,11 +175,16 @@
   #define WIFI_PW_FILE "/wifi.pw"
   #define UDP_PORT_FILE "/udp.port"
   #define MQTT_CFG_FILE "/mqtt.cfg"
+  #define MQTT_SUB_FILE "/mqtt.sub"
+  #define MQTT_PUB_FILE "/mqtt.pub"
 
   char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
   int cfg_udp_port=0 ;
   WiFiUDP Udp ;                         // our UDP server socket
+
+  char G_mqtt_pub[MAX_MQTT_LEN] ;       // mqtt topic we publish to
+  char G_mqtt_sub[MAX_MQTT_LEN] ;       // mqtt topic we subscribe to
 
 #endif
 
@@ -313,6 +319,7 @@ struct internal_metrics
   unsigned long mqttConnects ;
   unsigned long mqttPubs ;
   unsigned long mqttSubs ;
+  unsigned long mqttOversize ;
 } ;
 typedef struct internal_metrics S_Metrics ;
 S_Metrics G_Metrics ;
@@ -968,25 +975,73 @@ void f_wifi (char **tokens)
   }
 }
 
+void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
+{
+  char msg[MAX_MQTT_LEN + 1], buf[BUF_SIZE] ;
+
+  if (length > MAX_MQTT_LEN)
+  {
+    G_Metrics.mqttOversize++ ;
+    return ;
+  }
+  memcpy (msg, payload, length) ;
+  msg[length] = 0 ;
+  G_Metrics.mqttSubs++ ;
+
+  snprintf (buf, BUF_SIZE, "[%s] %s", topic, msg) ;
+  Serial.println (buf) ;
+}
+
 void f_delivery (char *name, char *payload)
 {
-
   #ifdef ARDUINO_ESP32_DEV
   pthread_mutex_lock (&G_delivery_lock) ;
   #endif
 
   if (G_psClient.connected() == false)          // parse config and connect
   {
-    File f = SPIFFS.open (MQTT_CFG_FILE, "r") ;
+    char buf[BUF_SIZE] ;
+    File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
+    if (f != NULL)
+    {
+      int amt = f.readBytes (buf, BUF_SIZE-1) ;
+      f.close () ;
+      if (amt > 0)
+      {
+        buf[amt] = 0 ;
+        strcpy (G_mqtt_sub, buf) ;
+      }
+    }
+    f = SPIFFS.open (MQTT_PUB_FILE, "r") ;      // publish file is mandatory
     if (f == NULL)
     {
-      sprintf (line, "WARNING: Cannot read '%s'.", MQTT_CFG_FILE) ;
-      strcat (reply_buf, line) ;
+      sprintf (line, "WARNING: Cannot read MQTT publish file '%s'.",
+               MQTT_PUB_FILE) ;
+      Serial.println (line) ;
+      return ;
     }
     else
     {
-      char buf[BUF_SIZE] ;
       int amt = f.readBytes (buf, BUF_SIZE-1) ;
+      f.close () ;
+      if (amt > 0)
+      {
+        buf[amt] = 0 ;
+        strcpy (G_mqtt_pub, buf) ;
+      }
+    }
+
+    f = SPIFFS.open (MQTT_CFG_FILE, "r") ;      // broker config is mandatory
+    if (f == NULL)
+    {
+      sprintf (line, "WARNING: Cannot read MQTT subscribe file '%s'.",
+               MQTT_CFG_FILE) ;
+      Serial.println (line) ;
+    }
+    else
+    {
+      int amt = f.readBytes (buf, BUF_SIZE-1) ;
+      f.close () ;
       if (amt > 0)
       {
         buf[amt] = 0 ;
@@ -1003,19 +1058,32 @@ void f_delivery (char *name, char *payload)
         else
         {
           G_psClient.setServer (mqtt_host, atoi(mqtt_port)) ;
-          G_psClient.connect ("boo", user, pw) ;
-          G_Metrics.mqttConnects++ ;
+          if (G_psClient.connect ("boo", user, pw))
+          {
+            G_Metrics.mqttConnects++ ;
+            if (strlen(G_mqtt_sub) > 0)
+            {
+              G_psClient.subscribe (G_mqtt_sub) ;
+              G_psClient.setCallback (f_mqtt_callback) ;
+            }
+          }
+          else
+          {
+            sprintf (line, "WARNING: Cannot connect to broker %s:%d.",
+                     mqtt_host, atoi(mqtt_port)) ;
+            Serial.println (line) ;
+          }
         }
       }
-      f.close () ;
     }
   }
 
-  if (G_psClient.connected())
+  if ((G_psClient.connected()) && (strlen(G_mqtt_pub) > 0) &&
+      (name != NULL) && (payload != NULL))
   {
     char buf[BUF_SIZE] ;
     sprintf (buf, "%s %s", name, payload) ;
-    G_psClient.publish ("topic", buf) ;
+    G_psClient.publish (G_mqtt_pub, buf) ;
     G_Metrics.mqttPubs++ ;
   }
 
@@ -1074,7 +1142,8 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            "rest_commands %ld\n"
            "mqtt_connects %ld\n"
            "mqtt_pubs %ld\n"
-           "mqtt_subs %ld\n",
+           "mqtt_subs %ld\n"
+           "mqtt_oversize %ld\n",
            millis() / 1000,
            G_Metrics.serialInBytes,
            G_Metrics.serialCmds,
@@ -1085,7 +1154,8 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            G_Metrics.restCmds,
            G_Metrics.mqttConnects,
            G_Metrics.mqttPubs,
-           G_Metrics.mqttSubs
+           G_Metrics.mqttSubs,
+           G_Metrics.mqttOversize
            ) ;
 
   #ifdef ARDUINO_ESP32_DEV
@@ -1652,6 +1722,8 @@ void f_action (char **tokens)
       strcat (reply_buf,
               "\r\n[Config Files]\r\n"
               "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
+              "/mqtt.pub   <topic to publish>\r\n"
+              "/mqtt.sub   <topic to subscribe>\r\n"
               "/udp.port   <port>\r\n"
               "/wifi.ssid  <ssid>\r\n"
               "/wifi.pw    <pw>\r\n") ;
@@ -1842,6 +1914,8 @@ void setup ()
 
     cfg_wifi_ssid[0] = 0 ;
     cfg_wifi_pw[0] = 0 ;
+    G_mqtt_pub[0] = 0 ;
+    G_mqtt_sub[0] = 0 ;
     pinMode (LED_BUILTIN, OUTPUT) ;
 
     /*
