@@ -1,6 +1,8 @@
 /*
    Build/Upload
 
+     % arduino-cli lib install PubSubClient
+
      % arduino-cli compile -b esp32:esp32:esp32 .
      % arduino-cli compile -b esp8266:esp8266:nodemcuv2 .
      % arduino-cli compile -b arduino:avr:uno .
@@ -130,11 +132,7 @@
    Delivering events from threads
 
      - A thread may deliver data when appropriate by calling f_delivery().
-     - The f_delivery() function does the following :
-       - reads the file "/delivery.host" which is expected to contain the
-         string "<fqdn>:<port>".
-       - opens a TCP connection and sends the string :
-           "<name> <data>"
+     - The f_delivery() function delivers "<name> <msg>" via MQTT.
 
    Notes
 
@@ -147,6 +145,9 @@
 
      - ESP32 hardware API reference
        https://github.com/espressif/arduino-esp32
+
+     - PubSubClient reference
+       https://pubsubclient.knolleary.net/
 
    Bugs
 
@@ -162,6 +163,7 @@
 #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
   #include <FS.h>
   #include <WiFiUdp.h>
+  #include <PubSubClient.h>
 
   #define MAX_SSID_LEN 32
   #define MAX_PASSWD_LEN 64             // maximum wifi password length
@@ -171,14 +173,16 @@
   #define WIFI_SSID_FILE "/wifi.ssid"
   #define WIFI_PW_FILE "/wifi.pw"
   #define UDP_PORT_FILE "/udp.port"
+  #define MQTT_CFG_FILE "/mqtt.cfg"
 
   char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
   int cfg_udp_port=0 ;
   WiFiUDP Udp ;                         // our UDP server socket
+
 #endif
 
-/* ====== STUFF SPECIFIC TO ESP32 and ESP8266 ====== */
+/* ====== STUFF SPECIFIC TO ESP32 only or ESP8266 only ====== */
 
 #ifdef ARDUINO_ESP32_DEV        // ***** ESP32 Only ******
   #define LED_BUILTIN 2
@@ -188,6 +192,10 @@
   #include <pthread.h>
   #include <SPIFFS.h>
   #include <WebServer.h>
+
+  WiFiClient G_wClient ;
+  PubSubClient G_psClient (G_wClient) ;
+
   WebServer Webs(WEB_PORT) ;    // our built-in webserver
   int G_sleep = 0 ;             // a flag to tell us to enter sleep mode
   pthread_mutex_t G_delivery_lock ;     // lock for f_delivery()
@@ -247,10 +255,6 @@
   typedef struct thread_entry_s S_thread_entry ;
   S_thread_entry G_thread_entry[MAX_THREADS] ;
 
-  /* declarations for esp32 only functions */
-
-  #define DELIVERY_HOST_FILE "/delivery.host"
-  int f_delivery (char *name, char *msg) ;
 #endif
 
 #ifdef ARDUINO_ESP8266_NODEMCU  // ***** ESP8266 Only *****
@@ -260,6 +264,9 @@
   #include <ESP8266WiFi.h>
   #include <ESP8266WebServer.h>
   ESP8266WebServer Webs(WEB_PORT) ;     // our built-in webserver
+
+  WiFiClient G_wClient ;
+  PubSubClient G_psClient (G_wClient) ;
 #endif
 
 /* ====== ALL OTHER GENERAL STUFF ====== */
@@ -303,6 +310,9 @@ struct internal_metrics
   unsigned long udpCmds ;
   unsigned long restInBytes ;
   unsigned long restCmds ;
+  unsigned long mqttConnects ;
+  unsigned long mqttPubs ;
+  unsigned long mqttSubs ;
 } ;
 typedef struct internal_metrics S_Metrics ;
 S_Metrics G_Metrics ;
@@ -890,6 +900,8 @@ void f_wifi (char **tokens)
              WiFi.localIP().toString().c_str(),
              WiFi.subnetMask().toString().c_str()) ;
     strcat (reply_buf, line) ;
+    sprintf (line, "mqtt_state: %d\r\n", G_psClient.state()) ;
+    strcat (reply_buf, line) ;
   }
   else
   if (strcmp(tokens[1], "disconnect") == 0)                     // disconnect
@@ -956,6 +968,62 @@ void f_wifi (char **tokens)
   }
 }
 
+void f_delivery (char *name, char *payload)
+{
+
+  #ifdef ARDUINO_ESP32_DEV
+  pthread_mutex_lock (&G_delivery_lock) ;
+  #endif
+
+  if (G_psClient.connected() == false)          // parse config and connect
+  {
+    File f = SPIFFS.open (MQTT_CFG_FILE, "r") ;
+    if (f == NULL)
+    {
+      sprintf (line, "WARNING: Cannot read '%s'.", MQTT_CFG_FILE) ;
+      strcat (reply_buf, line) ;
+    }
+    else
+    {
+      char buf[BUF_SIZE] ;
+      int amt = f.readBytes (buf, BUF_SIZE-1) ;
+      if (amt > 0)
+      {
+        buf[amt] = 0 ;
+        char *mqtt_host, *mqtt_port, *user, *pw ;
+
+        if (((mqtt_host = strtok (buf, ",")) == NULL) ||
+            ((mqtt_port = strtok (NULL, ",")) == NULL) ||
+            ((user = strtok (NULL, ",")) == NULL) ||
+            ((pw = strtok (NULL, ",")) == NULL))
+        {
+          sprintf (line, "WARNING: Cannot parse %s.", MQTT_CFG_FILE) ;
+          Serial.println (line) ;
+        }
+        else
+        {
+          G_psClient.setServer (mqtt_host, atoi(mqtt_port)) ;
+          G_psClient.connect ("boo", user, pw) ;
+          G_Metrics.mqttConnects++ ;
+        }
+      }
+      f.close () ;
+    }
+  }
+
+  if (G_psClient.connected())
+  {
+    char buf[BUF_SIZE] ;
+    sprintf (buf, "%s %s", name, payload) ;
+    G_psClient.publish ("topic", buf) ;
+    G_Metrics.mqttPubs++ ;
+  }
+
+  #ifdef ARDUINO_ESP32_DEV
+  pthread_mutex_unlock (&G_delivery_lock) ;
+  #endif
+}
+
 /* callback functions for web server */
 
 void f_handleWeb ()                             // for uri "/"
@@ -1003,7 +1071,10 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            "udp_in_bytes %ld\n"
            "udp_commands %ld\n"
            "rest_in_bytes %ld\n"
-           "rest_commands %ld\n",
+           "rest_commands %ld\n"
+           "mqtt_connects %ld\n"
+           "mqtt_pubs %ld\n"
+           "mqtt_subs %ld\n",
            millis() / 1000,
            G_Metrics.serialInBytes,
            G_Metrics.serialCmds,
@@ -1011,7 +1082,10 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            G_Metrics.udpInBytes,
            G_Metrics.udpCmds,
            G_Metrics.restInBytes,
-           G_Metrics.restCmds
+           G_Metrics.restCmds,
+           G_Metrics.mqttConnects,
+           G_Metrics.mqttPubs,
+           G_Metrics.mqttSubs
            ) ;
 
   #ifdef ARDUINO_ESP32_DEV
@@ -1299,7 +1373,7 @@ void ft_adxl335 (S_thread_entry *p)
 
   if (strcmp(p->in_args[1], "0") != 0)  // if "postInterval" is non-zero
   {
-    sprintf (s, "samples:%d x:%d/%d/%d y:%d/%d/%d z:%d/%d/%d\r\n",
+    sprintf (s, "samples:%d x:%d/%d/%d y:%d/%d/%d z:%d/%d/%d",
              r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9]) ;
     f_delivery (p->name, s) ;
   }
@@ -1377,6 +1451,7 @@ void f_thread_create (char *name)
   if (amt < 1)
   {
     sprintf (line, "FAULT: Cannot read config file '%s'.\r\n", filename) ;
+    strcat (reply_buf, line) ;
     return ;
   }
   config[amt] = 0 ;
@@ -1549,83 +1624,6 @@ void f_esp32 (char **tokens)
   }
 }
 
-/*
-   deliver "<name> <msg>" to DELIVERY_HOST_FILE, return number of bytes
-   successfully delivered or -1 if something went wrong. We force this
-   function to lock a mutex because we don't know if WiFiClient is thread
-   safe.
-*/
-
-int f_delivery (char *name, char *msg)
-{
-  int amt ;
-  char err[BUF_SIZE], buf[BUF_SIZE] ;
-  static int dport=0 ;
-  static char dhost[BUF_SIZE] ;
-
-  if ((name == NULL) || (msg == NULL))
-    return (0) ;
-
-  pthread_mutex_lock (&G_delivery_lock) ;
-
-  buf[0] = 0 ;
-  if (dport == 0)       // lazy parse host:port to reduce filesystem reads
-  {
-    File f = SPIFFS.open (DELIVERY_HOST_FILE, "r") ;
-    if (f == NULL)
-    {
-      sprintf (err, "WARNING: No delivery file '%s'.", DELIVERY_HOST_FILE) ;
-      Serial.println (err) ;
-      pthread_mutex_unlock (&G_delivery_lock) ;
-      return (0) ;
-    }
-
-    /* parse out "<fqdn>:<port>" and (try) open a TCP connection to it */
-
-    amt = f.readBytes (buf, BUF_SIZE-1) ;
-    if (amt < 1)
-    {
-      sprintf (err, "WARNING: Could not read delivery file '%s'.",
-               DELIVERY_HOST_FILE) ;
-      Serial.println (err) ;
-      f.close () ;
-      pthread_mutex_unlock (&G_delivery_lock) ;
-      return (-1) ;
-    }
-    buf[amt] = 0 ;
-    if (sscanf (buf, "%[^:]:%d", dhost, &dport) != 2)
-    {
-      sprintf (err, "WARNING: Could not parse delivery file '%s' - %s",
-               DELIVERY_HOST_FILE, buf) ;
-      Serial.println (err) ;
-      f.close () ;
-      pthread_mutex_unlock (&G_delivery_lock) ;
-      return (-1) ;
-    }
-    f.close () ;
-  }
-
-  WiFiClient client ;
-  if (client.connect (dhost, dport))
-  {
-    if (msg[strlen(msg)-1] == '\n')
-      snprintf (buf, BUF_SIZE-1, "%s %s", name, msg) ;
-    else
-      snprintf (buf, BUF_SIZE-1, "%s %s\n", name, msg) ;
-    amt = client.write (buf) ;
-    client.stop () ;
-    pthread_mutex_unlock (&G_delivery_lock) ;
-    return (amt) ;
-  }
-  else
-  {
-    sprintf (err, "WARNING: Cannot connect to %s:%d", dhost, dport) ;
-    Serial.println (err) ;
-    pthread_mutex_unlock (&G_delivery_lock) ;
-    return (-1) ;
-  }
-}
-
 #endif
 
 /* ------------------------------------------------------------------------- */
@@ -1651,6 +1649,13 @@ void f_action (char **tokens)
             "version\r\n") ;
 
     #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
+      strcat (reply_buf,
+              "\r\n[Config Files]\r\n"
+              "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
+              "/udp.port   <port>\r\n"
+              "/wifi.ssid  <ssid>\r\n"
+              "/wifi.pw    <pw>\r\n") ;
+
       strcat (reply_buf,
               "\r\n[ESP8266 or ESP32]\r\n"
               "fs format\r\n"
@@ -2031,7 +2036,9 @@ void loop ()
     Udp.endPacket () ;
   }
 
-  Webs.handleClient () ;
+  Webs.handleClient () ;        // handle http requests
+  if (G_psClient.connected())   // handle incoming messages & keepalives
+    G_psClient.loop () ;
 
   /* one in a while, blink once if wifi is connected, twice otherwise. */
 
@@ -2046,7 +2053,7 @@ void loop ()
 
   #endif
 
-  delay (50) ; // mandatory sleep to prevent excessive power drain
+  delay (10) ; // mandatory sleep to prevent excessive power drain
 
   #ifdef ARDUINO_ESP32_DEV
     if (G_sleep)
