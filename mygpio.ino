@@ -169,7 +169,8 @@
   #define MAX_PASSWD_LEN 64             // maximum wifi password length
   #define MAX_MQTT_LEN 80               // maximum mqtt message we receive
   #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
-  #define WEB_PORT 80
+  #define WEB_PORT 80                   // web server listens on this port
+  #define CRON_INTERVAL 60              // how often we run f_cron()
 
   #define WIFI_SSID_FILE "/wifi.ssid"
   #define WIFI_PW_FILE "/wifi.pw"
@@ -185,6 +186,7 @@
 
   char G_mqtt_pub[MAX_MQTT_LEN] ;       // mqtt topic we publish to
   char G_mqtt_sub[MAX_MQTT_LEN] ;       // mqtt topic we subscribe to
+  unsigned long G_next_cron ;           // millis() time of next run
 
 #endif
 
@@ -303,7 +305,7 @@ char serial_buf[BUF_SIZE+1] ;   // bytes received on the network
 char *reply_buf ;               // accumulate our reply message here
 int serial_pos ;                // index of bytes received on serial port
 char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
-unsigned long next_blink=BLINK_FREQ ; // "wall clock" time for next blink
+unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 
 /* internal performance metrics */
 
@@ -992,91 +994,94 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
   Serial.println (buf) ;
 }
 
+void f_mqtt_connect ()
+{
+  char buf[BUF_SIZE] ;
+  File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
+  if (f != NULL)
+  {
+    int amt = f.readBytes (buf, BUF_SIZE-1) ;
+    f.close () ;
+    if (amt > 0)
+    {
+      buf[amt] = 0 ;
+      strcpy (G_mqtt_sub, buf) ;
+    }
+  }
+  f = SPIFFS.open (MQTT_PUB_FILE, "r") ;      // publish file is mandatory
+  if (f == NULL)
+  {
+    sprintf (line, "WARNING: Cannot read MQTT publish file '%s'.",
+             MQTT_PUB_FILE) ;
+    Serial.println (line) ;
+    return ;
+  }
+  else
+  {
+    int amt = f.readBytes (buf, BUF_SIZE-1) ;
+    f.close () ;
+    if (amt > 0)
+    {
+      buf[amt] = 0 ;
+      strcpy (G_mqtt_pub, buf) ;
+    }
+  }
+
+  f = SPIFFS.open (MQTT_CFG_FILE, "r") ;      // broker config is mandatory
+  if (f == NULL)
+  {
+    sprintf (line, "WARNING: Cannot read MQTT subscribe file '%s'.",
+             MQTT_CFG_FILE) ;
+    Serial.println (line) ;
+  }
+  else
+  {
+    int amt = f.readBytes (buf, BUF_SIZE-1) ;
+    f.close () ;
+    if (amt > 0)
+    {
+      buf[amt] = 0 ;
+      char *mqtt_host, *mqtt_port, *user, *pw ;
+
+      if (((mqtt_host = strtok (buf, ",")) == NULL) ||
+          ((mqtt_port = strtok (NULL, ",")) == NULL) ||
+          ((user = strtok (NULL, ",")) == NULL) ||
+          ((pw = strtok (NULL, ",")) == NULL))
+      {
+        sprintf (line, "WARNING: Cannot parse %s.", MQTT_CFG_FILE) ;
+        Serial.println (line) ;
+      }
+      else
+      {
+        G_psClient.setServer (mqtt_host, atoi(mqtt_port)) ;
+        if (G_psClient.connect ("boo", user, pw))
+        {
+          G_Metrics.mqttConnects++ ;
+          if (strlen(G_mqtt_sub) > 0)
+          {
+            G_psClient.subscribe (G_mqtt_sub) ;
+            G_psClient.setCallback (f_mqtt_callback) ;
+          }
+        }
+        else
+        {
+          sprintf (line, "WARNING: Cannot connect to broker %s:%d.",
+                   mqtt_host, atoi(mqtt_port)) ;
+          Serial.println (line) ;
+        }
+      }
+    }
+  }
+}
+
 void f_delivery (char *name, char *payload)
 {
   #ifdef ARDUINO_ESP32_DEV
   pthread_mutex_lock (&G_delivery_lock) ;
   #endif
 
-  if (G_psClient.connected() == false)          // parse config and connect
-  {
-    char buf[BUF_SIZE] ;
-    File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
-    if (f != NULL)
-    {
-      int amt = f.readBytes (buf, BUF_SIZE-1) ;
-      f.close () ;
-      if (amt > 0)
-      {
-        buf[amt] = 0 ;
-        strcpy (G_mqtt_sub, buf) ;
-      }
-    }
-    f = SPIFFS.open (MQTT_PUB_FILE, "r") ;      // publish file is mandatory
-    if (f == NULL)
-    {
-      sprintf (line, "WARNING: Cannot read MQTT publish file '%s'.",
-               MQTT_PUB_FILE) ;
-      Serial.println (line) ;
-      return ;
-    }
-    else
-    {
-      int amt = f.readBytes (buf, BUF_SIZE-1) ;
-      f.close () ;
-      if (amt > 0)
-      {
-        buf[amt] = 0 ;
-        strcpy (G_mqtt_pub, buf) ;
-      }
-    }
-
-    f = SPIFFS.open (MQTT_CFG_FILE, "r") ;      // broker config is mandatory
-    if (f == NULL)
-    {
-      sprintf (line, "WARNING: Cannot read MQTT subscribe file '%s'.",
-               MQTT_CFG_FILE) ;
-      Serial.println (line) ;
-    }
-    else
-    {
-      int amt = f.readBytes (buf, BUF_SIZE-1) ;
-      f.close () ;
-      if (amt > 0)
-      {
-        buf[amt] = 0 ;
-        char *mqtt_host, *mqtt_port, *user, *pw ;
-
-        if (((mqtt_host = strtok (buf, ",")) == NULL) ||
-            ((mqtt_port = strtok (NULL, ",")) == NULL) ||
-            ((user = strtok (NULL, ",")) == NULL) ||
-            ((pw = strtok (NULL, ",")) == NULL))
-        {
-          sprintf (line, "WARNING: Cannot parse %s.", MQTT_CFG_FILE) ;
-          Serial.println (line) ;
-        }
-        else
-        {
-          G_psClient.setServer (mqtt_host, atoi(mqtt_port)) ;
-          if (G_psClient.connect ("boo", user, pw))
-          {
-            G_Metrics.mqttConnects++ ;
-            if (strlen(G_mqtt_sub) > 0)
-            {
-              G_psClient.subscribe (G_mqtt_sub) ;
-              G_psClient.setCallback (f_mqtt_callback) ;
-            }
-          }
-          else
-          {
-            sprintf (line, "WARNING: Cannot connect to broker %s:%d.",
-                     mqtt_host, atoi(mqtt_port)) ;
-            Serial.println (line) ;
-          }
-        }
-      }
-    }
-  }
+  if (G_psClient.connected() == false)
+    f_mqtt_connect () ;
 
   if ((G_psClient.connected()) && (strlen(G_mqtt_pub) > 0) &&
       (name != NULL) && (payload != NULL))
@@ -1324,7 +1329,7 @@ void ft_counter (S_thread_entry *p)
     p->num_int_results = 1 ;
     p->results[0].num_tags = 1 ;
     p->results[0].meta[0] = "myType" ;
-    p->results[0].data[0] = "myCounter" ;
+    p->results[0].data[0] = "\"myCounter\"" ;
     p->results[0].i_value = atoi (p->in_args[1]) ;
     strcpy (p->msg, "ok") ;
   }
@@ -1916,6 +1921,7 @@ void setup ()
     cfg_wifi_pw[0] = 0 ;
     G_mqtt_pub[0] = 0 ;
     G_mqtt_sub[0] = 0 ;
+    G_next_cron = CRON_INTERVAL * 1000 ;
     pinMode (LED_BUILTIN, OUTPUT) ;
 
     /*
@@ -2114,15 +2120,35 @@ void loop ()
   if (G_psClient.connected())   // handle incoming messages & keepalives
     G_psClient.loop () ;
 
-  /* one in a while, blink once if wifi is connected, twice otherwise. */
+  /* once in a while, blink once if wifi is connected, twice otherwise. */
 
-  if (millis() > next_blink)
+  unsigned long now = millis() ;
+  if (now > G_next_blink)
   {
     if (WiFi.status() == WL_CONNECTED)
       f_blink (1) ;
     else
       f_blink (2) ;
-    next_blink = next_blink + BLINK_FREQ ;
+    G_next_blink = G_next_blink + BLINK_FREQ ;
+  }
+
+  /* once in a while, run "cron" jobs */
+
+  if (now > G_next_cron)
+  {
+    if (WiFi.status() != WL_CONNECTED)
+    {
+      char *args[3] ;
+      args[0] = "wifi" ;
+      args[1] = "connect" ;
+      args[2] = NULL ;
+      f_wifi (args) ;
+    }
+    if (G_psClient.connected() == false)
+    {
+      f_mqtt_connect () ;
+    }
+    G_next_cron = G_next_cron + (CRON_INTERVAL * 1000) ;
   }
 
   #endif
