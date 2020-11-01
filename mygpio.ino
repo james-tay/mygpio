@@ -105,9 +105,9 @@
              `- main loop, call ft_<task>()
                 |-> run user code, complete within 1 second (recommended)
                 `-> update results in G_thread_entry structure
-     - Each ft_<task> may return up to MAX_THREAD_RESULTS values, thus we
-       need to label up to MAX_THREAD_RESULTS "meta" and "data" key/value
-       pairs. This is the ft_<task>'s responsibility.
+     - Each ft_<task> may return up to MAX_THREAD_RESULT_VALUES values, thus
+       we need to label up to MAX_THREAD_RESULT_VALUES "meta" and "data"
+       key/value pairs. This is the ft_<task>'s responsibility.
      - Arguments to ft_<task> must be stored in a file "/thread-<name>",
        which are read by f_thread_create(). This is the user's responsibility.
      - This file must contain 1 line with comma separated parameters :
