@@ -1053,8 +1053,13 @@ void f_mqtt_connect ()
       }
       else
       {
+        char id[BUF_SIZE] ;
+        unsigned char mac[6] ;
+        WiFi.macAddress(mac) ;
+        sprintf (id, "%x-%x-%x-%x-%x-%x",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
         G_psClient.setServer (mqtt_host, atoi(mqtt_port)) ;
-        if (G_psClient.connect ("boo", user, pw))
+        if (G_psClient.connect (id, user, pw))
         {
           G_Metrics.mqttConnects++ ;
           if (strlen(G_mqtt_sub) > 0)
