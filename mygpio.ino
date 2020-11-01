@@ -129,7 +129,35 @@
      d) a thread may set its state to THREAD_STOPPED if it chooses to
         terminate early (eg, encountering a critical error state).
 
-   Delivering events from threads
+   Presenting Metrics For Scraping
+
+     - Each thread performs its task and regularly updates its "results"
+       array with data for prometheus to scrape. Consider a thread monitoring
+       an analog input pin value, when prometheus scrapes us, we want to
+       present an entry like :
+
+         sensor_moisture{location="FlowerBed",model="resistance"} 568
+
+     - To make this possible, we need to configure threads using 2x files :
+
+         /thread-<name>
+         /tags-<name>           (optional)
+
+     - In the earlier example, we place the following in "/tags-<name>" :
+
+         sensor_moisture,location=FlowerBed,model=resistance
+
+     - Thus, the format for the "/tags-<name>" file is :
+
+         <metric>[,<tagN>=<valueN>,...]
+
+     - A thread may insert its own tags in its "results" structure. These
+       custom tags will be merged with those in "/tags-<name>" provided they
+       don't exceed MAX_THREAD_RESULT_TAGS. If the "/tags-<name>" file is
+       absent, "<name>" will be used in place of "<metric>".
+
+
+   Delivering events from threads (fix me)
 
      - A thread may deliver data when appropriate by calling f_delivery().
      - The f_delivery() function delivers "<name> <msg>" via MQTT.
@@ -300,11 +328,9 @@
 /* global variables */
 
 char line[BUF_SIZE] ;           // general purpose string buffer
-char input_buf[BUF_SIZE+1] ;    // bytes received on the network
-char serial_buf[BUF_SIZE+1] ;   // bytes received on the network
-char *reply_buf ;               // accumulate our reply message here
-int serial_pos ;                // index of bytes received on serial port
-char *tokens[MAX_TOKENS+1] ;    // max command parameters we'll parse
+char *G_reply_buf ;             // accumulate our reply message here
+int G_serial_pos ;              // index of bytes received on serial port
+char G_serial_buf[BUF_SIZE+1] ; // accumulate butes on our serial console
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 
 /* internal performance metrics */
@@ -414,18 +440,18 @@ int f_bmp180 (float *temperature, float *pressure)
       (f_i2c_readShort (BMP180_ADDR, 0xBC, &mc) == 0) ||
       (f_i2c_readShort (BMP180_ADDR, 0xBE, &md) == 0))
   {
-    strcat (reply_buf, "FAULT: Cannot read data from BMP180.\r\n") ;
+    strcat (G_reply_buf, "FAULT: Cannot read data from BMP180.\r\n") ;
     return (0) ;
   }
 
   sprintf (line, "ac1: %d\r\nac2: %d\r\nac3: %d\r\n", ac1, ac2, ac3) ;
-  strcat (reply_buf, line) ;
+  strcat (G_reply_buf, line) ;
   sprintf (line, "ac4: %d\r\nac5: %d\r\nac6: %d\r\n", ac4, ac5, ac6) ;
-  strcat (reply_buf, line) ;
+  strcat (G_reply_buf, line) ;
   sprintf (line, "b1: %d\r\nb2: %d\r\nmb: %d\r\nmc: %d\r\n", b2, mb, mc) ;
-  strcat (reply_buf, line) ;
+  strcat (G_reply_buf, line) ;
   sprintf (line, "md: %d\r\n", md) ;
-  strcat (reply_buf, line) ;
+  strcat (G_reply_buf, line) ;
 
   /*
      read the raw temperature by writing 0x2E to address 0xF4, the result is
@@ -441,7 +467,7 @@ int f_bmp180 (float *temperature, float *pressure)
   f_i2c_readShort (BMP180_ADDR, 0xF6, &raw_t) ;
 
   sprintf (line, "raw_t: %d\r\n", raw_t) ;
-  strcat (reply_buf, line) ;
+  strcat (G_reply_buf, line) ;
 
   /* now calculate the true temperature */
 
@@ -473,7 +499,7 @@ int f_bmp180 (float *temperature, float *pressure)
   long raw_p = ((msb << 16) + (lsb << 8) + xlsb) >> (8 - BMP180_MODE) ;
 
   sprintf (line, "raw_p: %d\r\n", raw_p) ;
-  strcat (reply_buf, line) ;
+  strcat (G_reply_buf, line) ;
 
   long b6 = b5 - 4000 ;
   x1 = (b2 * (b6 * b6) >> 12) >> 11 ;
@@ -524,7 +550,7 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
 
   if (pulseIn (dataPin, HIGH) == 0)
   {
-    strcat (reply_buf, "FAULT: f_dht22() no ACK, aborting.\r\n") ;
+    strcat (G_reply_buf, "FAULT: f_dht22() no ACK, aborting.\r\n") ;
     return (0) ;
   }
 
@@ -549,7 +575,7 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
   unsigned char c = data[0] + data[1] + data[2] + data[3] ;
   if ((c & 0xff) != data[4])
   {
-    strcat (reply_buf, "FAULT: f_dht22() checksum failed.\r\n") ;
+    strcat (G_reply_buf, "FAULT: f_dht22() checksum failed.\r\n") ;
     return (0) ;
   }
 
@@ -581,7 +607,7 @@ float f_hcsr04 (int trigPin, int echoPin)
   unsigned long echoUsecs = pulseIn (echoPin, HIGH, HCSR04_TIMEOUT_USEC) ;
   if (echoUsecs == 0)
   {
-    strcat (reply_buf, "FAULT: f_hcsr04() no response.\r\n") ;
+    strcat (G_reply_buf, "FAULT: f_hcsr04() no response.\r\n") ;
     return (-1.0) ;
   }
   else
@@ -596,14 +622,14 @@ void f_lcd (char **tokens)
 {
   if (tokens[1] == NULL)
   {
-    strcat (reply_buf, "FAULT: No arguments.\r\n") ;
+    strcat (G_reply_buf, "FAULT: No arguments.\r\n") ;
     return ;
   }
 
   if (strcmp(tokens[1], "init") == 0)                           // init
   {
     lcd.init () ;
-    strcat (reply_buf, "LCD initialized.\r\n") ;
+    strcat (G_reply_buf, "LCD initialized.\r\n") ;
   }
   else
   if (strcmp(tokens[1], "backlight") == 0)                      // backlight
@@ -611,24 +637,24 @@ void f_lcd (char **tokens)
     if (strcmp(tokens[2], "on") == 0)
     {
       lcd.backlight () ;
-      strcat (reply_buf, "LCD backlight is on.\r\n") ;
+      strcat (G_reply_buf, "LCD backlight is on.\r\n") ;
     }
     else
     if (strcmp(tokens[2], "off") == 0)
     {
       lcd.noBacklight () ;
-      strcat (reply_buf, "LCD backlight is off.\r\n") ;
+      strcat (G_reply_buf, "LCD backlight is off.\r\n") ;
     }
     else
     {
-      strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
+      strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
     }
   }
   else
   if (strcmp(tokens[1], "clear") == 0)                          // clear
   {
     lcd.clear () ;
-    strcat (reply_buf, "LCD cleared.\r\n") ;
+    strcat (G_reply_buf, "LCD cleared.\r\n") ;
   }
   else
   if ((strcmp(tokens[1], "print") == 0) &&                      // print
@@ -652,11 +678,11 @@ void f_lcd (char **tokens)
     lcd.setCursor (col, row) ;
     lcd.print (line) ;
     sprintf (line, "LCD write at row:%d col:%d.\r\n", row, col) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   {
-    strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
+    strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
 }
 
@@ -699,15 +725,15 @@ void f_fs (char **tokens)
     {
       sprintf (line, "totalBytes: %d\r\nusedBytes: %d\r\nblockSize: %d\r\n",
                fi.totalBytes, fi.usedBytes, fi.blockSize) ;
-      strcat (reply_buf, line) ;
+      strcat (G_reply_buf, line) ;
       sprintf (line, "pageSize: %d\r\nmaxOpenFiles: %d\r\n",
                fi.pageSize, fi.maxOpenFiles) ;
-      strcat (reply_buf, line) ;
+      strcat (G_reply_buf, line) ;
       sprintf (line, "maxPathLength: %d\r\n", fi.maxPathLength) ;
     }
     else
     {
-      strcat (reply_buf, "FAULT: Cannot obtain fs info.\r\n") ;
+      strcat (G_reply_buf, "FAULT: Cannot obtain fs info.\r\n") ;
     }
 
     #endif
@@ -715,7 +741,7 @@ void f_fs (char **tokens)
 
       sprintf (line, "totalBytes: %d\r\nusedBytes: %d\r\n",
                SPIFFS.totalBytes(), SPIFFS.usedBytes()) ;
-      strcat (reply_buf, line) ;
+      strcat (G_reply_buf, line) ;
 
     #endif
   }
@@ -724,11 +750,11 @@ void f_fs (char **tokens)
   {
     if (SPIFFS.format())
     {
-      strcat (reply_buf, "Success.\r\n") ;
+      strcat (G_reply_buf, "Success.\r\n") ;
     }
     else
     {
-      strcat (reply_buf, "FAULT: Formatting failed.\r\n") ;
+      strcat (G_reply_buf, "FAULT: Formatting failed.\r\n") ;
     }
   }
   else
@@ -746,7 +772,7 @@ void f_fs (char **tokens)
       File f = SPIFFS.open (s, "r") ;
       sprintf (line, "%-8d %s\r\n", f.size(), filename) ;
       f.close () ;
-      strcat (reply_buf, line) ;
+      strcat (G_reply_buf, line) ;
     }
 
     #endif
@@ -757,7 +783,7 @@ void f_fs (char **tokens)
     while (f)
     {
       sprintf (line, "%-8d %s\r\n", f.size(), f.name()) ;
-      strcat (reply_buf, line) ;
+      strcat (G_reply_buf, line) ;
       f = root.openNextFile () ;
     }
     root.close () ;
@@ -775,7 +801,7 @@ void f_fs (char **tokens)
 
     if ((filename[0] != '/') || (strlen(filename) == 1))
     {
-      strcat (reply_buf, "FAULT: Invalid filename.\r\n") ;
+      strcat (G_reply_buf, "FAULT: Invalid filename.\r\n") ;
       return ;
     }
 
@@ -785,12 +811,12 @@ void f_fs (char **tokens)
       int amt = f.print (content) ;
       f.close () ;
       sprintf (msg, "Wrote %d bytes to '%s'.\r\n", amt, filename) ;
-      strcat (reply_buf, msg) ;
+      strcat (G_reply_buf, msg) ;
     }
     else
     {
       sprintf (msg, "FAULT: Cannot write to '%s'.\r\n", filename) ;
-      strcat (reply_buf, msg) ;
+      strcat (G_reply_buf, msg) ;
     }
   }
   else
@@ -803,12 +829,12 @@ void f_fs (char **tokens)
     if (amt > 0)
     {
       msg[amt] = 0 ;
-      strcat (reply_buf, msg) ;
-      strcat (reply_buf, "\r\n") ;
+      strcat (G_reply_buf, msg) ;
+      strcat (G_reply_buf, "\r\n") ;
     }
     else
     {
-      strcat (reply_buf, "FAULT: Cannot read file.\r\n") ;
+      strcat (G_reply_buf, "FAULT: Cannot read file.\r\n") ;
     }
   }
   else
@@ -817,9 +843,9 @@ void f_fs (char **tokens)
   {
     char *filename = tokens[2] ;
     if (SPIFFS.remove(filename))
-      strcat (reply_buf, "File removed.\r\n") ;
+      strcat (G_reply_buf, "File removed.\r\n") ;
     else
-      strcat (reply_buf, "FAULT: Cannot remove file.\r\n") ;
+      strcat (G_reply_buf, "FAULT: Cannot remove file.\r\n") ;
   }
   else
   if ((strcmp(tokens[1], "rename") == 0) &&                     // rename
@@ -830,17 +856,17 @@ void f_fs (char **tokens)
 
     if ((new_name[0] != '/') || (strlen(new_name) == 1))
     {
-      strcat (reply_buf, "FAULT: Invalid filename.\r\n") ;
+      strcat (G_reply_buf, "FAULT: Invalid filename.\r\n") ;
       return ;
     }
     if (SPIFFS.rename(old_name, new_name))
-      strcat (reply_buf, "File renamed.\r\n") ;
+      strcat (G_reply_buf, "File renamed.\r\n") ;
     else
-      strcat (reply_buf, "FAULT: Cannot rename file.\r\n") ;
+      strcat (G_reply_buf, "FAULT: Cannot rename file.\r\n") ;
   }
   else
   {
-    strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
+    strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
 }
 
@@ -850,67 +876,67 @@ void f_wifi (char **tokens)
   {
     int n = WiFi.scanNetworks() ;
     sprintf (line, "Found %d wifi networks.\r\n", n) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
     for (int i=0 ; i<n ; i++)
     {
       char ssid[MAX_SSID_LEN+1] ;
       WiFi.SSID(i).toCharArray (ssid, MAX_SSID_LEN) ;
       sprintf (line, "%2d. ch %d, %d dBm [%s]\r\n",
                i+1, WiFi.channel(i), WiFi.RSSI(i), ssid) ;
-      if (strlen(reply_buf) + strlen(line) < REPLY_SIZE)
-        strcat (reply_buf, line) ;
+      if (strlen(G_reply_buf) + strlen(line) < REPLY_SIZE)
+        strcat (G_reply_buf, line) ;
     }
   }
   else
   if (strcmp(tokens[1], "status") == 0)                         // status
   {
     sprintf (line, "cfg_wifi_ssid: %s\r\n", cfg_wifi_ssid) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
     if (strlen(cfg_wifi_pw) > 0)
-      strcat (reply_buf, "cfg_wifi_pw: (set)\r\n") ;
+      strcat (G_reply_buf, "cfg_wifi_pw: (set)\r\n") ;
     else
-      strcat (reply_buf, "cfg_wifi_pw: (unset)\r\n") ;
+      strcat (G_reply_buf, "cfg_wifi_pw: (unset)\r\n") ;
 
     int status = WiFi.status() ;
-    strcat (reply_buf, "status: ") ;
+    strcat (G_reply_buf, "status: ") ;
     switch (status)
     {
       case WL_CONNECTED:
-        strcat (reply_buf, "WL_CONNECTED\r\n") ; break ;
+        strcat (G_reply_buf, "WL_CONNECTED\r\n") ; break ;
       case WL_NO_SHIELD:
-        strcat (reply_buf, "WL_NO_SHIELD\r\n") ; break ;
+        strcat (G_reply_buf, "WL_NO_SHIELD\r\n") ; break ;
       case WL_IDLE_STATUS:
-        strcat (reply_buf, "WL_IDLE_STATUS\r\n") ; break ;
+        strcat (G_reply_buf, "WL_IDLE_STATUS\r\n") ; break ;
       case WL_NO_SSID_AVAIL:
-        strcat (reply_buf, "WL_NO_SSID_AVAIL\r\n") ; break ;
+        strcat (G_reply_buf, "WL_NO_SSID_AVAIL\r\n") ; break ;
       case WL_SCAN_COMPLETED:
-        strcat (reply_buf, "WL_SCAN_COMPLETED\r\n") ; break ;
+        strcat (G_reply_buf, "WL_SCAN_COMPLETED\r\n") ; break ;
       case WL_CONNECT_FAILED:
-        strcat (reply_buf, "WL_CONNECT_FAILED\r\n") ; break ;
+        strcat (G_reply_buf, "WL_CONNECT_FAILED\r\n") ; break ;
       case WL_CONNECTION_LOST:
-        strcat (reply_buf, "WL_CONNECTION_LOST\r\n") ; break ;
+        strcat (G_reply_buf, "WL_CONNECTION_LOST\r\n") ; break ;
       case WL_DISCONNECTED:
-        strcat (reply_buf, "WL_DISCONNECTED\r\n") ; break ;
+        strcat (G_reply_buf, "WL_DISCONNECTED\r\n") ; break ;
       default:
-        strcat (reply_buf, "UNKNOWN\r\n") ; break ;
+        strcat (G_reply_buf, "UNKNOWN\r\n") ; break ;
     }
 
     sprintf (line, "rssi: %d dBm\r\n", WiFi.RSSI()) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
     sprintf (line, "udp_port: %d\r\n", cfg_udp_port) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
 
     unsigned char mac[6] ;
     WiFi.macAddress(mac) ;
     sprintf (line, "wifi_mac: %x:%x:%x:%x:%x:%x\r\n",
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
     sprintf (line, "wifi_ip: %s/%s\r\n",
              WiFi.localIP().toString().c_str(),
              WiFi.subnetMask().toString().c_str()) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
     sprintf (line, "mqtt_state: %d\r\n", G_psClient.state()) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if (strcmp(tokens[1], "disconnect") == 0)                     // disconnect
@@ -942,7 +968,7 @@ void f_wifi (char **tokens)
       {
         WiFi.setAutoReconnect (true) ;
         sprintf (line, "Connected in %d seconds.\r\n", retry) ;
-        strcat (reply_buf, line) ;
+        strcat (G_reply_buf, line) ;
         return ;
       }
       else
@@ -953,27 +979,27 @@ void f_wifi (char **tokens)
         switch (status)
         {
           case WL_NO_SHIELD:
-            strcat (reply_buf, "WL_NO_SHIELD\r\n") ; return ;
+            strcat (G_reply_buf, "WL_NO_SHIELD\r\n") ; return ;
           case WL_IDLE_STATUS:
-            strcat (reply_buf, "WL_IDLE_STATUS\r\n") ; return ;
+            strcat (G_reply_buf, "WL_IDLE_STATUS\r\n") ; return ;
           case WL_NO_SSID_AVAIL:
-            strcat (reply_buf, "WL_NO_SSID_AVAIL\r\n") ; return ;
+            strcat (G_reply_buf, "WL_NO_SSID_AVAIL\r\n") ; return ;
           case WL_SCAN_COMPLETED:
-            strcat (reply_buf, "WL_SCAN_COMPLETE\r\n") ; return ;
+            strcat (G_reply_buf, "WL_SCAN_COMPLETE\r\n") ; return ;
           case WL_CONNECT_FAILED:
-            strcat (reply_buf, "WL_CONNECT_FAILED\r\n") ; return ;
+            strcat (G_reply_buf, "WL_CONNECT_FAILED\r\n") ; return ;
           case WL_CONNECTION_LOST:
-            strcat (reply_buf, "WL_CONNECTION_LOST\r\n") ; return ;
+            strcat (G_reply_buf, "WL_CONNECTION_LOST\r\n") ; return ;
           default:
-            strcat (reply_buf, "UNKNOWN\r\n") ; return ;
+            strcat (G_reply_buf, "UNKNOWN\r\n") ; return ;
         }
       }
     }
-    strcat (reply_buf, "FAULT: Connection attempt timed out.\r\n") ;
+    strcat (G_reply_buf, "FAULT: Connection attempt timed out.\r\n") ;
   }
   else
   {
-    strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
+    strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
 }
 
@@ -1118,11 +1144,13 @@ void f_v1api ()                                 // for uri "/v1"
     return ;
   }
 
-  strncpy (input_buf, Webs.arg(0).c_str(), BUF_SIZE) ;
-  G_Metrics.restInBytes = G_Metrics.restInBytes + strlen(input_buf) ;
+  char url_buf[BUF_SIZE] ;
+  strncpy (url_buf, Webs.arg(0).c_str(), BUF_SIZE) ;
+  G_Metrics.restInBytes = G_Metrics.restInBytes + strlen(url_buf) ;
   G_Metrics.restCmds++ ;
   int idx = 0 ;
-  char *p = strtok (input_buf, " ") ;
+  char *tokens[MAX_TOKENS] ;
+  char *p = strtok (url_buf, " ") ;
   while ((p) && (idx < MAX_TOKENS))
   {
     tokens[idx] = p ;
@@ -1130,18 +1158,18 @@ void f_v1api ()                                 // for uri "/v1"
     p = strtok (NULL, " ") ;
   }
   tokens[idx] = NULL ;
-  reply_buf[0] = 0 ;
+  G_reply_buf[0] = 0 ;
   if (idx > 0)
     f_action(tokens) ;
-  if (strlen(reply_buf) > 0)
-    Webs.send (200, "text/plain", reply_buf) ;
+  if (strlen(G_reply_buf) > 0)
+    Webs.send (200, "text/plain", G_reply_buf) ;
   else
     Webs.send (504, "text/plain", "No response\r\n") ;
 }
 
 void f_handleWebMetrics ()                      // for uri "/metrics"
 {
-  sprintf (reply_buf,
+  sprintf (G_reply_buf,
            "node_uptime_secs %ld\n"
            "serial_in_bytes %ld\n"
            "serial_commands %ld\n"
@@ -1198,7 +1226,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
             sprintf (line, "%s %d\r\n",
                      G_thread_entry[idx].name,
                      G_thread_entry[idx].results[r].i_value) ;
-          strcat (reply_buf, line) ;
+          strcat (G_reply_buf, line) ;
         }
         threads++ ;
       }
@@ -1207,10 +1235,10 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
              "threads_running %d\n",
              xPortGetFreeHeapSize(),
              threads) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   #endif
 
-  Webs.send (200, "text/plain", reply_buf) ;
+  Webs.send (200, "text/plain", G_reply_buf) ;
 }
 
 #endif
@@ -1423,22 +1451,68 @@ void ft_adxl335 (S_thread_entry *p)
     digitalWrite (pwrPin, HIGH) ;
     delay (50) ;
 
-    p->num_int_results = 3 ;
-    p->results[0].num_tags = 1 ;
+    p->num_int_results = 9 ;
+
+    p->results[0].num_tags = 2 ;
     p->results[0].meta[0] = "axis" ;
     p->results[0].data[0] = "\"x\"" ;
-    p->results[1].num_tags = 1 ;
+    p->results[0].meta[1] = "type" ;
+    p->results[0].data[1] = "\"Min\"" ;
+
+    p->results[1].num_tags = 2 ;
     p->results[1].meta[0] = "axis" ;
-    p->results[1].data[0] = "\"y\"" ;
-    p->results[2].num_tags = 1 ;
+    p->results[1].data[0] = "\"x\"" ;
+    p->results[1].meta[1] = "type" ;
+    p->results[1].data[1] = "\"Ave\"" ;
+
+    p->results[2].num_tags = 2 ;
     p->results[2].meta[0] = "axis" ;
-    p->results[2].data[0] = "\"z\"" ;
+    p->results[2].data[0] = "\"x\"" ;
+    p->results[2].meta[1] = "type" ;
+    p->results[2].data[1] = "\"Max\"" ;
+
+    p->results[3].num_tags = 2 ;
+    p->results[3].meta[0] = "axis" ;
+    p->results[3].data[0] = "\"y\"" ;
+    p->results[3].meta[1] = "type" ;
+    p->results[3].data[1] = "\"Min\"" ;
+
+    p->results[4].num_tags = 2 ;
+    p->results[4].meta[0] = "axis" ;
+    p->results[4].data[0] = "\"y\"" ;
+    p->results[4].meta[1] = "type" ;
+    p->results[4].data[1] = "\"Ave\"" ;
+
+    p->results[5].num_tags = 2 ;
+    p->results[5].meta[0] = "axis" ;
+    p->results[5].data[0] = "\"y\"" ;
+    p->results[5].meta[1] = "type" ;
+    p->results[5].data[1] = "\"Max\"" ;
+
+    p->results[6].num_tags = 2 ;
+    p->results[6].meta[0] = "axis" ;
+    p->results[6].data[0] = "\"z\"" ;
+    p->results[6].meta[1] = "type" ;
+    p->results[6].data[1] = "\"Min\"" ;
+
+    p->results[7].num_tags = 2 ;
+    p->results[7].meta[0] = "axis" ;
+    p->results[7].data[0] = "\"z\"" ;
+    p->results[7].meta[1] = "type" ;
+    p->results[7].data[1] = "\"Ave\"" ;
+
+    p->results[8].num_tags = 2 ;
+    p->results[8].meta[0] = "axis" ;
+    p->results[8].data[0] = "\"z\"" ;
+    p->results[8].meta[1] = "type" ;
+    p->results[8].data[1] = "\"Max\"" ;
+
     strcpy (p->msg, "ok") ;
   }
 
-  int r[10] ;
-  char *t[6], s[BUF_SIZE] ;
+  /* parse config from "p->in_args", prepare them for f_adxl335() */
 
+  char *t[6], s[BUF_SIZE] ;
   t[0] = NULL ;                 // don't care
   t[1] = p->in_args[2] ;        // x pin
   t[2] = p->in_args[3] ;        // y pin
@@ -1446,10 +1520,20 @@ void ft_adxl335 (S_thread_entry *p)
   t[4] = p->in_args[1] ;        // total duration (ms)
   t[5] = p->in_args[0] ;        // interval (ms)
 
+  int r[10] ;
   f_adxl335 (t, (int*) &r) ;
-  p->results[0].i_value = r[2] ;
-  p->results[1].i_value = r[5] ;
-  p->results[2].i_value = r[8] ;
+
+  /* place results from "r" into "results" array */
+
+  p->results[0].i_value = r[1] ;
+  p->results[1].i_value = r[2] ;
+  p->results[2].i_value = r[3] ;
+  p->results[3].i_value = r[4] ;
+  p->results[4].i_value = r[5] ;
+  p->results[5].i_value = r[6] ;
+  p->results[6].i_value = r[7] ;
+  p->results[7].i_value = r[8] ;
+  p->results[8].i_value = r[9] ;
 
   if (strcmp(p->in_args[1], "0") != 0)  // if "postInterval" is non-zero
   {
@@ -1507,14 +1591,14 @@ void f_thread_create (char *name)
   {
     sprintf (line, "FAULT: thread name is too long, %d bytes max.\r\n",
              MAX_THREAD_NAME) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
     return ;
   }
 
   for (idx=0 ; idx < MAX_THREADS ; idx++)
     if (strcmp (G_thread_entry[idx].name, name) == 0)
     {
-      strcat (reply_buf, "FAULT: Duplicate thread name.\r\n") ;
+      strcat (G_reply_buf, "FAULT: Duplicate thread name.\r\n") ;
       return ;
     }
 
@@ -1531,7 +1615,7 @@ void f_thread_create (char *name)
   if (amt < 1)
   {
     sprintf (line, "FAULT: Cannot read config file '%s'.\r\n", filename) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
     return ;
   }
   config[amt] = 0 ;
@@ -1543,7 +1627,7 @@ void f_thread_create (char *name)
       break ;
   if (idx == MAX_THREADS)
   {
-    strcat (reply_buf, "Maximum number of threads reached.\r\n") ;
+    strcat (G_reply_buf, "Maximum number of threads reached.\r\n") ;
     return ;
   }
 
@@ -1588,8 +1672,9 @@ void f_thread_create (char *name)
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
+    G_thread_entry[idx].name[0] = 0 ;
     sprintf (line, "FAULT: no such ft_task '%s'.\r\n", ft_taskname) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
     pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
     return ;
   }
@@ -1606,7 +1691,7 @@ void f_thread_create (char *name)
 
   sprintf (line, "thread '%s' created with tid:%d in_args:%d\r\n",
            name, tid, num_args) ;
-  strcat (reply_buf, line) ;
+  strcat (G_reply_buf, line) ;
 }
 
 void f_thread_stop (char *name)
@@ -1623,12 +1708,12 @@ void f_thread_stop (char *name)
       pthread_join (G_thread_entry[idx].tid, NULL) ;
       sprintf (line, "tid:%d '%s' stopped.\r\n",
                G_thread_entry[idx].tid, name) ;
-      strcat (reply_buf, line) ;
+      strcat (G_reply_buf, line) ;
       return ;
     }
 
   sprintf (line, "Thread '%s' not currently running.\r\n", name) ;
-  strcat (reply_buf, line) ;
+  strcat (G_reply_buf, line) ;
 }
 
 void f_esp32 (char **tokens)
@@ -1639,14 +1724,14 @@ void f_esp32 (char **tokens)
 
   if (tokens[1] == NULL)
   {
-    strcat (reply_buf, "FAULT: Invalid esp32 command.\r\n") ;
+    strcat (G_reply_buf, "FAULT: Invalid esp32 command.\r\n") ;
     return ;
   }
 
   if (strcmp(tokens[1], "hall") == 0)                           // hall
   {
     sprintf (msg, "%d\r\n", hallRead()) ;
-    strcat (reply_buf, msg) ;
+    strcat (G_reply_buf, msg) ;
   }
   else
   if ((strcmp(tokens[1], "sleep") == 0) && (tokens[2] != NULL))
@@ -1654,17 +1739,25 @@ void f_esp32 (char **tokens)
     unsigned long duration = atoi (tokens[2]) ; // in seconds
     esp_sleep_enable_timer_wakeup (duration * 1000 * 1000) ;
     sprintf (msg, "Sleeping for %d secs.\r\n", duration) ;
-    strcat (reply_buf, msg) ;
+    strcat (G_reply_buf, msg) ;
     G_sleep = 1 ;
   }
   else
   if (strcmp(tokens[1], "thread_help") == 0)                    // thread_help
   {
-    strcat (reply_buf,
-      "[<ft_tasks> - params in files '/thread-<name>']\r\n"
-      "ft_adxl335,<delay_ms>,<postInterval_ms>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
-      "ft_aread,<delay_ms>,<postInterval_ms>,<pin>\r\n"
-      "ft_counter,<delay_ms>,<start_value>\r\n") ;
+    strcat (G_reply_buf,
+      "[Thread Config Files]\r\n"
+      "/thread-<name> - (see below)\r\n"
+      "/tags-<name>   - <metric>[,<tagN>=<valueN>,...]\r\n"
+      "\r\n"
+      "[Currently available <ft_tasks>]\r\n"
+      "ft_adxl335,<delay>,<post>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
+      "ft_aread,<delay>,<post>,<pin>\r\n"
+      "ft_counter,<delay_ms>,<start_value>\r\n"
+      "\r\n"
+      "[Notes]\r\n"
+      "<delay> - interval between sampling (millisecs)\r\n"
+      "<post>  - interval between aggregating results (millisecs)\r\n") ;
   }
   else
   if (strcmp(tokens[1], "thread_list") == 0)                    // thread_list
@@ -1684,7 +1777,7 @@ void f_esp32 (char **tokens)
                  G_thread_entry[i].name,
                  (now - G_thread_entry[i].ts_started) / 1000,
                  G_thread_entry[i].msg) ;
-        strcat (reply_buf, msg) ;
+        strcat (G_reply_buf, msg) ;
         num++ ;
       }
   }
@@ -1700,7 +1793,7 @@ void f_esp32 (char **tokens)
   }
   else
   {
-    strcat (reply_buf, "FAULT: Invalid argument.\r\n") ;
+    strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
 }
 
@@ -1712,7 +1805,7 @@ void f_action (char **tokens)
 {
   if ((strcmp(tokens[0], "?") == 0) || (strcmp(tokens[0], "help") == 0))
   {
-    strcat (reply_buf,
+    strcat (G_reply_buf,
             "[Common]\r\n"
             "hi <GPIO pin>\r\n"
             "lo <GPIO pin>\r\n"
@@ -1729,7 +1822,7 @@ void f_action (char **tokens)
             "version\r\n") ;
 
     #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-      strcat (reply_buf,
+      strcat (G_reply_buf,
               "\r\n[Config Files]\r\n"
               "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
               "/mqtt.pub   <topic to publish>\r\n"
@@ -1738,7 +1831,7 @@ void f_action (char **tokens)
               "/wifi.ssid  <ssid>\r\n"
               "/wifi.pw    <pw>\r\n") ;
 
-      strcat (reply_buf,
+      strcat (G_reply_buf,
               "\r\n[ESP8266 or ESP32]\r\n"
               "fs format\r\n"
               "fs info\r\n"
@@ -1757,7 +1850,7 @@ void f_action (char **tokens)
     #endif
 
     #ifdef ARDUINO_ESP32_DEV
-      strcat (reply_buf,
+      strcat (G_reply_buf,
               "\r\n[ESP32 only]\r\n"
               "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
               "esp32 hall\r\n"
@@ -1775,7 +1868,7 @@ void f_action (char **tokens)
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, HIGH) ;
     sprintf (line, "pin:%d HIGH\r\n", pin) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if ((strcmp(tokens[0], "lo") == 0) && (tokens[1] != NULL))
@@ -1784,7 +1877,7 @@ void f_action (char **tokens)
     pinMode (pin, OUTPUT) ;
     digitalWrite (pin, LOW) ;
     sprintf (line, "pin:%d LOW\r\n", pin) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if ((strcmp(tokens[0], "aread") == 0) && (tokens[1] != NULL))
@@ -1793,7 +1886,7 @@ void f_action (char **tokens)
     pinMode (pin, INPUT) ;
     int val = analogRead (pin) ;
     sprintf (line, "analogRead pin:%d - %d\r\n", pin, val) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if ((strcmp(tokens[0], "dread") == 0) && (tokens[1] != NULL))
@@ -1802,7 +1895,7 @@ void f_action (char **tokens)
     pinMode (pin, INPUT) ;
     int val = digitalRead (pin) ;
     sprintf (line, "digitalRead pin:%d - %d\r\n", pin, val) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if (strcmp(tokens[0], "bmp180") == 0)
@@ -1812,7 +1905,7 @@ void f_action (char **tokens)
     {
       sprintf (line, "bmp180 - temperature:%d.%02d pressure:%d.%02d\r\n",
                int(t), (int)(t*100)%100, int(p), (int)(p*100)%100) ;
-      strcat (reply_buf, line) ;
+      strcat (G_reply_buf, line) ;
     }
   }
   else
@@ -1823,7 +1916,7 @@ void f_action (char **tokens)
     {
       sprintf (line, "dht22 - temperature:%d.%02d humidity:%d.%02d\r\n",
                int(t), (int)(t*100)%100, int(h), (int)(h*100)%100) ;
-      strcat (reply_buf, line) ;
+      strcat (G_reply_buf, line) ;
     }
   }
   else
@@ -1834,7 +1927,7 @@ void f_action (char **tokens)
     if (f > 0.0)
     {
       sprintf (line, "hcsr04 - %d.%02d cm\r\n", int(f), (int)(f*100)%100) ;
-      strcat (reply_buf, line) ;
+      strcat (G_reply_buf, line) ;
     }
   }
   else
@@ -1842,20 +1935,20 @@ void f_action (char **tokens)
   {
     unsigned long now = millis() / 1000 ;
     sprintf (line, "uptime - %ld secs\r\n", now) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if (strcmp(tokens[0], "version") == 0)
   {
     sprintf (line, "Built: %s, %s\r\n", __DATE__, __TIME__) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
     sprintf (line, "Data sizes: ptr:%d char:%d "
                    "short:%d int:%d long:%d longlong:%d "
                    "float:%d double:%d\r\n",
              sizeof(void*), sizeof(char),
              sizeof(short), sizeof(int), sizeof(long), sizeof(long long),
              sizeof(float), sizeof(double)) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if (strcmp(tokens[0], "lcd") == 0)
@@ -1892,7 +1985,7 @@ void f_action (char **tokens)
     f_adxl335 (tokens, (int*) &r) ;
     sprintf (line, "samples:%d x:%d/%d/%d y:%d/%d/%d z:%d/%d/%d\r\n",
              r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9]) ;
-    strcat (reply_buf, line) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if (strcmp(tokens[0], "esp32") == 0)
@@ -1902,7 +1995,7 @@ void f_action (char **tokens)
   #endif
   else
   {
-    strcat (reply_buf, "FAULT: Enter 'help' for commands.\r\n") ;
+    strcat (G_reply_buf, "FAULT: Enter 'help' for commands.\r\n") ;
   }
 }
 
@@ -1914,11 +2007,10 @@ void setup ()
   Serial.begin (DEF_BAUD) ;
   Serial.setTimeout (SERIAL_TIMEOUT) ;
   Serial.println ("\nNOTICE: System boot.") ;
-  input_buf[0] = 0 ;
-  serial_buf[0] = 0 ;
-  serial_pos = 0 ;
-  reply_buf = (char*) malloc (REPLY_SIZE+1) ;
-  reply_buf[0] = 0 ;
+  G_serial_buf[0] = 0 ;
+  G_serial_pos = 0 ;
+  G_reply_buf = (char*) malloc (REPLY_SIZE+1) ;
+  G_reply_buf[0] = 0 ;
 
   #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
@@ -1987,6 +2079,10 @@ void setup ()
       if (f_udp)
         f_udp.close () ;
     }
+    else
+    {
+      Serial.println ("WARNING: Could not initialize SPIFFS.") ;
+    }
 
     Webs.on ("/", f_handleWeb) ;
     Webs.on ("/v1", f_v1api) ;
@@ -2021,22 +2117,22 @@ void loop ()
      presses ENTER)
   */
 
-  while ((Serial.available() > 0) && (serial_pos < BUF_SIZE - 1))
+  while ((Serial.available() > 0) && (G_serial_pos < BUF_SIZE - 1))
   {
     char c = (char) Serial.read () ;
     G_Metrics.serialInBytes++ ;
-    if ((c == '\b') && (serial_pos > 0))                // delete previous char
+    if ((c == '\b') && (G_serial_pos > 0))              // delete previous char
     {
       Serial.print (c) ;
       Serial.print (" ") ;
       Serial.print (c) ;
-      serial_pos-- ;
-      serial_buf[serial_pos] = 0 ;
+      G_serial_pos-- ;
+      G_serial_buf[G_serial_pos] = 0 ;
     }
     if (c != '\b')                                      // add non-BS char
     {
-      serial_buf[serial_pos] = c ;
-      serial_buf[serial_pos+1] = 0 ;
+      G_serial_buf[G_serial_pos] = c ;
+      G_serial_buf[G_serial_pos+1] = 0 ;
       Serial.print (c) ;
     }
 
@@ -2047,22 +2143,23 @@ void loop ()
     }
 
     if ((c != '\r') && (c != '\b'))
-      serial_pos++ ;
+      G_serial_pos++ ;
   }
-  if (serial_pos == BUF_SIZE-1)                          // buffer overrun
+  if (G_serial_pos == BUF_SIZE-1)                        // buffer overrun
   {
     Serial.println ("FAULT: Input overrun.") ;
     G_Metrics.serialOverruns++ ;
-    serial_pos = 0 ;
-    serial_buf[0] = 0 ;
+    G_serial_pos = 0 ;
+    G_serial_buf[0] = 0 ;
   }
 
-  if (serial_buf[serial_pos] == '\r')
+  if (G_serial_buf[G_serial_pos] == '\r')
   {
     Serial.print ("\n") ;
-    serial_buf[serial_pos] = 0 ;
+    G_serial_buf[G_serial_pos] = 0 ;
     int idx = 0 ;
-    char *p = strtok (serial_buf, " ") ;
+    char *tokens[MAX_TOKENS] ;
+    char *p = strtok (G_serial_buf, " ") ;
     while ((p) && (idx < MAX_TOKENS))
     {
       tokens[idx] = p ;
@@ -2072,23 +2169,23 @@ void loop ()
     tokens[idx] = NULL ;
 
     /*
-       now that we've tokenized "serial_buf", have f_action() do something,
-       which places the response in "reply_buf". Always print an "OK" on a
+       now that we've tokenized "G_serial_buf", have f_action() do something,
+       which places the response in "G_reply_buf". Always print an "OK" on a
        new line to indicate that the previous command has completed.
     */
 
-    reply_buf[0] = 0 ;
+    G_reply_buf[0] = 0 ;
     if (tokens[0] != NULL)
       f_action (tokens) ;
-    if (strlen(reply_buf) > 0)
+    if (strlen(G_reply_buf) > 0)
     {
-      Serial.print (reply_buf) ;
-      if (reply_buf[strlen(reply_buf)-1] != '\n')
+      Serial.print (G_reply_buf) ;
+      if (G_reply_buf[strlen(G_reply_buf)-1] != '\n')
         Serial.print ("\r\n") ;                         // add CRNL if needed
     }
     Serial.println ("OK") ;
-    serial_buf[0] = 0 ;
-    serial_pos = 0 ;
+    G_serial_buf[0] = 0 ;
+    G_serial_pos = 0 ;
   }
 
   #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
@@ -2098,27 +2195,32 @@ void loop ()
   {
     /* if a UDP packet arrived, parse the command and send a response */
 
-    int amt = Udp.read (input_buf, BUF_SIZE) ;
-    input_buf[amt] = 0 ;
-    G_Metrics.udpInBytes = G_Metrics.udpInBytes + amt ;
-    G_Metrics.udpCmds++ ;
-
-    int idx = 0 ;
-    char *p = strtok (input_buf, " ") ;
-    while ((p) && (idx < MAX_TOKENS))
+    char udp_buf[BUF_SIZE] ;
+    int amt = Udp.read (udp_buf, BUF_SIZE) ;
+    if (amt > 0)
     {
-      tokens[idx] = p ;
-      idx++ ;
-      p = strtok (NULL, " ") ;
-    }
-    tokens[idx] = NULL ;
-    reply_buf[0] = 0 ;
-    if (idx > 0)
-      f_action (tokens) ;
+      udp_buf[amt] = 0 ;
+      G_Metrics.udpInBytes = G_Metrics.udpInBytes + amt ;
+      G_Metrics.udpCmds++ ;
 
-    Udp.beginPacket (Udp.remoteIP(), Udp.remotePort()) ;
-    Udp.write ((uint8_t*)reply_buf, strlen(reply_buf)) ;
-    Udp.endPacket () ;
+      int idx = 0 ;
+      char *tokens[MAX_TOKENS] ;
+      char *p = strtok (udp_buf, " ") ;
+      while ((p) && (idx < MAX_TOKENS))
+      {
+        tokens[idx] = p ;
+        idx++ ;
+        p = strtok (NULL, " ") ;
+      }
+      tokens[idx] = NULL ;
+      G_reply_buf[0] = 0 ;
+      if (idx > 0)
+        f_action (tokens) ;
+
+      Udp.beginPacket (Udp.remoteIP(), Udp.remotePort()) ;
+      Udp.write ((uint8_t*)G_reply_buf, strlen(G_reply_buf)) ;
+      Udp.endPacket () ;
+    }
   }
 
   Webs.handleClient () ;        // handle http requests
