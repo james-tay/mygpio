@@ -181,6 +181,9 @@
 
      - tons of buffer overrun opportunities due to static buffers with not
        much buffer length checking.
+
+     - SPIFFS is not thread safe and can only be called safely by the main
+       thread.
 */
 
 #include <Wire.h>
@@ -289,7 +292,7 @@
     char msg[MAX_THREAD_MSG_BUF] ;      // provide some optional feedback
   } ;
   typedef struct thread_entry_s S_thread_entry ;
-  S_thread_entry G_thread_entry[MAX_THREADS] ;
+  S_thread_entry *G_thread_entry ;
 
 #endif
 
@@ -778,7 +781,7 @@ void f_fs (char **tokens)
     #endif
     #ifdef ARDUINO_ESP32_DEV
 
-    File root = SPIFFS.open ("/") ;
+    File root = SPIFFS.open ("/", "r") ;
     File f = root.openNextFile () ;
     while (f)
     {
@@ -1023,6 +1026,7 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
 void f_mqtt_connect ()
 {
   char buf[BUF_SIZE] ;
+
   File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
   if (f != NULL)
   {
@@ -1112,7 +1116,14 @@ void f_delivery (char *name, char *payload)
   #endif
 
   if (G_psClient.connected() == false)
-    f_mqtt_connect () ;
+  {
+    #ifdef ARDUINO_ESP32_DEV
+    pthread_mutex_unlock (&G_delivery_lock) ;
+    #endif
+
+    Serial.println ("WARNING: MQTT not connected.") ;
+    return ;
+  }
 
   if ((G_psClient.connected()) && (strlen(G_mqtt_pub) > 0) &&
       (name != NULL) && (payload != NULL))
@@ -2020,6 +2031,8 @@ void setup ()
     G_mqtt_sub[0] = 0 ;
     G_next_cron = CRON_INTERVAL * 1000 ;
     pinMode (LED_BUILTIN, OUTPUT) ;
+    G_thread_entry = (S_thread_entry*) malloc (sizeof(S_thread_entry) *
+                                               MAX_THREADS) ;
 
     /*
        if wifi ssid and password are available, try connect to wifi now.
