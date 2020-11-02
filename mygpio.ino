@@ -237,6 +237,7 @@
 
   WebServer Webs(WEB_PORT) ;    // our built-in webserver
   int G_sleep = 0 ;             // a flag to tell us to enter sleep mode
+  int G_req_connect = 0 ;       // threads requesting wifi/mqtt connection
   pthread_mutex_t G_delivery_lock ;     // lock for f_delivery()
 
   #define MAX_THREADS 16
@@ -245,7 +246,9 @@
   #define MAX_THREAD_RESULT_TAGS 8      // meta data tags
   #define MAX_THREAD_RESULT_VALUES 16   // output values
   #define MAX_THREAD_CONF_BUF 80        // length of thread's "conf"
+  #define MAX_THREAD_TAGS_BUF 80        // length of thread's tags
   #define MAX_THREAD_MSG_BUF 80         // length of thread's "msg"
+  #define MAX_THREAD_TAGS 8             // tag pairs in "/tags-<name>"
 
   /* various states for S_thread_entry.state */
 
@@ -281,6 +284,9 @@
     int num_args ;                      // number of input arguments
     char *in_args[MAX_THREAD_ARGS] ;    // array of pointers into "conf"
     char conf[MAX_THREAD_CONF_BUF] ;    // main config buffer
+    char tags_buf[MAX_THREAD_TAGS_BUF] ; // metric and tags (optional)
+    char *metric ;                      // pointer to metric name (optional)
+    char *tags[MAX_THREAD_TAGS] ;       // pointers to "<key>=<value>" pairs
     unsigned long loops ;               // number of <ft_task> calls so far
     unsigned long ts_started ;        // millis() timestamp of pthread_create()
     void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
@@ -336,6 +342,8 @@ int G_serial_pos ;              // index of bytes received on serial port
 char G_serial_buf[BUF_SIZE+1] ; // accumulate butes on our serial console
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 
+LiquidCrystal_I2C lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
+
 /* internal performance metrics */
 
 struct internal_metrics
@@ -354,8 +362,6 @@ struct internal_metrics
 } ;
 typedef struct internal_metrics S_Metrics ;
 S_Metrics G_Metrics ;
-
-LiquidCrystal_I2C lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
 /* function prototypes */
 
@@ -1121,6 +1127,7 @@ void f_delivery (char *name, char *payload)
     pthread_mutex_unlock (&G_delivery_lock) ;
     #endif
 
+    G_req_connect = 1 ;
     Serial.println ("WARNING: MQTT not connected.") ;
     return ;
   }
@@ -1646,6 +1653,38 @@ void f_thread_create (char *name)
 
   pthread_mutex_lock (&G_thread_entry[idx].lock) ; /* START CRITICAL SECTION */
 
+  /*
+     try read optional tags config file, parse it in G_thread_entry[].tags,
+     and have various pointers point into this buffer.
+  */
+
+  G_thread_entry[idx].tags_buf[0] = 0 ;
+  G_thread_entry[idx].metric = NULL ;
+  memset (G_thread_entry[idx].tags, 0, sizeof(char*) * MAX_THREAD_TAGS) ;
+
+  sprintf (filename, "/tags-%s", name) ;
+  f = SPIFFS.open (filename, "r") ;
+  if (f != NULL)
+  {
+    int amt = f.readBytes (G_thread_entry[idx].tags_buf,
+                           MAX_THREAD_TAGS_BUF-1) ;
+    if (amt > 0)
+    {
+      G_thread_entry[idx].tags_buf[amt] = 0 ;
+      G_thread_entry[idx].metric = strtok (G_thread_entry[idx].tags_buf, ",") ;
+      int i ;
+      for (i=0 ; i < MAX_THREAD_TAGS-1 ; i++)
+      {
+        char *p = strtok (NULL, ",") ;
+        if (p)
+          G_thread_entry[idx].tags[i] = p ;
+        else
+          break ;
+      }
+    }
+    f.close () ;
+  }
+
   /* initialize data structure fields */
 
   strcpy (G_thread_entry[idx].name, name) ;
@@ -1780,13 +1819,18 @@ void f_esp32 (char **tokens)
           (G_thread_entry[i].state == THREAD_STOPPED))
       {
         char *state = "running" ;
+        char *metric = "(none)" ;
         if (G_thread_entry[i].state == THREAD_STOPPED)
           state = "stopped" ;
+        if (G_thread_entry[i].metric != NULL)
+          metric = G_thread_entry[i].metric ;
 
-        sprintf (msg, "%d. %s tid:%d %s age:%ld msg:%s\r\n", num, state,
+        sprintf (msg, "%d. %s tid:%d %s age:%ld metric:%s msg:%s\r\n",
+                 num, state,
                  G_thread_entry[i].tid,
                  G_thread_entry[i].name,
                  (now - G_thread_entry[i].ts_started) / 1000,
+                 metric,
                  G_thread_entry[i].msg) ;
         strcat (G_reply_buf, msg) ;
         num++ ;
@@ -2252,9 +2296,9 @@ void loop ()
     G_next_blink = G_next_blink + BLINK_FREQ ;
   }
 
-  /* once in a while, run "cron" jobs */
+  /* once in a while, run "cron" jobs, or responds to connection request */
 
-  if (now > G_next_cron)
+  if ((now > G_next_cron) || (G_req_connect))
   {
     if (WiFi.status() != WL_CONNECTED)
     {
@@ -2268,6 +2312,7 @@ void loop ()
     {
       f_mqtt_connect () ;
     }
+    G_req_connect = 0 ;
     G_next_cron = G_next_cron + (CRON_INTERVAL * 1000) ;
   }
 
