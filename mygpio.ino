@@ -213,7 +213,7 @@
   char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
   int cfg_udp_port=0 ;
-  WiFiUDP Udp ;                         // our UDP server socket
+  WiFiUDP G_Udp ;                       // our UDP server socket
 
   char G_mqtt_pub[MAX_MQTT_LEN] ;       // mqtt topic we publish to
   char G_mqtt_sub[MAX_MQTT_LEN] ;       // mqtt topic we subscribe to
@@ -336,13 +336,12 @@
 
 /* global variables */
 
-char line[BUF_SIZE] ;           // general purpose string buffer
 char *G_reply_buf ;             // accumulate our reply message here
 int G_serial_pos ;              // index of bytes received on serial port
 char G_serial_buf[BUF_SIZE+1] ; // accumulate butes on our serial console
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 
-LiquidCrystal_I2C lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
+LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
 /* internal performance metrics */
 
@@ -452,6 +451,8 @@ int f_bmp180 (float *temperature, float *pressure)
     strcat (G_reply_buf, "FAULT: Cannot read data from BMP180.\r\n") ;
     return (0) ;
   }
+
+  char line[BUF_SIZE] ;
 
   sprintf (line, "ac1: %d\r\nac2: %d\r\nac3: %d\r\n", ac1, ac2, ac3) ;
   strcat (G_reply_buf, line) ;
@@ -637,7 +638,7 @@ void f_lcd (char **tokens)
 
   if (strcmp(tokens[1], "init") == 0)                           // init
   {
-    lcd.init () ;
+    G_lcd.init () ;
     strcat (G_reply_buf, "LCD initialized.\r\n") ;
   }
   else
@@ -645,13 +646,13 @@ void f_lcd (char **tokens)
   {
     if (strcmp(tokens[2], "on") == 0)
     {
-      lcd.backlight () ;
+      G_lcd.backlight () ;
       strcat (G_reply_buf, "LCD backlight is on.\r\n") ;
     }
     else
     if (strcmp(tokens[2], "off") == 0)
     {
-      lcd.noBacklight () ;
+      G_lcd.noBacklight () ;
       strcat (G_reply_buf, "LCD backlight is off.\r\n") ;
     }
     else
@@ -662,7 +663,7 @@ void f_lcd (char **tokens)
   else
   if (strcmp(tokens[1], "clear") == 0)                          // clear
   {
-    lcd.clear () ;
+    G_lcd.clear () ;
     strcat (G_reply_buf, "LCD cleared.\r\n") ;
   }
   else
@@ -674,6 +675,7 @@ void f_lcd (char **tokens)
     int row = atoi(tokens[2]) ;
     int col = atoi(tokens[3]) ;
 
+    char line[BUF_SIZE] ;
     line[0] = 0 ;
     for (int idx=4 ; idx < MAX_TOKENS ; idx++)
     {
@@ -684,8 +686,8 @@ void f_lcd (char **tokens)
       strcat (line, tokens[idx]) ;
     }
 
-    lcd.setCursor (col, row) ;
-    lcd.print (line) ;
+    G_lcd.setCursor (col, row) ;
+    G_lcd.print (line) ;
     sprintf (line, "LCD write at row:%d col:%d.\r\n", row, col) ;
     strcat (G_reply_buf, line) ;
   }
@@ -723,7 +725,7 @@ int f_blink (int num)
 
 void f_fs (char **tokens)
 {
-  char msg[BUF_SIZE] ;
+  char msg[BUF_SIZE], line[BUF_SIZE] ;
 
   if (strcmp(tokens[1], "info") == 0)                           // info
   {
@@ -881,6 +883,8 @@ void f_fs (char **tokens)
 
 void f_wifi (char **tokens)
 {
+  char line[BUF_SIZE] ;
+
   if (strcmp(tokens[1], "scan") == 0)                           // scan
   {
     int n = WiFi.scanNetworks() ;
@@ -1031,7 +1035,7 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
 
 void f_mqtt_connect ()
 {
-  char buf[BUF_SIZE] ;
+  char buf[BUF_SIZE], line[BUF_SIZE] ;
 
   File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
   if (f != NULL)
@@ -1216,7 +1220,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
 
   #ifdef ARDUINO_ESP32_DEV
     int idx, threads=0 ;
-    char one_tag[BUF_SIZE], all_tags[BUF_SIZE] ;
+    char one_tag[BUF_SIZE], all_tags[BUF_SIZE], line[BUF_SIZE] ;
 
     for (idx=0 ; idx < MAX_THREADS ; idx++)
       if (G_thread_entry[idx].state == THREAD_RUNNING)
@@ -1590,6 +1594,7 @@ void *f_thread_lifecycle (void *p)
 void f_thread_create (char *name)
 {
   int idx ;
+  char line[BUF_SIZE] ;
 
   /* before we try creating threads, try reap dead ones (releases memory) */
 
@@ -1747,6 +1752,7 @@ void f_thread_create (char *name)
 void f_thread_stop (char *name)
 {
   int idx ;
+  char line[BUF_SIZE] ;
 
   /* let's see if this thread exists */
 
@@ -1858,6 +1864,8 @@ void f_esp32 (char **tokens)
 
 void f_action (char **tokens)
 {
+  char line[BUF_SIZE] ;
+
   if ((strcmp(tokens[0], "?") == 0) || (strcmp(tokens[0], "help") == 0))
   {
     strcat (G_reply_buf,
@@ -2083,6 +2091,8 @@ void setup ()
        if udp server port is defined, configure it now.
     */
 
+    char line[BUF_SIZE] ;
+
     if (SPIFFS.begin())
     {
       Serial.println ("NOTICE: Checking built-in configuration.") ;
@@ -2123,7 +2133,7 @@ void setup ()
           {
             sprintf (line, "NOTICE: UDP server on port %d.", cfg_udp_port) ;
             Serial.println (line) ;
-            Udp.begin (cfg_udp_port) ;
+            G_Udp.begin (cfg_udp_port) ;
           }
           else
           {
@@ -2247,13 +2257,13 @@ void loop ()
 
   #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
-  int pktsize = Udp.parsePacket () ;
+  int pktsize = G_Udp.parsePacket () ;
   if (pktsize)
   {
     /* if a UDP packet arrived, parse the command and send a response */
 
     char udp_buf[BUF_SIZE] ;
-    int amt = Udp.read (udp_buf, BUF_SIZE) ;
+    int amt = G_Udp.read (udp_buf, BUF_SIZE) ;
     if (amt > 0)
     {
       udp_buf[amt] = 0 ;
@@ -2274,9 +2284,9 @@ void loop ()
       if (idx > 0)
         f_action (tokens) ;
 
-      Udp.beginPacket (Udp.remoteIP(), Udp.remotePort()) ;
-      Udp.write ((uint8_t*)G_reply_buf, strlen(G_reply_buf)) ;
-      Udp.endPacket () ;
+      G_Udp.beginPacket (G_Udp.remoteIP(), G_Udp.remotePort()) ;
+      G_Udp.write ((uint8_t*)G_reply_buf, strlen(G_reply_buf)) ;
+      G_Udp.endPacket () ;
     }
   }
 
