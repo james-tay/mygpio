@@ -285,8 +285,8 @@
     char *in_args[MAX_THREAD_ARGS] ;    // array of pointers into "conf"
     char conf[MAX_THREAD_CONF_BUF] ;    // main config buffer
     char tags_buf[MAX_THREAD_TAGS_BUF] ; // metric and tags (optional)
-    char *metric ;                      // pointer to metric name (optional)
-    char *tags[MAX_THREAD_TAGS] ;       // pointers to "<key>=<value>" pairs
+    char *metric ;                      // pointer into "tags_buf" (optional)
+    char *tags[MAX_THREAD_TAGS+1] ;     // pointers into "tags_bufs" (optional)
     unsigned long loops ;               // number of <ft_task> calls so far
     unsigned long ts_started ;        // millis() timestamp of pthread_create()
     void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
@@ -1230,7 +1230,16 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
         int r, t ;
         for (r=0 ; r < G_thread_entry[idx].num_int_results ; r++)
         {
+          /* form custom tags and then result specific tags in "all_tags" */
+
           all_tags[0] = 0 ;
+          int i ;
+          for (i=0 ; G_thread_entry[idx].tags[i] != NULL ; i++)
+          {
+            if (strlen(all_tags) > 0)
+              strcat (all_tags, ",") ;
+            strcat (all_tags, G_thread_entry[idx].tags[i]) ;
+          }
           for (t=0 ; t < G_thread_entry[idx].results[r].num_tags ; t++)
           {
             sprintf (one_tag, "%s=%s",
@@ -1240,13 +1249,18 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
               strcat (all_tags, ",") ;
             strcat (all_tags, one_tag) ;
           }
+
+          /* if thread's "metric" is defined, use it, otherwise use "name" */
+
+          char *label = G_thread_entry[idx].name ;
+          if (G_thread_entry[idx].metric != NULL)
+            label = G_thread_entry[idx].metric ;
+
           if (strlen(all_tags) > 0)
-            sprintf (line, "%s{%s} %d\r\n",
-                     G_thread_entry[idx].name, all_tags,
+            sprintf (line, "%s{%s} %d\r\n", label, all_tags,
                      G_thread_entry[idx].results[r].i_value) ;
           else
-            sprintf (line, "%s %d\r\n",
-                     G_thread_entry[idx].name,
+            sprintf (line, "%s %d\r\n", label,
                      G_thread_entry[idx].results[r].i_value) ;
           strcat (G_reply_buf, line) ;
         }
@@ -1678,11 +1692,14 @@ void f_thread_create (char *name)
       G_thread_entry[idx].tags_buf[amt] = 0 ;
       G_thread_entry[idx].metric = strtok (G_thread_entry[idx].tags_buf, ",") ;
       int i ;
-      for (i=0 ; i < MAX_THREAD_TAGS-1 ; i++)
+      for (i=0 ; i < MAX_THREAD_TAGS ; i++)
       {
         char *p = strtok (NULL, ",") ;
         if (p)
+        {
           G_thread_entry[idx].tags[i] = p ;
+          G_thread_entry[idx].tags[i+1] = NULL ;
+        }
         else
           break ;
       }
@@ -1804,7 +1821,7 @@ void f_esp32 (char **tokens)
     strcat (G_reply_buf,
       "[Thread Config Files]\r\n"
       "/thread-<name> - (see below)\r\n"
-      "/tags-<name>   - <metric>[,<tagN>=<valueN>,...]\r\n"
+      "/tags-<name>   - <metric>[,<tagN>=\"<valueN>\",...]\r\n"
       "\r\n"
       "[Currently available <ft_tasks>]\r\n"
       "ft_adxl335,<delay>,<post>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
