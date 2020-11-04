@@ -117,7 +117,10 @@
      - The first argument is the ft_<task> that f_thread_lifecycle() will
        execute, the specified arguments are all passed to ft_<task> as a
        "num_args" array of (char*).
-     - Thread management (ie, create/stop/list) is single threaded.
+     - Thread management (ie, create/stop/list) is single threaded and happens
+       in the main thread.
+     - Threads can be started on the first f_cron() run by specifying their
+       names (comma separated) in "/autoexec.cfg".
 
    Writing ft_<tasks>
 
@@ -209,6 +212,7 @@
   #define MQTT_CFG_FILE "/mqtt.cfg"
   #define MQTT_SUB_FILE "/mqtt.sub"
   #define MQTT_PUB_FILE "/mqtt.pub"
+  #define AUTOEXEC_FILE "/autoexec.cfg"
 
   char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
@@ -347,6 +351,7 @@ LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
 struct internal_metrics
 {
+  unsigned long cronRuns ;
   unsigned long serialInBytes ;
   unsigned long serialCmds ;
   unsigned long serialOverruns ;
@@ -1277,6 +1282,55 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
   Webs.send (200, "text/plain", G_reply_buf) ;
 }
 
+void f_cron ()
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    char *args[3] ;
+    args[0] = "wifi" ;
+    args[1] = "connect" ;
+    args[2] = NULL ;
+    f_wifi (args) ;
+  }
+  if (G_psClient.connected() == false)
+  {
+    f_mqtt_connect () ;
+  }
+  G_req_connect = 0 ;
+
+  /* If this is our first run, check if AUTOEXEC_FILE exists */
+
+  if (G_Metrics.cronRuns == 0)
+  {
+    File f = SPIFFS.open (AUTOEXEC_FILE, "r") ;
+    if (f != NULL)
+    {
+      char buf[BUF_SIZE], *idx=buf ;
+      int amt = f.readBytes (buf, BUF_SIZE-1) ;
+      if (amt > 0)
+      {
+        buf[amt] = 0 ;
+        char *p = strtok_r (buf, ",", &idx) ;
+        while (p != NULL)
+        {
+          G_reply_buf[0] = 0 ;
+          f_thread_create (p) ;
+          delay (50) ;
+          if (strlen(G_reply_buf) > 0)
+          {
+            Serial.print ("NOTICE: ") ;
+            Serial.print (G_reply_buf) ;
+          }
+          p = strtok_r (NULL, ",", &idx) ;
+        }
+      }
+      f.close () ;
+    }
+  }
+
+  G_Metrics.cronRuns++ ;
+}
+
 #endif
 
 /* ------------------------------------------------------------------------- */
@@ -1820,6 +1874,7 @@ void f_esp32 (char **tokens)
   {
     strcat (G_reply_buf,
       "[Thread Config Files]\r\n"
+      "/autoexec.cfg  - <name>[,<nameN>...]\r\n"
       "/thread-<name> - (see below)\r\n"
       "/tags-<name>   - <metric>[,<tagN>=\"<valueN>\",...]\r\n"
       "\r\n"
@@ -2098,7 +2153,7 @@ void setup ()
     cfg_wifi_pw[0] = 0 ;
     G_mqtt_pub[0] = 0 ;
     G_mqtt_sub[0] = 0 ;
-    G_next_cron = CRON_INTERVAL * 1000 ;
+    G_next_cron = (CRON_INTERVAL * 1000) / 2 ;
     pinMode (LED_BUILTIN, OUTPUT) ;
     G_thread_entry = (S_thread_entry*) malloc (sizeof(S_thread_entry) *
                                                MAX_THREADS) ;
@@ -2327,19 +2382,7 @@ void loop ()
 
   if ((now > G_next_cron) || (G_req_connect))
   {
-    if (WiFi.status() != WL_CONNECTED)
-    {
-      char *args[3] ;
-      args[0] = "wifi" ;
-      args[1] = "connect" ;
-      args[2] = NULL ;
-      f_wifi (args) ;
-    }
-    if (G_psClient.connected() == false)
-    {
-      f_mqtt_connect () ;
-    }
-    G_req_connect = 0 ;
+    f_cron () ;
     G_next_cron = G_next_cron + (CRON_INTERVAL * 1000) ;
   }
 
