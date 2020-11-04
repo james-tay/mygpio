@@ -217,11 +217,12 @@
   char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
   int cfg_udp_port=0 ;
-  WiFiUDP G_Udp ;                       // our UDP server socket
 
-  char G_mqtt_pub[MAX_MQTT_LEN] ;       // mqtt topic we publish to
-  char G_mqtt_sub[MAX_MQTT_LEN] ;       // mqtt topic we subscribe to
-  unsigned long G_next_cron ;           // millis() time of next run
+  WiFiUDP G_Udp ;                   // our UDP server socket
+  int G_req_connect = 0 ;           // threads requesting wifi/mqtt connection
+  char G_mqtt_pub[MAX_MQTT_LEN] ;   // mqtt topic we publish to
+  char G_mqtt_sub[MAX_MQTT_LEN] ;   // mqtt topic we subscribe to
+  unsigned long G_next_cron ;       // millis() time of next run
 
 #endif
 
@@ -241,7 +242,6 @@
 
   WebServer Webs(WEB_PORT) ;    // our built-in webserver
   int G_sleep = 0 ;             // a flag to tell us to enter sleep mode
-  int G_req_connect = 0 ;       // threads requesting wifi/mqtt connection
   pthread_mutex_t G_delivery_lock ;     // lock for f_delivery()
 
   #define MAX_THREADS 16
@@ -1197,18 +1197,18 @@ void f_v1api ()                                 // for uri "/v1"
 void f_handleWebMetrics ()                      // for uri "/metrics"
 {
   sprintf (G_reply_buf,
-           "node_uptime_secs %ld\n"
-           "serial_in_bytes %ld\n"
-           "serial_commands %ld\n"
-           "serial_overruns %ld\n"
-           "udp_in_bytes %ld\n"
-           "udp_commands %ld\n"
-           "rest_in_bytes %ld\n"
-           "rest_commands %ld\n"
-           "mqtt_connects %ld\n"
-           "mqtt_pubs %ld\n"
-           "mqtt_subs %ld\n"
-           "mqtt_oversize %ld\n",
+           "ec_uptime_secs %ld\n"
+           "ec_serial_in_bytes %ld\n"
+           "ec_serial_commands %ld\n"
+           "ec_serial_overruns %ld\n"
+           "ec_udp_in_bytes %ld\n"
+           "ec_udp_commands %ld\n"
+           "ec_rest_in_bytes %ld\n"
+           "ec_rest_commands %ld\n"
+           "ec_mqtt_connects %ld\n"
+           "ec_mqtt_pubs %ld\n"
+           "ec_mqtt_subs %ld\n"
+           "ec_mqtt_oversize %ld\n",
            millis() / 1000,
            G_Metrics.serialInBytes,
            G_Metrics.serialCmds,
@@ -1224,6 +1224,9 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            ) ;
 
   #ifdef ARDUINO_ESP32_DEV
+
+    /* thread metrics */
+
     int idx, threads=0 ;
     char one_tag[BUF_SIZE], all_tags[BUF_SIZE], line[BUF_SIZE] ;
 
@@ -1271,12 +1274,16 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
         }
         threads++ ;
       }
+
+    /* esp32 specific metrics */
+
     sprintf (line,
-             "free_heap_bytes %ld\n"
-             "threads_running %d\n",
+             "ec_free_heap_bytes %ld\n"
+             "ec_threads_running %d\n",
              xPortGetFreeHeapSize(),
              threads) ;
     strcat (G_reply_buf, line) ;
+
   #endif
 
   Webs.send (200, "text/plain", G_reply_buf) ;
@@ -1297,6 +1304,8 @@ void f_cron ()
     f_mqtt_connect () ;
   }
   G_req_connect = 0 ;
+
+  #ifdef ARDUINO_ESP32_DEV
 
   /* If this is our first run, check if AUTOEXEC_FILE exists */
 
@@ -1327,6 +1336,8 @@ void f_cron ()
       f.close () ;
     }
   }
+
+  #endif
 
   G_Metrics.cronRuns++ ;
 }
@@ -2153,10 +2164,8 @@ void setup ()
     cfg_wifi_pw[0] = 0 ;
     G_mqtt_pub[0] = 0 ;
     G_mqtt_sub[0] = 0 ;
-    G_next_cron = (CRON_INTERVAL * 1000) / 2 ;
+    G_next_cron = CRON_INTERVAL * 1000 ;
     pinMode (LED_BUILTIN, OUTPUT) ;
-    G_thread_entry = (S_thread_entry*) malloc (sizeof(S_thread_entry) *
-                                               MAX_THREADS) ;
 
     /*
        if wifi ssid and password are available, try connect to wifi now.
@@ -2231,6 +2240,10 @@ void setup ()
     Serial.println (line) ;
 
     #if defined ARDUINO_ESP32_DEV
+
+     G_thread_entry = (S_thread_entry*) malloc (sizeof(S_thread_entry) *
+                                                MAX_THREADS) ;
+
      int i ;
      for (i=0 ; i < MAX_THREADS ; i++)
        memset (&G_thread_entry[i], 0, sizeof(S_thread_entry)) ;
