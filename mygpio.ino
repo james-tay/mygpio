@@ -1225,10 +1225,25 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
 
   #ifdef ARDUINO_ESP32_DEV
 
-    /* thread metrics */
+    /* esp32 specific metrics */
 
     int idx, threads=0 ;
-    char one_tag[BUF_SIZE], all_tags[BUF_SIZE], line[BUF_SIZE] ;
+    char line[BUF_SIZE] ;
+
+    for (idx=0 ; idx < MAX_THREADS ; idx++)
+      if (G_thread_entry[idx].state == THREAD_RUNNING)
+        threads++ ;
+
+    sprintf (line,
+             "ec_free_heap_bytes %ld\n"
+             "ec_threads_running %d\n",
+             xPortGetFreeHeapSize(),
+             threads) ;
+    strcat (G_reply_buf, line) ;
+
+    /* individual thread metrics */
+
+    char one_tag[BUF_SIZE], all_tags[BUF_SIZE] ;
 
     for (idx=0 ; idx < MAX_THREADS ; idx++)
       if (G_thread_entry[idx].state == THREAD_RUNNING)
@@ -1265,24 +1280,14 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
             label = G_thread_entry[idx].metric ;
 
           if (strlen(all_tags) > 0)
-            sprintf (line, "%s{%s} %d\r\n", label, all_tags,
+            sprintf (line, "%s{%s} %d\n", label, all_tags,
                      G_thread_entry[idx].results[r].i_value) ;
           else
-            sprintf (line, "%s %d\r\n", label,
+            sprintf (line, "%s %d\n", label,
                      G_thread_entry[idx].results[r].i_value) ;
           strcat (G_reply_buf, line) ;
         }
-        threads++ ;
       }
-
-    /* esp32 specific metrics */
-
-    sprintf (line,
-             "ec_free_heap_bytes %ld\n"
-             "ec_threads_running %d\n",
-             xPortGetFreeHeapSize(),
-             threads) ;
-    strcat (G_reply_buf, line) ;
 
   #endif
 
@@ -1552,8 +1557,6 @@ void ft_adxl335 (S_thread_entry *p)
     digitalWrite (pwrPin, HIGH) ;
     delay (50) ;
 
-    p->num_int_results = 9 ;
-
     p->results[0].num_tags = 2 ;
     p->results[0].meta[0] = "axis" ;
     p->results[0].data[0] = "\"x\"" ;
@@ -1635,6 +1638,8 @@ void ft_adxl335 (S_thread_entry *p)
   p->results[6].i_value = r[7] ;
   p->results[7].i_value = r[8] ;
   p->results[8].i_value = r[9] ;
+
+  p->num_int_results = 9 ; // "announce" that we have results to view
 
   if (strcmp(p->in_args[1], "0") != 0)  // if "postInterval" is non-zero
   {
