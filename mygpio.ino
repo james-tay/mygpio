@@ -2226,18 +2226,18 @@ void setup ()
       }
       if (f_udp)
         f_udp.close () ;
+
+      Webs.on ("/", f_handleWeb) ;
+      Webs.on ("/v1", f_v1api) ;
+      Webs.on ("/metrics", f_handleWebMetrics) ;
+      Webs.begin () ;
+      sprintf (line, "NOTICE: Web server started on port %d.", WEB_PORT) ;
+      Serial.println (line) ;
     }
     else
     {
       Serial.println ("WARNING: Could not initialize SPIFFS.") ;
     }
-
-    Webs.on ("/", f_handleWeb) ;
-    Webs.on ("/v1", f_v1api) ;
-    Webs.on ("/metrics", f_handleWebMetrics) ;
-    Webs.begin () ;
-    sprintf (line, "NOTICE: Web server started on port %d.", WEB_PORT) ;
-    Serial.println (line) ;
 
     #if defined ARDUINO_ESP32_DEV
 
