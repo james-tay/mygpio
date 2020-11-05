@@ -1296,7 +1296,9 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
 
 void f_cron ()
 {
-  if (WiFi.status() != WL_CONNECTED)
+  if ((WiFi.status() != WL_CONNECTED) &&
+      (strlen(cfg_wifi_pw) > 0) &&
+      (strlen(cfg_wifi_ssid) > 0))
   {
     char *args[3] ;
     args[0] = "wifi" ;
