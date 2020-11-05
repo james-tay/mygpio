@@ -2199,6 +2199,15 @@ void setup ()
           sprintf (line, "NOTICE: Wifi config loaded for %s.", cfg_wifi_ssid) ;
           Serial.println (line) ;
           WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
+
+          /* fire up our web server only if WiFi is already configured */
+
+          Webs.on ("/", f_handleWeb) ;
+          Webs.on ("/v1", f_v1api) ;
+          Webs.on ("/metrics", f_handleWebMetrics) ;
+          Webs.begin () ;
+          sprintf (line, "NOTICE: Web server started on port %d.", WEB_PORT) ;
+          Serial.println (line) ;
         }
       }
       if (f_ssid)
@@ -2231,13 +2240,6 @@ void setup ()
       }
       if (f_udp)
         f_udp.close () ;
-
-      Webs.on ("/", f_handleWeb) ;
-      Webs.on ("/v1", f_v1api) ;
-      Webs.on ("/metrics", f_handleWebMetrics) ;
-      Webs.begin () ;
-      sprintf (line, "NOTICE: Web server started on port %d.", WEB_PORT) ;
-      Serial.println (line) ;
     }
     else
     {
