@@ -60,6 +60,7 @@
      test thread creation
        esp32 thread_start count1
 
+
      [ REST ]
 
      % curl 'http://esp32.example.com/metrics'
@@ -68,6 +69,9 @@
      eg,
 
      % curl 'http://esp32.example.com/v1?cmd=wifi+status'
+
+     % OTA_URL="http%3A%2F%2Fvip-web.drowningfrog.homenet.org%2Fmygpio.ino.bin"
+     % curl "http://esp32-1/v1?cmd=ots+$OTA_URL"
 
    Bugs
 
@@ -1447,11 +1451,13 @@ void f_ota (char *url)
     sprintf (line, "NOTICE: Firmware updated in %d secs, please reboot.\r\n",
              (tv_end - tv_start) / 1000) ;
     strcat (G_reply_buf, line) ;
+    Serial.print (line) ;
   }
   else
   {
     sprintf (line, "WARNING: Firmware update failed error %d.\r\n",
              Update.getError()) ;
+    Serial.print (line) ;
   }
   client.stop () ;
 }
@@ -1813,6 +1819,38 @@ void ft_adxl335 (S_thread_entry *p)
   }
 }
 
+void ft_dread (S_thread_entry *p)
+{
+  if (p->num_args != 2)
+  {
+    strcpy (p->msg, "FATAL! Expecting 2x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+  int delay_ms = atoi (p->in_args[0]) ;
+  int pin = atoi (p->in_args[1]) ;
+
+  /* if "loops" is 0, this is our first call, initialize stuff */
+
+  if (p->loops == 0)
+  {
+    pinMode (pin, INPUT) ;
+    p->num_int_results = 1 ;
+    p->results[0].num_tags = 0 ;
+    strcpy (p->msg, "ok") ;
+  }
+
+  int cur_value = digitalRead (pin) ;
+  if ((p->loops > 1) && (cur_value != p->results[0].i_value))
+  {
+    char s[BUF_SIZE] ;
+    sprintf (s, "state changed %d->%d", p->results[0].i_value, cur_value) ;
+    f_delivery (p->name, s) ;
+  }
+  p->results[0].i_value = cur_value ;
+  delay (delay_ms) ;
+}
+
 /* =========================== */
 /* thread management functions */
 /* =========================== */
@@ -1975,6 +2013,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_aread ;
   if (strcmp (ft_taskname, "ft_adxl335") == 0)
     G_thread_entry[idx].ft_addr = ft_adxl335 ;
+  if (strcmp (ft_taskname, "ft_dread") == 0)
+    G_thread_entry[idx].ft_addr = ft_dread ;
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
@@ -2061,6 +2101,7 @@ void f_esp32 (char **tokens)
       "[Currently available <ft_tasks>]\r\n"
       "ft_adxl335,<delay>,<post>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
       "ft_aread,<delay>,<post>,<pin>\r\n"
+      "ft_dread,<delay>,<pin>\r\n"
       "ft_counter,<delay_ms>,<start_value>\r\n"
       "\r\n"
       "[Notes]\r\n"
