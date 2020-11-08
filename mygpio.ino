@@ -21,8 +21,8 @@
        lo 12
 
      test light sensor,
-       hi 5
-       aread 0
+       hi 25
+       aread 33
        lo 5
 
      test HC-SR04,
@@ -197,6 +197,8 @@
 
      - SPIFFS is not thread safe and can only be called safely by the main
        thread.
+
+     - the OTA implementation does not follow HTTP redirects.
 */
 
 #include <Wire.h>
@@ -1663,51 +1665,90 @@ void ft_counter (S_thread_entry *p)
   delay (delay_ms) ;
 }
 
-/*
-   This function writes the analogRead value in p->results[0].i_value but
-   also uses p->results[1].i_value to store our next f_delivery() time.
-*/
-
 void ft_aread (S_thread_entry *p)
 {
   /* get ready our configuration */
 
-  if (p->num_args != 3)
+  if ((p->num_args < 2) || (p->num_args > 5))
   {
-    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
+    strcpy (p->msg, "FATAL! Expecting 2-5x arguments") ;
     p->state = THREAD_STOPPED ;
     return ;
   }
+
   int delay_ms = atoi (p->in_args[0]) ;
-  int postInterval_ms = atoi (p->in_args[1]) ;
-  int pin = atoi (p->in_args[2]) ;
+  int inPin = atoi (p->in_args[1]) ;
+
+  char *pwrPin=NULL, *loThres=NULL, *hiThres=NULL ;
+  if (p->num_args > 2)
+    pwrPin = p->in_args[2] ;            // optional arg
+  if (p->num_args > 3)
+    loThres = p->in_args[3] ;           // optional arg
+  if (p->num_args > 4)
+    hiThres = p->in_args[4] ;           // optional arg
 
   /* if "loops" is 0, this is our first call, initialize stuff */
 
   if (p->loops == 0)
   {
+    pinMode (inPin, INPUT) ;
+    if ((pwrPin) && (strlen(pwrPin) > 0))
+      pinMode (atoi(pwrPin), OUTPUT) ;
     p->num_int_results = 1 ;
-    p->results[0].num_tags = 1 ;
-    p->results[0].meta[0] = "pin" ;
-    p->results[0].data[0] = p->in_args[2] ;
-    p->results[1].i_value = millis () + postInterval_ms ;
+    p->results[1].i_value = millis () ; // use this to store time of last run
     strcpy (p->msg, "ok") ;
   }
 
-  pinMode (pin, INPUT) ;
-  p->results[0].i_value = analogRead (pin) ;
+  /* power on device (if specified) and wait till half time before we poll */
 
-  /* check if it's time to do f_delivery(), postInterval of "0" disables */
+  if ((pwrPin) && (strlen(pwrPin) > 0))
+    digitalWrite (atoi(pwrPin), HIGH) ;         // power on device
+  int nap = delay_ms / 2 ;
+  if (nap > 0)
+    delay (nap) ;
 
-  if ((postInterval_ms > 0) && (millis() > p->results[1].i_value))
+  int cur_value = analogRead (inPin) ;          // read new value
+  if ((pwrPin != NULL) && (strlen(pwrPin) > 0))
+    digitalWrite (atoi(pwrPin), LOW) ;          // power off device
+
+  /* if "loThres" or "hiThres" is defined, check for state change */
+
+  if (p->loops > 0)
   {
-    char s[BUF_SIZE] ;
-    sprintf (s, "%d", p->results[0].i_value) ;
-    f_delivery (p->name, s) ;
-    p->results[1].i_value = p->results[1].i_value + postInterval_ms ;
+    char *cur_state = "normal" ;
+    char *prev_state = "normal" ;
+    if ((loThres != NULL) && (strlen(loThres) > 0))
+    {
+      int loValue = atoi (loThres) ;
+      if (cur_value < loValue)
+        cur_state = "low" ;
+      if (p->results[0].i_value < loValue)
+        prev_state = "low" ;
+    }
+    if ((hiThres != NULL) && (strlen(hiThres) > 0))
+    {
+      int hiValue = atoi (hiThres) ;
+      if (cur_value > hiValue)
+        cur_state = "high" ;
+      if (p->results[0].i_value > hiValue)
+        prev_state = "high" ;
+    }
+    if (cur_state != prev_state)
+    {
+      char s[BUF_SIZE] ;
+      sprintf (s, "state changed %s->%s", prev_state, cur_state) ;
+      f_delivery (p->name, s) ;
+    }
   }
 
-  delay (delay_ms) ;
+  p->results[0].i_value = cur_value ;
+
+  /* we're done, figure out how long we have left to sleep */
+
+  p->results[1].i_value = p->results[1].i_value + delay_ms ;
+  nap = p->results[1].i_value - millis () ;
+  if (nap > 0)
+    delay (nap) ;
 }
 
 void ft_adxl335 (S_thread_entry *p)
@@ -1791,8 +1832,8 @@ void ft_adxl335 (S_thread_entry *p)
   t[1] = p->in_args[2] ;        // x pin
   t[2] = p->in_args[3] ;        // y pin
   t[3] = p->in_args[4] ;        // z pin
-  t[4] = p->in_args[1] ;        // total duration (ms)
-  t[5] = p->in_args[0] ;        // interval (ms)
+  t[4] = p->in_args[1] ;        // aggregation duration (ms)
+  t[5] = p->in_args[0] ;        // interval between samples (ms)
 
   int r[10] ;
   f_adxl335 (t, (int*) &r) ;
@@ -1810,13 +1851,6 @@ void ft_adxl335 (S_thread_entry *p)
   p->results[8].i_value = r[9] ;
 
   p->num_int_results = 9 ; // "announce" that we have results to view
-
-  if (strcmp(p->in_args[1], "0") != 0)  // if "postInterval" is non-zero
-  {
-    sprintf (s, "samples:%d x:%d/%d/%d y:%d/%d/%d z:%d/%d/%d",
-             r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9]) ;
-    f_delivery (p->name, s) ;
-  }
 }
 
 void ft_dread (S_thread_entry *p)
@@ -2065,7 +2099,7 @@ void f_thread_stop (char *name)
 
 void f_esp32 (char **tokens)
 {
-  char msg[BUF_SIZE] ;
+  char msg[BUF_MEDIUM] ;
 
   /* we definitely need at least 2x tokens, otherwise something is wrong */
 
@@ -2099,14 +2133,14 @@ void f_esp32 (char **tokens)
       "/tags-<name>   - <metric>[,<tagN>=\"<valueN>\",...]\r\n"
       "\r\n"
       "[Currently available <ft_tasks>]\r\n"
-      "ft_adxl335,<delay>,<post>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
-      "ft_aread,<delay>,<post>,<pin>\r\n"
+      "ft_adxl335,<delay>,<aggr>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
+      "ft_aread,<delay>,<inPin>,[pwrPin],[loThres],[hiThres]\r\n"
       "ft_dread,<delay>,<pin>\r\n"
-      "ft_counter,<delay_ms>,<start_value>\r\n"
+      "ft_counter,<delay>,<start_value>\r\n"
       "\r\n"
       "[Notes]\r\n"
       "<delay> - interval between sampling (millisecs)\r\n"
-      "<post>  - interval between aggregating results (millisecs)\r\n") ;
+      "<aggr>  - interval between aggregating results (millisecs)\r\n") ;
   }
   else
   if (strcmp(tokens[1], "thread_list") == 0)                    // thread_list
@@ -2165,7 +2199,7 @@ void f_action (char **tokens)
             "[Common]\r\n"
             "hi <GPIO pin>\r\n"
             "lo <GPIO pin>\r\n"
-            "aread <pin> - analog read\r\n"
+            "aread <GPIO pin> - analog read (always 0 on esp8266)\r\n"
             "dread <GPIO pin> - digital read\r\n"
             "bmp180\r\n"
             "dht22 <dataPin> - DHT-22 temperature/humidity sensor\r\n"
