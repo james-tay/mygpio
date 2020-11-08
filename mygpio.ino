@@ -1703,7 +1703,12 @@ void ft_aread (S_thread_entry *p)
 
   if ((pwrPin) && (strlen(pwrPin) > 0))
     digitalWrite (atoi(pwrPin), HIGH) ;         // power on device
+
+  #define MAX_POWER_UP_DELAY 50
+
   int nap = delay_ms / 2 ;
+  if (nap > MAX_POWER_UP_DELAY)
+    nap = MAX_POWER_UP_DELAY ;
   if (nap > 0)
     delay (nap) ;
 
@@ -2201,8 +2206,8 @@ void f_action (char **tokens)
             "lo <GPIO pin>\r\n"
             "aread <GPIO pin> - analog read (always 0 on esp8266)\r\n"
             "dread <GPIO pin> - digital read\r\n"
-            "bmp180\r\n"
-            "dht22 <dataPin> - DHT-22 temperature/humidity sensor\r\n"
+            "bmp180           - barometric pressure (I2C)\r\n"
+            "dht22 <dataPin>  - DHT-22 temperature/humidity sensor\r\n"
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
             "lcd backlight <on/off>\r\n"
             "lcd clear\r\n"
