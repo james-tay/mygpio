@@ -20,15 +20,15 @@
        hi 12
        lo 12
 
-     test light sensor,
+     test light sensor (on 3.3v),
        hi 25
        aread 33
        lo 5
 
-     test HC-SR04,
-       hi 4
-       hcsr04 2 3
-       lo 4
+     test HC-SR04 (needs 5v),
+       hi 1
+       hcsr04 18 19
+       lo 1
 
      test DHT22,
        hi 12
@@ -114,6 +114,8 @@
      - Each ft_<task> may return up to MAX_THREAD_RESULT_VALUES values, thus
        we need to label up to MAX_THREAD_RESULT_VALUES "meta" and "data"
        key/value pairs. This is the ft_<task>'s responsibility.
+     - The number of thread results are stored in "num_int_results" or
+       "num_float_results". One (or both) of these MUST be zero.
      - Arguments to ft_<task> must be stored in a file "/thread-<name>",
        which are read by f_thread_create(). This is the user's responsibility.
      - This file must contain 1 line with comma separated parameters :
@@ -284,6 +286,7 @@
     char *meta[MAX_THREAD_RESULT_TAGS] ;  // array of meta tags
     char *data[MAX_THREAD_RESULT_TAGS] ;  // array of data tags
     int i_value ;                       // this result's value
+    double f_value ;                    // this result's value
   } ;
   typedef struct thread_result_s S_thread_result ;
 
@@ -310,7 +313,8 @@
 
     /* IMPORTANT !!! <ft_task> may modify anything below this point */
 
-    int num_int_results ;               // number of actual results returned
+    int num_int_results ;               // number of "i_value" results returned
+    int num_float_results ;             // number of "f_value" results returned
     S_thread_result results[MAX_THREAD_RESULT_VALUES] ;
     char msg[MAX_THREAD_MSG_BUF] ;      // provide some optional feedback
   } ;
@@ -635,10 +639,7 @@ float f_hcsr04 (int trigPin, int echoPin)
 
   unsigned long echoUsecs = pulseIn (echoPin, HIGH, HCSR04_TIMEOUT_USEC) ;
   if (echoUsecs == 0)
-  {
-    strcat (G_reply_buf, "FAULT: f_hcsr04() no response.\r\n") ;
     return (-1.0) ;
-  }
   else
     return (float(echoUsecs) / 58.0) ; // convert time to centimeters
 }
@@ -1208,6 +1209,44 @@ void f_v1api ()                                 // for uri "/v1"
     Webs.send (504, "text/plain", "No response\r\n") ;
 }
 
+/*
+   This is a convenience function called from f_handleWebMetrics(). Our job
+   is to build up all the metric with metadata tags for a given result "r",
+   writing it into the supplied "metric" buffer.
+*/
+
+void f_buildMetric (S_thread_entry *p, S_thread_result *r, char *metric)
+{
+  int i ;
+  char one_tag[BUF_SIZE], all_tags[BUF_MEDIUM] ;
+
+  char *label = p->name ;                       // use thread name or metric
+  if (p->metric)
+    label = p->metric ;
+  strcpy (metric, label) ;
+
+  all_tags[0] = 0 ;
+  for (i=0 ; p->tags[i] != NULL ; i++)          // join up all static tags
+  {
+    if (strlen(all_tags) > 0)
+      strcat (all_tags, ",") ;
+    strcat (all_tags, p->tags[i]) ;
+  }
+  for (i=0 ; i < r->num_tags ; i++)             // join up thread's result tags
+  {
+    sprintf (one_tag, "%s=%s", r->meta[i], r->data[i]) ;
+    if (strlen(all_tags) > 0)
+      strcat (all_tags, ",") ;
+    strcat (all_tags, one_tag) ;
+  }
+  if (strlen(all_tags) > 0)                     // append all_tags to "metric"
+  {
+    strcat (metric, "{") ;
+    strcat (metric, all_tags) ;
+    strcat (metric, "}") ;
+  }
+}
+
 void f_handleWebMetrics ()                      // for uri "/metrics"
 {
   sprintf (G_reply_buf,
@@ -1242,7 +1281,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
     /* esp32 specific metrics */
 
     int idx, threads=0 ;
-    char line[BUF_SIZE] ;
+    char line[BUF_MEDIUM] ;
 
     for (idx=0 ; idx < MAX_THREADS ; idx++)
       if (G_thread_entry[idx].state == THREAD_RUNNING)
@@ -1257,7 +1296,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
 
     /* individual thread metrics */
 
-    char one_tag[BUF_SIZE], all_tags[BUF_SIZE] ;
+    char metric[BUF_MEDIUM] ;
 
     for (idx=0 ; idx < MAX_THREADS ; idx++)
       if (G_thread_entry[idx].state == THREAD_RUNNING)
@@ -1267,38 +1306,18 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
         int r, t ;
         for (r=0 ; r < G_thread_entry[idx].num_int_results ; r++)
         {
-          /* form custom tags and then result specific tags in "all_tags" */
-
-          all_tags[0] = 0 ;
-          int i ;
-          for (i=0 ; G_thread_entry[idx].tags[i] != NULL ; i++)
-          {
-            if (strlen(all_tags) > 0)
-              strcat (all_tags, ",") ;
-            strcat (all_tags, G_thread_entry[idx].tags[i]) ;
-          }
-          for (t=0 ; t < G_thread_entry[idx].results[r].num_tags ; t++)
-          {
-            sprintf (one_tag, "%s=%s",
-                     G_thread_entry[idx].results[r].meta[t],
-                     G_thread_entry[idx].results[r].data[t]) ;
-            if (strlen(all_tags) > 0)
-              strcat (all_tags, ",") ;
-            strcat (all_tags, one_tag) ;
-          }
-
-          /* if thread's "metric" is defined, use it, otherwise use "name" */
-
-          char *label = G_thread_entry[idx].name ;
-          if (G_thread_entry[idx].metric != NULL)
-            label = G_thread_entry[idx].metric ;
-
-          if (strlen(all_tags) > 0)
-            sprintf (line, "%s{%s} %d\n", label, all_tags,
-                     G_thread_entry[idx].results[r].i_value) ;
-          else
-            sprintf (line, "%s %d\n", label,
-                     G_thread_entry[idx].results[r].i_value) ;
+          f_buildMetric (&G_thread_entry[idx],
+                         &G_thread_entry[idx].results[r], metric) ;
+          sprintf (line, "%s %d\n", metric,
+                   G_thread_entry[idx].results[r].i_value) ;
+          strcat (G_reply_buf, line) ;
+        }
+        for (r=0 ; r < G_thread_entry[idx].num_float_results ; r++)
+        {
+          f_buildMetric (&G_thread_entry[idx],
+                         &G_thread_entry[idx].results[r], metric) ;
+          String v = String (G_thread_entry[idx].results[r].f_value) ;
+          sprintf (line, "%s %s\n", metric, v.c_str()) ;
           strcat (G_reply_buf, line) ;
         }
       }
@@ -1890,6 +1909,97 @@ void ft_dread (S_thread_entry *p)
   delay (delay_ms) ;
 }
 
+void ft_hcsr04 (S_thread_entry *p)
+{
+  if (p->num_args != 5)
+  {
+    strcpy (p->msg, "FATAL! Expecting 5x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  char s[BUF_SIZE] ;
+
+  unsigned long delay_ms = atoi (p->in_args[0]) ;
+  unsigned long aggr_ms = atoi (p->in_args[1]) ;
+  int trigPin = atoi (p->in_args[2]) ;
+  int echoPin = atoi (p->in_args[3]) ;
+  int thres = atoi (p->in_args[4]) ;
+
+  if (p->loops == 0)
+  {
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "type" ;
+    p->results[0].data[0] = "\"Min\"" ;
+
+    p->results[1].num_tags = 1 ;
+    p->results[1].meta[0] = "type" ;
+    p->results[1].data[0] = "\"Ave\"" ;
+
+    p->results[2].num_tags = 1 ;
+    p->results[2].meta[0] = "type" ;
+    p->results[2].data[0] = "\"Max\"" ;
+
+    p->results[0].i_value = millis () ; // use this to store time of last run
+    strcpy (p->msg, "init") ;
+  }
+
+  /* probe our device until "aggr_ms" expires */
+
+  int samples=0, faults=0 ;
+  double v_total=0.0, v_min, v_max ;
+  unsigned long job_start = p->results[0].i_value ;
+  unsigned long job_end = p->results[0].i_value + aggr_ms ;
+
+  while (job_start < job_end)
+  {
+    double f_value = f_hcsr04 (trigPin, echoPin) ;
+    if (f_value > 0.0)                          // only process good data
+    {
+      v_total = v_total + f_value ;
+      if (samples == 0)
+        v_min = v_max = f_value ;
+      else
+      if (f_value > v_max)
+        v_max = f_value ;
+      else
+      if (f_value < v_min)
+        v_min = f_value ;
+      samples++ ;
+
+      /* check for state change */
+
+    }
+    else
+      faults++ ;
+
+    /* figure out how long to pause until our next job cycle */
+
+    int nap = job_start + delay_ms - millis () ;
+    if (nap > 0)
+      delay (nap) ;
+    job_start = job_start + delay_ms ;
+  }
+
+  sprintf (s, "[loop:%d samples:%d faults:%d]", p->loops, samples, faults) ;
+  strcpy (p->msg, s) ;
+
+  /* "assemble" our final results */
+
+  p->results[0].f_value = v_min ;
+  p->results[1].f_value = v_total / (double) samples ;
+  p->results[2].f_value = v_max ;
+
+  /* get ready for our next run */
+
+  p->results[0].i_value = p->results[0].i_value + aggr_ms ;
+
+  if (samples > 0)
+    p->num_float_results = 3 ;                  // indicate results are good
+  else
+    p->num_float_results = 0 ;                  // indicate results are bad
+}
+
 /* =========================== */
 /* thread management functions */
 /* =========================== */
@@ -2024,6 +2134,7 @@ void f_thread_create (char *name)
   strcpy (G_thread_entry[idx].conf, config) ;
   G_thread_entry[idx].num_args = 0 ;
   G_thread_entry[idx].num_int_results = 0 ;
+  G_thread_entry[idx].num_float_results = 0 ;
   G_thread_entry[idx].loops = 0 ;
   G_thread_entry[idx].ts_started = millis () ;
   G_thread_entry[idx].msg[0] = 0 ;
@@ -2054,6 +2165,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_adxl335 ;
   if (strcmp (ft_taskname, "ft_dread") == 0)
     G_thread_entry[idx].ft_addr = ft_dread ;
+  if (strcmp (ft_taskname, "ft_hcsr04") == 0)
+    G_thread_entry[idx].ft_addr = ft_hcsr04 ;
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
@@ -2142,6 +2255,7 @@ void f_esp32 (char **tokens)
       "ft_aread,<delay>,<inPin>,[pwrPin],[loThres],[hiThres]\r\n"
       "ft_dread,<delay>,<pin>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
+      "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
       "\r\n"
       "[Notes]\r\n"
       "<delay> - interval between sampling (millisecs)\r\n"
@@ -2320,7 +2434,11 @@ void f_action (char **tokens)
       (tokens[1] != NULL) && (tokens[2] != NULL))
   {
     float f = f_hcsr04 (atoi(tokens[1]), atoi(tokens[2])) ;
-    if (f > 0.0)
+    if (f < 0.0)
+    {
+      strcat (G_reply_buf, "FAULT: f_hcsr04() no response.\r\n") ;
+    }
+    else
     {
       sprintf (line, "hcsr04 - %d.%02d cm\r\n", int(f), (int)(f*100)%100) ;
       strcat (G_reply_buf, line) ;
