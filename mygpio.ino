@@ -1940,6 +1940,10 @@ void ft_hcsr04 (S_thread_entry *p)
     p->results[2].meta[0] = "type" ;
     p->results[2].data[0] = "\"Max\"" ;
 
+    p->results[3].num_tags = 1 ;
+    p->results[3].meta[0] = "type" ;
+    p->results[3].data[0] = "\"Cur\"" ;
+
     p->results[0].i_value = millis () ; // use this to store time of last run
     strcpy (p->msg, "init") ;
   }
@@ -1951,7 +1955,7 @@ void ft_hcsr04 (S_thread_entry *p)
   unsigned long job_start = p->results[0].i_value ;
   unsigned long job_end = p->results[0].i_value + aggr_ms ;
 
-  while (job_start < job_end)
+  while ((job_start < job_end) && (p->state == THREAD_RUNNING))
   {
     double f_value = f_hcsr04 (trigPin, echoPin) ;
     if (f_value > 0.0)                          // only process good data
@@ -1969,6 +1973,24 @@ void ft_hcsr04 (S_thread_entry *p)
 
       /* check for state change */
 
+      if (samples > 1)
+      {
+        char *prev_state = "high" ;
+        if (p->results[3].f_value < (double) thres)
+          prev_state = "low" ;
+
+        char *cur_state = "high" ;
+        if (f_value < (double) thres)
+          cur_state = "low" ;
+
+        if (strcmp(prev_state, cur_state) != 0)
+        {
+          char s[BUF_SIZE] ;
+          sprintf (s, "state changed %s->%s", prev_state, cur_state) ;
+          f_delivery (p->name, s) ;
+        }
+      }
+      p->results[3].f_value = f_value ; // use this to store previous value
     }
     else
       faults++ ;
@@ -1995,7 +2017,7 @@ void ft_hcsr04 (S_thread_entry *p)
   p->results[0].i_value = p->results[0].i_value + aggr_ms ;
 
   if (samples > 0)
-    p->num_float_results = 3 ;                  // indicate results are good
+    p->num_float_results = 4 ;                  // indicate results are good
   else
     p->num_float_results = 0 ;                  // indicate results are bad
 }
