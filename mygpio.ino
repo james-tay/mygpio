@@ -168,10 +168,14 @@
        absent, "<name>" will be used in place of "<metric>".
 
 
-   Delivering events from threads (fix me)
+   Publishing/Subscribing events over MQTT
 
-     - A thread may deliver data when appropriate by calling f_delivery().
-     - The f_delivery() function delivers "<name> <msg>" via MQTT.
+     - The global "G_psClient" object handles all MQTT work.
+     - A thread may deliver event data by calling f_delivery().
+     - The f_delivery() function delivers "<msg>" via MQTT to a topic with
+       the format: "<prefix>/<macAddress>/<thread_name>"
+     - Each EC subscribes to a topic "<prefix>/<macAddress>" and awaits
+       commands sent to it.
 
    Notes
 
@@ -235,8 +239,8 @@
 
   WiFiUDP G_Udp ;                   // our UDP server socket
   int G_req_connect = 0 ;           // threads requesting wifi/mqtt connection
-  char G_mqtt_pub[MAX_MQTT_LEN] ;   // mqtt topic we publish to
-  char G_mqtt_sub[MAX_MQTT_LEN] ;   // mqtt topic we subscribe to
+  char G_mqtt_pub[MAX_MQTT_LEN] ;   // mqtt topic prefix we publish to
+  char G_mqtt_sub[MAX_MQTT_LEN] ;   // mqtt topic prefix we subscribe to
   unsigned long G_next_cron ;       // millis() time of next run
 
 #endif
@@ -1038,7 +1042,7 @@ void f_wifi (char **tokens)
 
 void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
 {
-  char msg[MAX_MQTT_LEN + 1], buf[BUF_SIZE] ;
+  char msg[MAX_MQTT_LEN + 1], buf[BUF_MEDIUM] ;
 
   if (length > MAX_MQTT_LEN)
   {
@@ -1049,8 +1053,33 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
   msg[length] = 0 ;
   G_Metrics.mqttSubs++ ;
 
-  snprintf (buf, BUF_SIZE, "[%s] %s", topic, msg) ;
+  /* print the command we received to console and parse it */
+
+  snprintf (buf, BUF_MEDIUM, "NOTICE: received [%s] %s", topic, msg) ;
   Serial.println (buf) ;
+
+  int idx = 0 ;
+  char *tokens[MAX_TOKENS] ;
+  char *p = strtok (msg, " ") ;
+  while ((p) && (idx < MAX_TOKENS))
+  {
+    tokens[idx] = p ;
+    idx++ ;
+    p = strtok (NULL, " ") ;
+  }
+  tokens[idx] = NULL ;
+
+  /* now execute the command we've parsed */
+
+  G_reply_buf[0] = 0 ;
+  if (tokens[0] != NULL)
+    f_action (tokens) ;
+  if (strlen (G_reply_buf) > 0)
+  {
+    Serial.print (G_reply_buf) ;
+    if (G_reply_buf[strlen(G_reply_buf)-1] != '\n')
+      Serial.print ("\r\n") ;                         // add CRNL if needed
+  }
 }
 
 void f_mqtt_connect ()
@@ -1124,7 +1153,10 @@ void f_mqtt_connect ()
           G_Metrics.mqttConnects++ ;
           if (strlen(G_mqtt_sub) > 0)
           {
-            G_psClient.subscribe (G_mqtt_sub) ;
+            char topic[MAX_MQTT_LEN] ;
+            sprintf (topic, "%s/%x:%x:%x:%x:%x:%x", G_mqtt_sub,
+                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
+            G_psClient.subscribe (topic) ;
             G_psClient.setCallback (f_mqtt_callback) ;
           }
         }
@@ -1159,9 +1191,12 @@ void f_delivery (char *name, char *payload)
   if ((G_psClient.connected()) && (strlen(G_mqtt_pub) > 0) &&
       (name != NULL) && (payload != NULL))
   {
-    char buf[BUF_SIZE] ;
-    sprintf (buf, "%s %s", name, payload) ;
-    G_psClient.publish (G_mqtt_pub, buf) ;
+    char topic[MAX_MQTT_LEN] ;
+    unsigned char mac[6] ;
+    WiFi.macAddress(mac) ;
+    sprintf (topic, "%s/%x:%x:%x:%x:%x:%x/%s", G_mqtt_pub,
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], name) ;
+    G_psClient.publish (topic, payload) ;
     G_Metrics.mqttPubs++ ;
   }
 
