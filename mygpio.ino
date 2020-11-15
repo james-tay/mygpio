@@ -1820,7 +1820,8 @@ void ft_aread (S_thread_entry *p)
     if (cur_state != prev_state)
     {
       char s[BUF_SIZE] ;
-      sprintf (s, "state changed %s->%s", prev_state, cur_state) ;
+      sprintf (s, "state changed %s->%s %d",
+               prev_state, cur_state, cur_value) ;
       f_delivery (p->name, s) ;
     }
   }
@@ -2046,7 +2047,8 @@ void ft_hcsr04 (S_thread_entry *p)
         if (strcmp(prev_state, cur_state) != 0)
         {
           char s[BUF_SIZE] ;
-          sprintf (s, "state changed %s->%s", prev_state, cur_state) ;
+          sprintf (s, "state changed %s->%s %.2f",
+                   prev_state, cur_state, f_value) ;
           f_delivery (p->name, s) ;
         }
       }
