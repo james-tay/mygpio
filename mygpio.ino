@@ -60,6 +60,8 @@
      test thread creation
        esp32 thread_start count1
 
+     test PWM
+       tone 15 2000 20
 
      [ REST ]
 
@@ -972,8 +974,31 @@ void f_wifi (char **tokens)
              WiFi.localIP().toString().c_str(),
              WiFi.subnetMask().toString().c_str()) ;
     strcat (G_reply_buf, line) ;
-    sprintf (line, "mqtt_state: %d\r\n", G_psClient.state()) ;
-    strcat (G_reply_buf, line) ;
+
+    strcat (G_reply_buf, "mqtt_state: ") ;
+    switch (G_psClient.state())
+    {
+      case MQTT_CONNECTION_TIMEOUT:
+        strcat (G_reply_buf, "MQTT_CONNECTION_TIMEOUT\r\n") ; break ;
+      case MQTT_CONNECTION_LOST:
+        strcat (G_reply_buf, "MQTT_CONNECTION_LOST\r\n") ; break ;
+      case MQTT_CONNECT_FAILED:
+        strcat (G_reply_buf, "MQTT_CONNECT_FAILED\r\n") ; break ;
+      case MQTT_DISCONNECTED:
+        strcat (G_reply_buf, "MQTT_DISCONNECTED\r\n") ; break ;
+      case MQTT_CONNECTED:
+        strcat (G_reply_buf, "MQTT_CONNECTED\r\n") ; break ;
+      case MQTT_CONNECT_BAD_PROTOCOL:
+        strcat (G_reply_buf, "MQTT_CONNECT_BAD_PROTOCOL\r\n") ; break ;
+      case MQTT_CONNECT_BAD_CLIENT_ID:
+        strcat (G_reply_buf, "MQTT_CONNECT_BAD_CLIENT_ID\r\n") ; break ;
+      case MQTT_CONNECT_UNAVAILABLE:
+        strcat (G_reply_buf, "MQTT_CONNECT_UNAVAILABLE\r\n") ; break ;
+      case MQTT_CONNECT_BAD_CREDENTIALS:
+        strcat (G_reply_buf, "MQTT_CONNECT_BAD_CREDENTIALS\r\n") ; break ;
+      case MQTT_CONNECT_UNAUTHORIZED:
+        strcat (G_reply_buf, "MQTT_CONNECT_UNAUTHORIZED\r\n") ; break ;
+    }
   }
   else
   if (strcmp(tokens[1], "disconnect") == 0)                     // disconnect
@@ -1055,7 +1080,7 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
 
   /* print the command we received to console and parse it */
 
-  snprintf (buf, BUF_MEDIUM, "NOTICE: received [%s] %s", topic, msg) ;
+  snprintf (buf, BUF_MEDIUM, "NOTICE: mqtt [%s] %s", topic, msg) ;
   Serial.println (buf) ;
 
   int idx = 0 ;
@@ -2420,6 +2445,7 @@ void f_action (char **tokens)
       strcat (G_reply_buf,
               "\r\n[ESP32 only]\r\n"
               "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
+              "tone <GPIO pin> <freq> <dur(ms)>\r\n"
               "esp32 hall\r\n"
               "esp32 sleep <secs>\r\n"
               "esp32 thread_help\r\n"
@@ -2568,6 +2594,29 @@ void f_action (char **tokens)
   if (strcmp(tokens[0], "esp32") == 0)
   {
     f_esp32 (tokens) ;
+  }
+  else
+  if ((strcmp(tokens[0], "tone") == 0) && (tokens[1] != NULL) &&
+      (tokens[2] != NULL) && (tokens[3] != NULL))
+  {
+    #define CHANNEL 0                           // 16x PWM channels on an ESP32
+    #define RESOLUTION 8                        // resolution of duty cycle
+    #define MAX_DUR 2000                        // don't block for too long
+
+    int pin = atoi(tokens[1]) ;
+    double freq = atoi(tokens[2]) ;
+    unsigned long dur = atoi(tokens[3]) ;
+
+    if (dur > MAX_DUR)
+      dur = MAX_DUR ;
+
+    double d = ledcWriteTone (CHANNEL, freq) ;
+    ledcAttachPin (pin, CHANNEL) ;
+    delay (dur) ;
+    ledcDetachPin (pin) ;
+    pinMode (pin, INPUT) ;              // this suppresses "buzzing" noises
+
+    sprintf (G_reply_buf, "PWM %.2fhz\r\n", d) ;
   }
   #endif
   else
