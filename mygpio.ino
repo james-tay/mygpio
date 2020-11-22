@@ -647,7 +647,12 @@ float f_hcsr04 (int trigPin, int echoPin)
   if (echoUsecs == 0)
     return (-1.0) ;
   else
-    return (float(echoUsecs) / 58.0) ; // convert time to centimeters
+  {
+    float cm = float(echoUsecs) / 58.0 ;        // convert time to centimeters
+    if (cm < 1.0)
+      return (-1.0) ; // this is probably an invalid reading
+    return (cm) ;
+  }
 }
 
 /*
