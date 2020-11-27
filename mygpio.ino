@@ -174,9 +174,9 @@
 
      - The global "G_psClient" object handles all MQTT work.
      - A thread may deliver event data by calling f_delivery().
-     - The f_delivery() function delivers "<msg>" via MQTT to a topic with
-       the format: "<prefix>/<macAddress>/<thread_name>"
-     - Each EC subscribes to a topic "<prefix>/<macAddress>" and awaits
+     - The f_delivery() function delivers "<metric>" via MQTT to a topic with
+       the format: "<publish_prefix>/<hostname>/<thread_name>"
+     - Each EC subscribes to a topic "<subscribe_prefix>/<hostname>" and awaits
        commands sent to it.
 
    Notes
@@ -222,7 +222,7 @@
 
   #define MAX_SSID_LEN 32
   #define MAX_PASSWD_LEN 64             // maximum wifi password length
-  #define MAX_MQTT_LEN 80               // maximum mqtt message we receive
+  #define MAX_MQTT_LEN 80               // maximum mqtt message buffer
   #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
   #define WEB_PORT 80                   // web server listens on this port
   #define CRON_INTERVAL 60              // how often we run f_cron()
@@ -233,7 +233,9 @@
   #define MQTT_CFG_FILE "/mqtt.cfg"
   #define MQTT_SUB_FILE "/mqtt.sub"
   #define MQTT_PUB_FILE "/mqtt.pub"
+  #define MQTT_TAGS_FILE "/mqtt.tags"
   #define AUTOEXEC_FILE "/autoexec.cfg"
+  #define HOSTNAME_FILE "/hostname"
 
   char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
@@ -243,6 +245,7 @@
   int G_req_connect = 0 ;           // threads requesting wifi/mqtt connection
   char G_mqtt_pub[MAX_MQTT_LEN] ;   // mqtt topic prefix we publish to
   char G_mqtt_sub[MAX_MQTT_LEN] ;   // mqtt topic prefix we subscribe to
+  char G_mqtt_tags[MAX_MQTT_LEN] ;  // tags included in each publish
   unsigned long G_next_cron ;       // millis() time of next run
 
 #endif
@@ -263,7 +266,7 @@
 
   WebServer Webs(WEB_PORT) ;    // our built-in webserver
   int G_sleep = 0 ;             // a flag to tell us to enter sleep mode
-  pthread_mutex_t G_delivery_lock ;     // lock for f_delivery()
+  pthread_mutex_t G_delivery_lock ;     // lock to serialize f_delivery()
 
   #define MAX_THREADS 16
   #define MAX_THREAD_NAME 40
@@ -351,7 +354,7 @@
 #define BUF_MEDIUM 256
 
 #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-  #define REPLY_SIZE 1024
+  #define REPLY_SIZE 2048
 #else
   #define REPLY_SIZE 192        // arduino uno has only 2x of SRAM.
 #endif
@@ -367,6 +370,7 @@
 char *G_reply_buf ;             // accumulate our reply message here
 int G_serial_pos ;              // index of bytes received on serial port
 char G_serial_buf[BUF_SIZE+1] ; // accumulate butes on our serial console
+char G_hostname[BUF_SIZE+1] ;   // our hostname
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 
 LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
@@ -1004,6 +1008,12 @@ void f_wifi (char **tokens)
       case MQTT_CONNECT_UNAUTHORIZED:
         strcat (G_reply_buf, "MQTT_CONNECT_UNAUTHORIZED\r\n") ; break ;
     }
+
+    if (strlen(G_hostname) > 0)
+    {
+      sprintf (line, "hostname: %s\r\n", G_hostname) ;
+      strcat (G_reply_buf, line) ;
+    }
   }
   else
   if (strcmp(tokens[1], "disconnect") == 0)                     // disconnect
@@ -1175,7 +1185,7 @@ void f_mqtt_connect ()
         char id[BUF_SIZE] ;
         unsigned char mac[6] ;
         WiFi.macAddress(mac) ;
-        sprintf (id, "%x-%x-%x-%x-%x-%x",
+        sprintf (id, "%x:%x:%x:%x:%x:%x",
                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
         G_psClient.setServer (mqtt_host, atoi(mqtt_port)) ;
         if (G_psClient.connect (id, user, pw))
@@ -1183,11 +1193,42 @@ void f_mqtt_connect ()
           G_Metrics.mqttConnects++ ;
           if (strlen(G_mqtt_sub) > 0)
           {
+            /* by default, subscribe to a topic "<subscribe_prefix>/<mac>" */
+
             char topic[MAX_MQTT_LEN] ;
-            sprintf (topic, "%s/%x:%x:%x:%x:%x:%x", G_mqtt_sub,
-                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
+            snprintf (topic, MAX_MQTT_LEN, "%s/%s", G_mqtt_sub, id) ;
+
+            /*
+               subscribe to "<subscribe_prefix>/<hostname>" if HOSTNAME_FILE
+               exists
+            */
+
+            File f = SPIFFS.open (HOSTNAME_FILE, "r") ;
+            if (f != NULL)
+            {
+              int amt = f.readBytes (G_hostname, BUF_SIZE) ;
+              if (amt > 0)
+              {
+                G_hostname[amt] = 0 ;
+                snprintf (topic, MAX_MQTT_LEN, "%s/%s",
+                          G_mqtt_sub, G_hostname) ;
+              }
+              f.close () ;
+            }
+
             G_psClient.subscribe (topic) ;
             G_psClient.setCallback (f_mqtt_callback) ;
+          }
+
+          /* take this opportunity to read MQTT_TAGS_FILE */
+
+          File f = SPIFFS.open (MQTT_TAGS_FILE, "r") ;
+          if (f != NULL)
+          {
+            int amt = f.readBytes (G_mqtt_tags, MAX_MQTT_LEN-1) ;
+            if (amt > 0)
+              G_mqtt_tags[amt] = 0 ;
+            f.close () ;
           }
         }
         else
@@ -1201,7 +1242,19 @@ void f_mqtt_connect ()
   }
 }
 
-void f_delivery (char *name, char *payload)
+/*
+   This function is supplied the S_thread_entry of the calling thread, and
+   the result of interest. With some help from f_buildMetric(), our job is to
+   format a string :
+
+     <metric_name>{<result_tags>,<task_tags...>,<mqtt_tags...>} <result>
+
+   which we publish to the topic :
+
+     <publish_prefix>/<hostname>/<thread_name>
+*/
+
+void f_delivery (S_thread_entry *p, S_thread_result *r)
 {
   #ifdef ARDUINO_ESP32_DEV
   pthread_mutex_lock (&G_delivery_lock) ;
@@ -1218,14 +1271,23 @@ void f_delivery (char *name, char *payload)
     return ;
   }
 
-  if ((G_psClient.connected()) && (strlen(G_mqtt_pub) > 0) &&
-      (name != NULL) && (payload != NULL))
+  if ((G_psClient.connected()) && (strlen(G_mqtt_pub) > 0))
   {
     char topic[MAX_MQTT_LEN] ;
-    unsigned char mac[6] ;
-    WiFi.macAddress(mac) ;
-    sprintf (topic, "%s/%x:%x:%x:%x:%x:%x/%s", G_mqtt_pub,
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], name) ;
+    char payload[BUF_MEDIUM] ;
+
+    snprintf (topic, MAX_MQTT_LEN, "%s/%s/%s",
+              G_mqtt_pub, G_hostname, p->name) ;
+    f_buildMetric (p, r, 1, payload) ;
+
+    /* finally, append the value from "r" to "payload" as a string */
+
+    char v[BUF_SIZE] ;
+    if (p->num_int_results > 0)
+      sprintf (v, " %d", r->i_value) ;
+    else
+      sprintf (v, " %d.%02d", int(r->f_value), (int)(r->f_value*100)%100) ;
+    strcat (payload, v) ;
     G_psClient.publish (topic, payload) ;
     G_Metrics.mqttPubs++ ;
   }
@@ -1275,12 +1337,15 @@ void f_v1api ()                                 // for uri "/v1"
 }
 
 /*
-   This is a convenience function called from f_handleWebMetrics(). Our job
-   is to build up all the metric with metadata tags for a given result "r",
-   writing it into the supplied "metric" buffer.
+   This is a convenience function called from f_handleWebMetrics() and also
+   f_delivery. Our job is to build up the metric entry with metadata tags for
+   a given result "r", writing it into the supplied "metric" buffer. If
+   "mqtt_tags" is non-zero, tags from MQTT_TAGS_FILE are added too. Note that
+   the result value is not written into the output string "metric".
 */
 
-void f_buildMetric (S_thread_entry *p, S_thread_result *r, char *metric)
+void f_buildMetric (S_thread_entry *p, S_thread_result *r, int mqtt_tags,
+                    char *metric)
 {
   int i ;
   char one_tag[BUF_SIZE], all_tags[BUF_MEDIUM] ;
@@ -1291,7 +1356,7 @@ void f_buildMetric (S_thread_entry *p, S_thread_result *r, char *metric)
   strcpy (metric, label) ;
 
   all_tags[0] = 0 ;
-  for (i=0 ; p->tags[i] != NULL ; i++)          // join up all static tags
+  for (i=0 ; p->tags[i] != NULL ; i++)          // join up all task tags
   {
     if (strlen(all_tags) > 0)
       strcat (all_tags, ",") ;
@@ -1303,6 +1368,12 @@ void f_buildMetric (S_thread_entry *p, S_thread_result *r, char *metric)
     if (strlen(all_tags) > 0)
       strcat (all_tags, ",") ;
     strcat (all_tags, one_tag) ;
+  }
+  if (mqtt_tags)
+  {
+
+
+
   }
   if (strlen(all_tags) > 0)                     // append all_tags to "metric"
   {
@@ -1372,7 +1443,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
         for (r=0 ; r < G_thread_entry[idx].num_int_results ; r++)
         {
           f_buildMetric (&G_thread_entry[idx],
-                         &G_thread_entry[idx].results[r], metric) ;
+                         &G_thread_entry[idx].results[r], 0, metric) ;
           sprintf (line, "%s %d\n", metric,
                    G_thread_entry[idx].results[r].i_value) ;
           strcat (G_reply_buf, line) ;
@@ -1380,7 +1451,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
         for (r=0 ; r < G_thread_entry[idx].num_float_results ; r++)
         {
           f_buildMetric (&G_thread_entry[idx],
-                         &G_thread_entry[idx].results[r], metric) ;
+                         &G_thread_entry[idx].results[r], 0, metric) ;
           String v = String (G_thread_entry[idx].results[r].f_value) ;
           sprintf (line, "%s %s\n", metric, v.c_str()) ;
           strcat (G_reply_buf, line) ;
@@ -1738,9 +1809,8 @@ void ft_counter (S_thread_entry *p)
   int num_cycles = REPORT_INTERVAL / delay_ms ;
   if (p->results[0].i_value % num_cycles == 0)
   {
-    char s[BUF_SIZE] ;
-    sprintf (s, "counter:%d", p->results[0].i_value) ;
-    f_delivery (p->name, s) ;
+    p->results[0].i_value++ ;
+    f_delivery (p, &p->results[0]) ;
   }
 
   /* at this point, just increment our counter and take a break. */
@@ -1824,10 +1894,8 @@ void ft_aread (S_thread_entry *p)
     }
     if (cur_state != prev_state)
     {
-      char s[BUF_SIZE] ;
-      sprintf (s, "state changed %s->%s %d",
-               prev_state, cur_state, cur_value) ;
-      f_delivery (p->name, s) ;
+      p->results[0].i_value = cur_value ;
+      f_delivery (p, &p->results[0]) ;
     }
   }
 
@@ -1967,9 +2035,8 @@ void ft_dread (S_thread_entry *p)
   int cur_value = digitalRead (pin) ;
   if ((p->loops > 1) && (cur_value != p->results[0].i_value))
   {
-    char s[BUF_SIZE] ;
-    sprintf (s, "state changed %d->%d", p->results[0].i_value, cur_value) ;
-    f_delivery (p->name, s) ;
+    p->results[0].i_value = cur_value ;
+    f_delivery (p, &p->results[0]) ;
   }
   p->results[0].i_value = cur_value ;
   delay (delay_ms) ;
@@ -2041,20 +2108,17 @@ void ft_hcsr04 (S_thread_entry *p)
 
       if (samples > 1)
       {
-        char *prev_state = "high" ;
+        int prev_state = 1 ;
         if (p->results[3].f_value < (double) thres)
-          prev_state = "low" ;
-
-        char *cur_state = "high" ;
+          prev_state = 0 ;
+        int cur_state = 1 ;
         if (f_value < (double) thres)
-          cur_state = "low" ;
+          cur_state = 0 ;
 
-        if (strcmp(prev_state, cur_state) != 0)
+        if (prev_state != cur_state)
         {
-          char s[BUF_SIZE] ;
-          sprintf (s, "state changed %s->%s %.2f",
-                   prev_state, cur_state, f_value) ;
-          f_delivery (p->name, s) ;
+          p->results[3].f_value = f_value ;
+          f_delivery (p, &p->results[3]) ;
         }
       }
       p->results[3].f_value = f_value ; // use this to store previous value
@@ -2422,9 +2486,11 @@ void f_action (char **tokens)
     #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
       strcat (G_reply_buf,
               "\r\n[Config Files]\r\n"
+              "/hostname   <hostname>\r\n"
               "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
               "/mqtt.pub   <topic to publish>\r\n"
               "/mqtt.sub   <topic to subscribe>\r\n"
+              "/mqtt.tags  <meta=\"value\",...>\r\n"
               "/udp.port   <port>\r\n"
               "/wifi.ssid  <ssid>\r\n"
               "/wifi.pw    <pw>\r\n") ;
@@ -2644,6 +2710,7 @@ void setup ()
   G_serial_pos = 0 ;
   G_reply_buf = (char*) malloc (REPLY_SIZE+1) ;
   G_reply_buf[0] = 0 ;
+  G_hostname[0] = 0 ;
 
   #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
@@ -2651,6 +2718,7 @@ void setup ()
     cfg_wifi_pw[0] = 0 ;
     G_mqtt_pub[0] = 0 ;
     G_mqtt_sub[0] = 0 ;
+    G_mqtt_tags[0] = 0 ;
     G_next_cron = CRON_INTERVAL * 1000 ;
     pinMode (LED_BUILTIN, OUTPUT) ;
 
