@@ -174,10 +174,13 @@
 
      - The global "G_psClient" object handles all MQTT work.
      - A thread may deliver event data by calling f_delivery().
-     - The f_delivery() function delivers "<metric>" via MQTT to a topic with
-       the format: "<publish_prefix>/<hostname>/<thread_name>"
+     - The f_delivery() function prepares "<metric>" for delivery via MQTT to
+       a topic with the format: "<publish_prefix>/<hostname>/<thread_name>"
      - Each EC subscribes to a topic "<subscribe_prefix>/<hostname>" and awaits
        commands sent to it.
+     - the main thread performs the actual MQTT publish since this library is
+       not thread safe. G_publish_lock controls access to G_pub_topic and
+       G_pub_payload.
 
    Notes
 
@@ -222,7 +225,7 @@
 
   #define MAX_SSID_LEN 32
   #define MAX_PASSWD_LEN 64             // maximum wifi password length
-  #define MAX_MQTT_LEN 80               // maximum mqtt message buffer
+  #define MAX_MQTT_LEN 128              // maximum mqtt topic/message buffer
   #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
   #define WEB_PORT 80                   // web server listens on this port
   #define CRON_INTERVAL 60              // how often we run f_cron()
@@ -241,13 +244,15 @@
   char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
   int cfg_udp_port=0 ;
 
-  WiFiUDP G_Udp ;                   // our UDP server socket
-  int G_req_connect = 0 ;           // threads requesting wifi/mqtt connection
-  char G_mqtt_pub[MAX_MQTT_LEN] ;   // mqtt topic prefix we publish to
-  char G_mqtt_sub[MAX_MQTT_LEN] ;   // mqtt topic prefix we subscribe to
-  char G_mqtt_tags[MAX_MQTT_LEN] ;  // tags included in each publish
+  WiFiUDP G_Udp ;                    // our UDP server socket
+  int G_req_connect = 0 ;            // threads requesting wifi/mqtt connection
+  char G_mqtt_pub[MAX_MQTT_LEN] ;    // mqtt topic prefix we publish to
+  char G_mqtt_sub[MAX_MQTT_LEN] ;    // mqtt topic prefix we subscribe to
+  char G_mqtt_tags[MAX_MQTT_LEN] ;   // tags included in each publish
   char G_mqtt_stopic[MAX_MQTT_LEN] ; // the (command) topic we subscribe to
-  unsigned long G_next_cron ;       // millis() time of next run
+  char G_pub_topic[MAX_MQTT_LEN] ;   // current topic we publish to
+  char G_pub_payload[MAX_MQTT_LEN] ; // current payload we will publish
+  unsigned long G_next_cron ;        // millis() time of next run
 
 #endif
 
@@ -267,7 +272,7 @@
 
   WebServer Webs(WEB_PORT) ;    // our built-in webserver
   int G_sleep = 0 ;             // a flag to tell us to enter sleep mode
-  pthread_mutex_t G_delivery_lock ;     // lock to serialize f_delivery()
+  pthread_mutex_t G_publish_lock ;      // signal main thread to publish()
 
   #define MAX_THREADS 16
   #define MAX_THREAD_NAME 40
@@ -392,6 +397,7 @@ struct internal_metrics
   unsigned long mqttPubs ;
   unsigned long mqttSubs ;
   unsigned long mqttOversize ;
+  unsigned long mqttPubWaits ;
 } ;
 typedef struct internal_metrics S_Metrics ;
 S_Metrics G_Metrics ;
@@ -1131,11 +1137,6 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
 void f_mqtt_connect ()
 {
   char buf[BUF_SIZE], line[BUF_SIZE] ;
-
-  #ifdef ARDUINO_ESP32_DEV
-  pthread_mutex_lock (&G_delivery_lock) ;
-  #endif
-
   File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
   if (f != NULL)
   {
@@ -1153,11 +1154,6 @@ void f_mqtt_connect ()
     sprintf (line, "WARNING: Cannot read MQTT publish file '%s'.",
              MQTT_PUB_FILE) ;
     Serial.println (line) ;
-
-    #ifdef ARDUINO_ESP32_DEV
-    pthread_mutex_unlock (&G_delivery_lock) ;
-    #endif
-
     return ;
   }
   else
@@ -1256,10 +1252,6 @@ void f_mqtt_connect ()
       }
     }
   }
-
-  #ifdef ARDUINO_ESP32_DEV
-  pthread_mutex_unlock (&G_delivery_lock) ;
-  #endif
 }
 
 /*
@@ -1276,54 +1268,56 @@ void f_mqtt_connect ()
 
 void f_delivery (S_thread_entry *p, S_thread_result *r)
 {
-  #ifdef ARDUINO_ESP32_DEV
-  pthread_mutex_lock (&G_delivery_lock) ;
-  #endif
+  char topic[MAX_MQTT_LEN] ;
+  char payload[BUF_MEDIUM] ;
 
-  if (G_psClient.connected() == false)
+  snprintf (topic, MAX_MQTT_LEN, "%s/%s/%s", G_mqtt_pub, G_hostname, p->name) ;
+  f_buildMetric (p, r, 1, payload) ;
+
+  /* finally, append the value from "r" to "payload" as a string */
+
+  char v[BUF_SIZE] ;
+  if (p->num_int_results > 0)
+    sprintf (v, " %d", r->i_value) ;
+  else
+    sprintf (v, " %d.%02d", int(r->f_value), (int)(r->f_value*100)%100) ;
+  strcat (payload, v) ;
+
+  if (G_debug)
+  {
+    Serial.print ("DEBUG: publish(") ;
+    Serial.print (topic) ;
+    Serial.print (")(") ;
+    Serial.print (payload) ;
+    Serial.println (")") ;
+  }
+
+  /* write to G_pub_topic and G_pub_payload, only when they're empty */
+
+  while (1)
   {
     #ifdef ARDUINO_ESP32_DEV
-    pthread_mutex_unlock (&G_delivery_lock) ;
+    pthread_mutex_lock (&G_publish_lock) ;
     #endif
 
-    G_req_connect = 1 ;
-    Serial.println ("WARNING: MQTT not connected.") ;
-    return ;
-  }
-
-  if ((G_psClient.connected()) && (strlen(G_mqtt_pub) > 0))
-  {
-    char topic[MAX_MQTT_LEN] ;
-    char payload[BUF_MEDIUM] ;
-
-    snprintf (topic, MAX_MQTT_LEN, "%s/%s/%s",
-              G_mqtt_pub, G_hostname, p->name) ;
-    f_buildMetric (p, r, 1, payload) ;
-
-    /* finally, append the value from "r" to "payload" as a string */
-
-    char v[BUF_SIZE] ;
-    if (p->num_int_results > 0)
-      sprintf (v, " %d", r->i_value) ;
+    if (strlen(G_pub_topic) == 0)
+      break ;
     else
-      sprintf (v, " %d.%02d", int(r->f_value), (int)(r->f_value*100)%100) ;
-    strcat (payload, v) ;
-
-    if (G_debug)
     {
-      Serial.print ("DEBUG: publish(") ;
-      Serial.print (topic) ;
-      Serial.print (")(") ;
-      Serial.print (payload) ;
-      Serial.println (")") ;
-    }
+      #ifdef ARDUINO_ESP32_DEV
+      pthread_mutex_unlock (&G_publish_lock) ;
+      #endif
 
-    G_psClient.publish (topic, payload) ;
-    G_Metrics.mqttPubs++ ;
+      G_Metrics.mqttPubWaits++ ;
+      delay (100) ;
+    }
   }
+
+  strcpy (G_pub_topic, topic) ;
+  strcpy (G_pub_payload, payload) ;
 
   #ifdef ARDUINO_ESP32_DEV
-  pthread_mutex_unlock (&G_delivery_lock) ;
+  pthread_mutex_unlock (&G_publish_lock) ;
   #endif
 }
 
@@ -1339,13 +1333,12 @@ void f_handleWeb ()                             // for uri "/"
 
 void f_v1api ()                                 // for uri "/v1"
 {
-  if (G_debug)
-    Serial.println ("DEBUG: f_v1api()") ;
-
-
   if ((Webs.args() != 1) ||                     // expect exactly 1 arg
       (Webs.argName(0) != "cmd"))
   {
+    if (G_debug)
+      Serial.println ("DEBUG: f_v1api() invalid usage") ;
+
     Webs.send (504, "text/plain", "Invalid usage\r\n") ;
     return ;
   }
@@ -1354,6 +1347,14 @@ void f_v1api ()                                 // for uri "/v1"
   strncpy (url_buf, Webs.arg(0).c_str(), BUF_MEDIUM) ;
   G_Metrics.restInBytes = G_Metrics.restInBytes + strlen(url_buf) ;
   G_Metrics.restCmds++ ;
+
+  if (G_debug)
+  {
+    char line[BUF_MEDIUM] ;
+    sprintf (line, "DEBUG: f_v1api() [%s]", url_buf) ;
+    Serial.println (line) ;
+  }
+
   int idx = 0 ;
   char *tokens[MAX_TOKENS] ;
   char *p = strtok (url_buf, " ") ;
@@ -1447,7 +1448,8 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            "ec_mqtt_connects %ld\n"
            "ec_mqtt_pubs %ld\n"
            "ec_mqtt_subs %ld\n"
-           "ec_mqtt_oversize %ld\n",
+           "ec_mqtt_oversize %ld\n"
+           "ec_mqtt_pub_waits %ld\n",
            millis() / 1000,
            G_Metrics.serialInBytes,
            G_Metrics.serialCmds,
@@ -1459,7 +1461,8 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            G_Metrics.mqttConnects,
            G_Metrics.mqttPubs,
            G_Metrics.mqttSubs,
-           G_Metrics.mqttOversize
+           G_Metrics.mqttOversize,
+           G_Metrics.mqttPubWaits
            ) ;
 
   #ifdef ARDUINO_ESP32_DEV
@@ -1655,8 +1658,8 @@ void f_ota (char *url)
   unsigned long tv_end = millis () ;
   if ((Update.isFinished()) && (Update.end()))
   {
-    sprintf (line, "NOTICE: Firmware updated in %d secs, please reboot.\r\n",
-             (tv_end - tv_start) / 1000) ;
+    sprintf (line, "NOTICE: Flashed %d bytes in %d secs, please reboot.\r\n",
+             amt, (tv_end - tv_start) / 1000) ;
     strcat (G_reply_buf, line) ;
     Serial.print (line) ;
   }
@@ -2788,6 +2791,8 @@ void setup ()
     G_mqtt_sub[0] = 0 ;
     G_mqtt_tags[0] = 0 ;
     G_mqtt_stopic[0] = 0 ;
+    G_pub_topic[0] = 0 ;
+    G_pub_payload[0] = 0 ;
     G_next_cron = CRON_INTERVAL * 1000 ;
     pinMode (LED_BUILTIN, OUTPUT) ;
 
@@ -2866,17 +2871,15 @@ void setup ()
     }
 
     #if defined ARDUINO_ESP32_DEV
-
      G_thread_entry = (S_thread_entry*) malloc (sizeof(S_thread_entry) *
                                                 MAX_THREADS) ;
-
      int i ;
      for (i=0 ; i < MAX_THREADS ; i++)
        memset (&G_thread_entry[i], 0, sizeof(S_thread_entry)) ;
        pthread_mutex_init (&G_thread_entry[i].lock, NULL) ;
      sprintf (line, "NOTICE: Max allowed threads %d.", MAX_THREADS) ;
      Serial.println (line) ;
-     pthread_mutex_init (&G_delivery_lock, NULL) ;
+     pthread_mutex_init (&G_publish_lock, NULL) ;
     #endif
 
     digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
@@ -3022,9 +3025,39 @@ void loop ()
     }
   }
 
-  Webs.handleClient () ;        // handle http requests
-  if (G_psClient.connected())   // handle incoming messages & keepalives
-    G_psClient.loop () ;
+  /* if MQTT is connected, handle publish / subscriptions now */
+
+  if (G_psClient.connected())
+  {
+    G_psClient.loop () ;        // handle incoming messages & keepalives
+
+    #ifdef ARDUINO_ESP32_DEV
+    pthread_mutex_lock (&G_publish_lock) ;
+    #endif
+
+    if (strlen(G_pub_topic) > 0)
+    {
+      if (G_debug)
+      {
+        char line[BUF_SIZE] ;
+        sprintf (line, "DEBUG: publishing %d bytes.", strlen(G_pub_payload)) ;
+        Serial.println (line) ;
+      }
+
+      G_psClient.publish (G_pub_topic, G_pub_payload) ;
+      G_Metrics.mqttPubs++ ;
+      G_pub_topic[0] = 0 ;
+      G_pub_payload[0] = 0 ;
+    }
+
+    #ifdef ARDUINO_ESP32_DEV
+    pthread_mutex_unlock (&G_publish_lock) ;
+    #endif
+  }
+
+  /* handle web requests */
+
+  Webs.handleClient () ;
 
   /* once in a while, blink once if wifi is connected, twice otherwise. */
 
