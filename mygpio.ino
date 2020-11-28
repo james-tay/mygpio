@@ -246,6 +246,7 @@
   char G_mqtt_pub[MAX_MQTT_LEN] ;   // mqtt topic prefix we publish to
   char G_mqtt_sub[MAX_MQTT_LEN] ;   // mqtt topic prefix we subscribe to
   char G_mqtt_tags[MAX_MQTT_LEN] ;  // tags included in each publish
+  char G_mqtt_stopic[MAX_MQTT_LEN] ; // the (command) topic we subscribe to
   unsigned long G_next_cron ;       // millis() time of next run
 
 #endif
@@ -938,7 +939,7 @@ void f_wifi (char **tokens)
   else
   if (strcmp(tokens[1], "status") == 0)                         // status
   {
-    sprintf (line, "cfg_wifi_ssid: %s\r\n", cfg_wifi_ssid) ;
+    snprintf (line, BUF_SIZE, "cfg_wifi_ssid: %s\r\n", cfg_wifi_ssid) ;
     strcat (G_reply_buf, line) ;
     if (strlen(cfg_wifi_pw) > 0)
       strcat (G_reply_buf, "cfg_wifi_pw: (set)\r\n") ;
@@ -969,17 +970,17 @@ void f_wifi (char **tokens)
         strcat (G_reply_buf, "UNKNOWN\r\n") ; break ;
     }
 
-    sprintf (line, "rssi: %d dBm\r\n", WiFi.RSSI()) ;
+    snprintf (line, BUF_SIZE, "rssi: %d dBm\r\n", WiFi.RSSI()) ;
     strcat (G_reply_buf, line) ;
-    sprintf (line, "udp_port: %d\r\n", cfg_udp_port) ;
+    snprintf (line, BUF_SIZE, "udp_port: %d\r\n", cfg_udp_port) ;
     strcat (G_reply_buf, line) ;
 
     unsigned char mac[6] ;
     WiFi.macAddress(mac) ;
-    sprintf (line, "wifi_mac: %x:%x:%x:%x:%x:%x\r\n",
+    snprintf (line, BUF_SIZE, "wifi_mac: %x:%x:%x:%x:%x:%x\r\n",
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
     strcat (G_reply_buf, line) ;
-    sprintf (line, "wifi_ip: %s/%s\r\n",
+    snprintf (line, BUF_SIZE, "wifi_ip: %s/%s\r\n",
              WiFi.localIP().toString().c_str(),
              WiFi.subnetMask().toString().c_str()) ;
     strcat (G_reply_buf, line) ;
@@ -1011,7 +1012,12 @@ void f_wifi (char **tokens)
 
     if (strlen(G_hostname) > 0)
     {
-      sprintf (line, "hostname: %s\r\n", G_hostname) ;
+      snprintf (line, BUF_SIZE, "hostname: %s\r\n", G_hostname) ;
+      strcat (G_reply_buf, line) ;
+    }
+    if (strlen(G_mqtt_stopic) > 0)
+    {
+      snprintf (line, BUF_SIZE, "subscribed_topic: %s\r\n", G_mqtt_stopic) ;
       strcat (G_reply_buf, line) ;
     }
   }
@@ -1216,6 +1222,7 @@ void f_mqtt_connect ()
               f.close () ;
             }
 
+            strcpy (G_mqtt_stopic, topic) ;
             G_psClient.subscribe (topic) ;
             G_psClient.setCallback (f_mqtt_callback) ;
           }
@@ -1313,8 +1320,8 @@ void f_v1api ()                                 // for uri "/v1"
     return ;
   }
 
-  char url_buf[BUF_SIZE] ;
-  strncpy (url_buf, Webs.arg(0).c_str(), BUF_SIZE) ;
+  char url_buf[BUF_MEDIUM] ;
+  strncpy (url_buf, Webs.arg(0).c_str(), BUF_MEDIUM) ;
   G_Metrics.restInBytes = G_Metrics.restInBytes + strlen(url_buf) ;
   G_Metrics.restCmds++ ;
   int idx = 0 ;
@@ -1330,7 +1337,16 @@ void f_v1api ()                                 // for uri "/v1"
   G_reply_buf[0] = 0 ;
   if (idx > 0)
     f_action(tokens) ;
-  if (strlen(G_reply_buf) > 0)
+  int rlen = strlen (G_reply_buf) ;
+  if (rlen >= REPLY_SIZE)
+  {
+    char line[BUF_SIZE] ;
+    sprintf (line, "\r\nWARNING: G_reply_buf is %d bytes, max %d.\r\n",
+             rlen, REPLY_SIZE) ;
+    Serial.print (line) ;
+  }
+
+  if (rlen > 0)
     Webs.send (200, "text/plain", G_reply_buf) ;
   else
     Webs.send (504, "text/plain", "No response\r\n") ;
@@ -2689,7 +2705,8 @@ void f_action (char **tokens)
     ledcDetachPin (pin) ;
     pinMode (pin, INPUT) ;              // this suppresses "buzzing" noises
 
-    sprintf (G_reply_buf, "PWM %.2fhz\r\n", d) ;
+    sprintf (line, "PWM %.2fhz\r\n", d) ;
+    strcat (G_reply_buf, line) ;
   }
   #endif
   else
@@ -2719,6 +2736,7 @@ void setup ()
     G_mqtt_pub[0] = 0 ;
     G_mqtt_sub[0] = 0 ;
     G_mqtt_tags[0] = 0 ;
+    G_mqtt_stopic[0] = 0 ;
     G_next_cron = CRON_INTERVAL * 1000 ;
     pinMode (LED_BUILTIN, OUTPUT) ;
 
@@ -2769,7 +2787,7 @@ void setup ()
       if ((f_udp) && (f_udp.size() > 0))
       {
         char msg[BUF_SIZE] ;
-        int amt = f_udp.readBytes (msg, 6) ;
+        int amt = f_udp.readBytes (msg, 6) ; // port numbers are 5 chars max
         if (amt > 0)
         {
           msg[amt] = 0 ;
@@ -2886,8 +2904,17 @@ void loop ()
     G_reply_buf[0] = 0 ;
     if (tokens[0] != NULL)
       f_action (tokens) ;
-    if (strlen(G_reply_buf) > 0)
+    int rlen = strlen (G_reply_buf) ;
+    if (rlen > 0)
     {
+      if (rlen >= REPLY_SIZE)
+      {
+        char line[BUF_SIZE] ;
+        sprintf (line, "\r\nWARNING: G_reply_buf is %d bytes, max %d.\r\n",
+                 rlen, REPLY_SIZE) ;
+        Serial.print (line) ;
+      }
+
       Serial.print (G_reply_buf) ;
       if (G_reply_buf[strlen(G_reply_buf)-1] != '\n')
         Serial.print ("\r\n") ;                         // add CRNL if needed
@@ -2899,36 +2926,48 @@ void loop ()
 
   #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
 
-  int pktsize = G_Udp.parsePacket () ;
-  if (pktsize)
+  if (cfg_udp_port > 0)
   {
-    /* if a UDP packet arrived, parse the command and send a response */
-
-    char udp_buf[BUF_SIZE] ;
-    int amt = G_Udp.read (udp_buf, BUF_SIZE) ;
-    if (amt > 0)
+    int pktsize = G_Udp.parsePacket () ;
+    if (pktsize)
     {
-      udp_buf[amt] = 0 ;
-      G_Metrics.udpInBytes = G_Metrics.udpInBytes + amt ;
-      G_Metrics.udpCmds++ ;
+      /* if a UDP packet arrived, parse the command and send a response */
 
-      int idx = 0 ;
-      char *tokens[MAX_TOKENS] ;
-      char *p = strtok (udp_buf, " ") ;
-      while ((p) && (idx < MAX_TOKENS))
+      char udp_buf[BUF_SIZE] ;
+      int amt = G_Udp.read (udp_buf, BUF_SIZE) ;
+      if (amt > 0)
       {
-        tokens[idx] = p ;
-        idx++ ;
-        p = strtok (NULL, " ") ;
-      }
-      tokens[idx] = NULL ;
-      G_reply_buf[0] = 0 ;
-      if (idx > 0)
-        f_action (tokens) ;
+        udp_buf[amt] = 0 ;
+        G_Metrics.udpInBytes = G_Metrics.udpInBytes + amt ;
+        G_Metrics.udpCmds++ ;
 
-      G_Udp.beginPacket (G_Udp.remoteIP(), G_Udp.remotePort()) ;
-      G_Udp.write ((uint8_t*)G_reply_buf, strlen(G_reply_buf)) ;
-      G_Udp.endPacket () ;
+        int idx = 0 ;
+        char *tokens[MAX_TOKENS] ;
+        char *p = strtok (udp_buf, " ") ;
+        while ((p) && (idx < MAX_TOKENS))
+        {
+          tokens[idx] = p ;
+          idx++ ;
+          p = strtok (NULL, " ") ;
+        }
+        tokens[idx] = NULL ;
+        G_reply_buf[0] = 0 ;
+        if (idx > 0)
+          f_action (tokens) ;
+
+        int rlen = strlen (G_reply_buf) ;
+        if (rlen >= REPLY_SIZE)
+        {
+          char line[BUF_SIZE] ;
+          sprintf (line, "\r\nWARNING: G_reply_buf is %d bytes, max %d.\r\n",
+                   rlen, REPLY_SIZE) ;
+          Serial.print (line) ;
+        }
+
+        G_Udp.beginPacket (G_Udp.remoteIP(), G_Udp.remotePort()) ;
+        G_Udp.write ((uint8_t*)G_reply_buf, strlen(G_reply_buf)) ;
+        G_Udp.endPacket () ;
+      }
     }
   }
 
