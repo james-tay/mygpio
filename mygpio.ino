@@ -291,7 +291,6 @@
 
   struct thread_result_s
   {
-    char *metric ;                      // the metric we're displaying
     int num_tags ;                      // number of meta data tags
     char *meta[MAX_THREAD_RESULT_TAGS] ;  // array of meta tags
     char *data[MAX_THREAD_RESULT_TAGS] ;  // array of data tags
@@ -370,6 +369,7 @@
 
 char *G_reply_buf ;             // accumulate our reply message here
 int G_serial_pos ;              // index of bytes received on serial port
+int G_debug ;                   // global debug level
 char G_serial_buf[BUF_SIZE+1] ; // accumulate butes on our serial console
 char G_hostname[BUF_SIZE+1] ;   // our hostname
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
@@ -1132,6 +1132,10 @@ void f_mqtt_connect ()
 {
   char buf[BUF_SIZE], line[BUF_SIZE] ;
 
+  #ifdef ARDUINO_ESP32_DEV
+  pthread_mutex_lock (&G_delivery_lock) ;
+  #endif
+
   File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
   if (f != NULL)
   {
@@ -1149,6 +1153,11 @@ void f_mqtt_connect ()
     sprintf (line, "WARNING: Cannot read MQTT publish file '%s'.",
              MQTT_PUB_FILE) ;
     Serial.println (line) ;
+
+    #ifdef ARDUINO_ESP32_DEV
+    pthread_mutex_unlock (&G_delivery_lock) ;
+    #endif
+
     return ;
   }
   else
@@ -1247,6 +1256,10 @@ void f_mqtt_connect ()
       }
     }
   }
+
+  #ifdef ARDUINO_ESP32_DEV
+  pthread_mutex_unlock (&G_delivery_lock) ;
+  #endif
 }
 
 /*
@@ -1295,6 +1308,16 @@ void f_delivery (S_thread_entry *p, S_thread_result *r)
     else
       sprintf (v, " %d.%02d", int(r->f_value), (int)(r->f_value*100)%100) ;
     strcat (payload, v) ;
+
+    if (G_debug)
+    {
+      Serial.print ("DEBUG: publish(") ;
+      Serial.print (topic) ;
+      Serial.print (")(") ;
+      Serial.print (payload) ;
+      Serial.println (")") ;
+    }
+
     G_psClient.publish (topic, payload) ;
     G_Metrics.mqttPubs++ ;
   }
@@ -1308,11 +1331,18 @@ void f_delivery (S_thread_entry *p, S_thread_result *r)
 
 void f_handleWeb ()                             // for uri "/"
 {
+  if (G_debug)
+    Serial.println ("DEBUG: f_handleWeb()") ;
+
   Webs.send (200, "text/plain", "OK\n") ;
 }
 
 void f_v1api ()                                 // for uri "/v1"
 {
+  if (G_debug)
+    Serial.println ("DEBUG: f_v1api()") ;
+
+
   if ((Webs.args() != 1) ||                     // expect exactly 1 arg
       (Webs.argName(0) != "cmd"))
   {
@@ -1364,7 +1394,7 @@ void f_buildMetric (S_thread_entry *p, S_thread_result *r, int mqtt_tags,
                     char *metric)
 {
   int i ;
-  char one_tag[BUF_SIZE], all_tags[BUF_MEDIUM] ;
+  char all_tags[BUF_MEDIUM] ;
 
   char *label = p->name ;                       // use thread name or metric
   if (p->metric)
@@ -1380,7 +1410,8 @@ void f_buildMetric (S_thread_entry *p, S_thread_result *r, int mqtt_tags,
   }
   for (i=0 ; i < r->num_tags ; i++)             // join up thread's result tags
   {
-    sprintf (one_tag, "%s=%s", r->meta[i], r->data[i]) ;
+    char one_tag[BUF_SIZE] ;
+    snprintf (one_tag, BUF_SIZE, "%s=%s", r->meta[i], r->data[i]) ;
     if (strlen(all_tags) > 0)
       strcat (all_tags, ",") ;
     strcat (all_tags, one_tag) ;
@@ -1401,6 +1432,9 @@ void f_buildMetric (S_thread_entry *p, S_thread_result *r, int mqtt_tags,
 
 void f_handleWebMetrics ()                      // for uri "/metrics"
 {
+  if (G_debug)
+    Serial.println ("DEBUG: f_handleWebMetrics()") ;
+
   sprintf (G_reply_buf,
            "ec_uptime_secs %ld\n"
            "ec_serial_in_bytes %ld\n"
@@ -1637,10 +1671,16 @@ void f_ota (char *url)
 
 void f_cron ()
 {
+  if (G_debug)
+    Serial.println ("DEBUG: f_cron()") ;
+
   if ((WiFi.status() != WL_CONNECTED) &&
       (strlen(cfg_wifi_pw) > 0) &&
       (strlen(cfg_wifi_ssid) > 0))
   {
+    if (G_debug)
+      Serial.println ("DEBUG: f_cron() calling f_wifi(connect)") ;
+
     char *args[3] ;
     args[0] = "wifi" ;
     args[1] = "connect" ;
@@ -1649,6 +1689,8 @@ void f_cron ()
   }
   if (G_psClient.connected() == false)
   {
+    if (G_debug)
+      Serial.println ("DEBUG: f_cron() calling f_mqtt_connect()") ;
     f_mqtt_connect () ;
   }
   G_req_connect = 0 ;
@@ -1825,8 +1867,8 @@ void ft_counter (S_thread_entry *p)
   int num_cycles = REPORT_INTERVAL / delay_ms ;
   if (p->results[0].i_value % num_cycles == 0)
   {
-    p->results[0].i_value++ ;
     f_delivery (p, &p->results[0]) ;
+    p->results[0].i_value++ ;
   }
 
   /* at this point, just increment our counter and take a break. */
@@ -2485,6 +2527,7 @@ void f_action (char **tokens)
   {
     strcat (G_reply_buf,
             "[Common]\r\n"
+            "debug <num>\r\n"
             "hi <GPIO pin>\r\n"
             "lo <GPIO pin>\r\n"
             "aread <GPIO pin> - analog read (always 0 on esp8266)\r\n"
@@ -2542,6 +2585,13 @@ void f_action (char **tokens)
               "esp32 thread_start <name>\r\n"
               "esp32 thread_stop <name>\r\n") ;
     #endif
+  }
+  else
+  if ((strcmp(tokens[0], "debug") == 0) && (tokens[1] != NULL))
+  {
+    G_debug = atoi(tokens[1]) ;
+    sprintf (line, "Debug level set to %d.\r\n", G_debug) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if ((strcmp(tokens[0], "hi") == 0) && (tokens[1] != NULL))
@@ -2725,6 +2775,7 @@ void setup ()
   Serial.println ("\nNOTICE: System boot.") ;
   G_serial_buf[0] = 0 ;
   G_serial_pos = 0 ;
+  G_debug = 0 ;
   G_reply_buf = (char*) malloc (REPLY_SIZE+1) ;
   G_reply_buf[0] = 0 ;
   G_hostname[0] = 0 ;
