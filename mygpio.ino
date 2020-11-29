@@ -1862,13 +1862,13 @@ void ft_counter (S_thread_entry *p)
   }
 
   /*
-     We want to call f_delivery() every REPORT_INTERVAL millisecs. Calculate
-     how often this will happen based on "delay_ms".
+     "delay_ms" will determine how often this function calls f_delivery().
+     For example, call f_delivery() every 10 seconds if delay_ms is 100.
   */
 
-  #define REPORT_INTERVAL 10 * 1000
-  int num_cycles = REPORT_INTERVAL / delay_ms ;
-  if (p->results[0].i_value % num_cycles == 0)
+  #define REPORT_INTERVAL 100
+
+  if (p->results[0].i_value % REPORT_INTERVAL == 0)
   {
     f_delivery (p, &p->results[0]) ;
     p->results[0].i_value++ ;
