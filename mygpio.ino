@@ -5,12 +5,7 @@
      % arduino-cli lib install ArduinoOTA
 
      % arduino-cli compile -b esp32:esp32:esp32 .
-     % arduino-cli compile -b esp8266:esp8266:nodemcuv2 .
-     % arduino-cli compile -b arduino:avr:uno .
-
      % arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32 .
-     % arduino-cli upload -v -p /dev/ttyUSB0 -b esp8266:esp8266:nodemcuv2 .
-     % arduino-cli upload -v -p /dev/ttyUSB0 -b arduino:avr:uno .
 
    Examples
 
@@ -35,17 +30,13 @@
        dht22 13
        lo 12
 
-     test BMP180,       (on nodemcu, SCL is D1, SDA is D2)
+     test BMP180,
        bmp180
 
-     test ADXL335       (on esp32)
+     test ADXL335,
        hi 23
        adxl335 36 39 34 1000 50
        lo 23
-
-     test build-in LED on NodeMCU
-       lo 16
-       hi 16
 
      test wifi client
        wifi ssid superman
@@ -72,8 +63,8 @@
 
      % curl 'http://esp32.example.com/v1?cmd=wifi+status'
 
-     % OTA_URL="http%3A%2F%2Fvip-web.drowningfrog.homenet.org%2Fmygpio.ino.bin"
-     % curl "http://esp32-1/v1?cmd=ots+$OTA_URL"
+     % URL="http://vip-web.drowningfrog.homenet.org/mygpio.ino.bin"
+     % curl "http://esp32-1/v1?cmd=ota+$URL"
 
    Bugs
 
@@ -212,142 +203,56 @@
      - the OTA implementation does not follow HTTP redirects.
 */
 
+#include <pthread.h>
+
+#include <FS.h>
 #include <Wire.h>
+#include <SPIFFS.h>
+#include <Update.h>
+#include <WiFiUdp.h>
+#include <WebServer.h>
+#include <PubSubClient.h>
+
 #include "LiquidCrystal_I2C.h"
 
-/* ====== STUFF COMMON BETWEEN ESP32 and ESP8266 ====== */
+#define MAX_SSID_LEN 32
+#define MAX_PASSWD_LEN 64             // maximum wifi password length
+#define MAX_MQTT_LEN 128              // maximum mqtt topic/message buffer
+#define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
+#define WEB_PORT 80                   // web server listens on this port
+#define CRON_INTERVAL 60              // how often we run f_cron()
 
-#if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-  #include <FS.h>
-  #include <Update.h>
-  #include <WiFiUdp.h>
-  #include <PubSubClient.h>
+#define WIFI_SSID_FILE "/wifi.ssid"
+#define WIFI_PW_FILE "/wifi.pw"
+#define UDP_PORT_FILE "/udp.port"
+#define MQTT_CFG_FILE "/mqtt.cfg"
+#define MQTT_SUB_FILE "/mqtt.sub"
+#define MQTT_PUB_FILE "/mqtt.pub"
+#define MQTT_TAGS_FILE "/mqtt.tags"
+#define AUTOEXEC_FILE "/autoexec.cfg"
+#define HOSTNAME_FILE "/hostname"
 
-  #define MAX_SSID_LEN 32
-  #define MAX_PASSWD_LEN 64             // maximum wifi password length
-  #define MAX_MQTT_LEN 128              // maximum mqtt topic/message buffer
-  #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
-  #define WEB_PORT 80                   // web server listens on this port
-  #define CRON_INTERVAL 60              // how often we run f_cron()
+#define LED_BUILTIN 2
+#define BLINK_ON HIGH
+#define BLINK_OFF LOW
 
-  #define WIFI_SSID_FILE "/wifi.ssid"
-  #define WIFI_PW_FILE "/wifi.pw"
-  #define UDP_PORT_FILE "/udp.port"
-  #define MQTT_CFG_FILE "/mqtt.cfg"
-  #define MQTT_SUB_FILE "/mqtt.sub"
-  #define MQTT_PUB_FILE "/mqtt.pub"
-  #define MQTT_TAGS_FILE "/mqtt.tags"
-  #define AUTOEXEC_FILE "/autoexec.cfg"
-  #define HOSTNAME_FILE "/hostname"
+#define MAX_THREADS 16
+#define MAX_THREAD_NAME 40
+#define MAX_THREAD_ARGS 8             // number of input args
+#define MAX_THREAD_RESULT_TAGS 8      // meta data tags
+#define MAX_THREAD_RESULT_VALUES 16   // output values
+#define MAX_THREAD_CONF_BUF 80        // length of thread's "conf"
+#define MAX_THREAD_TAGS_BUF 80        // length of thread's tags
+#define MAX_THREAD_MSG_BUF 80         // length of thread's "msg"
+#define MAX_THREAD_TAGS 8             // tag pairs in "/tags-<name>"
 
-  char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
-  char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
-  int cfg_udp_port=0 ;
+/* various states for S_thread_entry.state */
 
-  WiFiUDP G_Udp ;                    // our UDP server socket
-  int G_req_connect = 0 ;            // threads requesting wifi/mqtt connection
-  char G_mqtt_pub[MAX_MQTT_LEN] ;    // mqtt topic prefix we publish to
-  char G_mqtt_sub[MAX_MQTT_LEN] ;    // mqtt topic prefix we subscribe to
-  char G_mqtt_tags[MAX_MQTT_LEN] ;   // tags included in each publish
-  char G_mqtt_stopic[MAX_MQTT_LEN] ; // the (command) topic we subscribe to
-  char G_pub_topic[MAX_MQTT_LEN] ;   // current topic we publish to
-  char G_pub_payload[MAX_MQTT_LEN] ; // current payload we will publish
-  unsigned long G_next_cron ;        // millis() time of next run
-
-#endif
-
-/* ====== STUFF SPECIFIC TO ESP32 only or ESP8266 only ====== */
-
-#ifdef ARDUINO_ESP32_DEV        // ***** ESP32 Only ******
-  #define LED_BUILTIN 2
-  #define BLINK_ON HIGH
-  #define BLINK_OFF LOW
-
-  #include <pthread.h>
-  #include <SPIFFS.h>
-  #include <WebServer.h>
-
-  WiFiClient G_wClient ;
-  PubSubClient G_psClient (G_wClient) ;
-
-  WebServer Webs(WEB_PORT) ;    // our built-in webserver
-  int G_sleep = 0 ;             // a flag to tell us to enter sleep mode
-  pthread_mutex_t G_publish_lock ;      // signal main thread to publish()
-
-  #define MAX_THREADS 16
-  #define MAX_THREAD_NAME 40
-  #define MAX_THREAD_ARGS 8             // number of input args
-  #define MAX_THREAD_RESULT_TAGS 8      // meta data tags
-  #define MAX_THREAD_RESULT_VALUES 16   // output values
-  #define MAX_THREAD_CONF_BUF 80        // length of thread's "conf"
-  #define MAX_THREAD_TAGS_BUF 80        // length of thread's tags
-  #define MAX_THREAD_MSG_BUF 80         // length of thread's "msg"
-  #define MAX_THREAD_TAGS 8             // tag pairs in "/tags-<name>"
-
-  /* various states for S_thread_entry.state */
-
-  #define THREAD_READY          0       // ready to be started
-  #define THREAD_STARTING       1       // pthread_create() just got called
-  #define THREAD_RUNNING        2       // thread in f_thread_lifecycle()
-  #define THREAD_WRAPUP         3       // tell a thread to terminate
-  #define THREAD_STOPPED        4       // awaiting pthread_join()
-
-  /* Data structure of a single thread result value (with multiple tags) */
-
-  struct thread_result_s
-  {
-    int num_tags ;                      // number of meta data tags
-    char *meta[MAX_THREAD_RESULT_TAGS] ;  // array of meta tags
-    char *data[MAX_THREAD_RESULT_TAGS] ;  // array of data tags
-    int i_value ;                       // this result's value
-    double f_value ;                    // this result's value
-  } ;
-  typedef struct thread_result_s S_thread_result ;
-
-  /* Data structure to track a single thread, as well as its in/out data */
-
-  struct thread_entry_s
-  {
-    char name[MAX_THREAD_NAME] ;
-    unsigned char state ;
-    pthread_t tid ;
-    pthread_mutex_t lock ;              // lock before making changes here
-
-    /* input arguments to <ft_task> */
-
-    int num_args ;                      // number of input arguments
-    char *in_args[MAX_THREAD_ARGS] ;    // array of pointers into "conf"
-    char conf[MAX_THREAD_CONF_BUF] ;    // main config buffer
-    char tags_buf[MAX_THREAD_TAGS_BUF] ; // metric and tags (optional)
-    char *metric ;                      // pointer into "tags_buf" (optional)
-    char *tags[MAX_THREAD_TAGS+1] ;     // pointers into "tags_bufs" (optional)
-    unsigned long loops ;               // number of <ft_task> calls so far
-    unsigned long ts_started ;        // millis() timestamp of pthread_create()
-    void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
-
-    /* IMPORTANT !!! <ft_task> may modify anything below this point */
-
-    int num_int_results ;               // number of "i_value" results returned
-    int num_float_results ;             // number of "f_value" results returned
-    S_thread_result results[MAX_THREAD_RESULT_VALUES] ;
-    char msg[MAX_THREAD_MSG_BUF] ;      // provide some optional feedback
-  } ;
-  typedef struct thread_entry_s S_thread_entry ;
-  S_thread_entry *G_thread_entry ;
-
-#endif
-
-#ifdef ARDUINO_ESP8266_NODEMCU  // ***** ESP8266 Only *****
-  #define BLINK_ON LOW
-  #define BLINK_OFF HIGH
-
-  #include <ESP8266WiFi.h>
-  #include <ESP8266WebServer.h>
-  ESP8266WebServer Webs(WEB_PORT) ;     // our built-in webserver
-
-  WiFiClient G_wClient ;
-  PubSubClient G_psClient (G_wClient) ;
-#endif
+#define THREAD_READY          0       // ready to be started
+#define THREAD_STARTING       1       // pthread_create() just got called
+#define THREAD_RUNNING        2       // thread in f_thread_lifecycle()
+#define THREAD_WRAPUP         3       // tell a thread to terminate
+#define THREAD_STOPPED        4       // awaiting pthread_join()
 
 /* ====== ALL OTHER GENERAL STUFF ====== */
 
@@ -357,12 +262,7 @@
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
 #define BUF_MEDIUM 256
-
-#if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-  #define REPLY_SIZE 2048
-#else
-  #define REPLY_SIZE 192        // arduino uno has only 2x of SRAM.
-#endif
+#define REPLY_SIZE 2048
 
 /* LCD definitions */
 
@@ -370,16 +270,70 @@
 #define LCD_WIDTH 16
 #define LCD_ROWS 2
 
-/* global variables */
+char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
+char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
+int cfg_udp_port=0 ;
+
+int G_sleep = 0 ;                  // a flag to tell us to enter sleep mode
+int G_req_connect = 0 ;            // threads requesting wifi/mqtt connection
+char G_mqtt_pub[MAX_MQTT_LEN] ;    // mqtt topic prefix we publish to
+char G_mqtt_sub[MAX_MQTT_LEN] ;    // mqtt topic prefix we subscribe to
+char G_mqtt_tags[MAX_MQTT_LEN] ;   // tags included in each publish
+char G_mqtt_stopic[MAX_MQTT_LEN] ; // the (command) topic we subscribe to
+char G_pub_topic[MAX_MQTT_LEN] ;   // current topic we publish to
+char G_pub_payload[MAX_MQTT_LEN] ; // current payload we will publish
 
 char *G_reply_buf ;             // accumulate our reply message here
 int G_serial_pos ;              // index of bytes received on serial port
 int G_debug ;                   // global debug level
 char G_serial_buf[BUF_SIZE+1] ; // accumulate butes on our serial console
 char G_hostname[BUF_SIZE+1] ;   // our hostname
-unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 
-LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
+unsigned long G_next_cron ;        // millis() time of next run
+unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
+pthread_mutex_t G_publish_lock ;      // signal main thread to publish()
+
+/* Data structure of a single thread result value (with multiple tags) */
+
+struct thread_result_s
+{
+  int num_tags ;                      // number of meta data tags
+  char *meta[MAX_THREAD_RESULT_TAGS] ;  // array of meta tags
+  char *data[MAX_THREAD_RESULT_TAGS] ;  // array of data tags
+  int i_value ;                       // this result's value
+  double f_value ;                    // this result's value
+} ;
+typedef struct thread_result_s S_thread_result ;
+
+/* Data structure to track a single thread, as well as its in/out data */
+
+struct thread_entry_s
+{
+  char name[MAX_THREAD_NAME] ;
+  unsigned char state ;
+  pthread_t tid ;
+  pthread_mutex_t lock ;              // lock before making changes here
+
+  /* input arguments to <ft_task> */
+
+  int num_args ;                      // number of input arguments
+  char *in_args[MAX_THREAD_ARGS] ;    // array of pointers into "conf"
+  char conf[MAX_THREAD_CONF_BUF] ;    // main config buffer
+  char tags_buf[MAX_THREAD_TAGS_BUF] ; // metric and tags (optional)
+  char *metric ;                      // pointer into "tags_buf" (optional)
+  char *tags[MAX_THREAD_TAGS+1] ;     // pointers into "tags_bufs" (optional)
+  unsigned long loops ;               // number of <ft_task> calls so far
+  unsigned long ts_started ;        // millis() timestamp of pthread_create()
+  void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
+
+  /* IMPORTANT !!! <ft_task> may modify anything below this point */
+
+  int num_int_results ;               // number of "i_value" results returned
+  int num_float_results ;             // number of "f_value" results returned
+  S_thread_result results[MAX_THREAD_RESULT_VALUES] ;
+  char msg[MAX_THREAD_MSG_BUF] ;      // provide some optional feedback
+} ;
+typedef struct thread_entry_s S_thread_entry ;
 
 /* internal performance metrics */
 
@@ -400,7 +354,15 @@ struct internal_metrics
   unsigned long mqttPubWaits ;
 } ;
 typedef struct internal_metrics S_Metrics ;
+
 S_Metrics G_Metrics ;
+S_thread_entry *G_thread_entry ;
+
+WiFiUDP G_Udp ;                    // our UDP server socket
+WiFiClient G_wClient ;
+PubSubClient G_psClient (G_wClient) ;
+WebServer Webs(WEB_PORT) ;    // our built-in webserver
+LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
 /* function prototypes */
 
@@ -739,12 +701,6 @@ void f_lcd (char **tokens)
   }
 }
 
-/* ------------------------------------------------------------------------- */
-/* Features specific to both ESP8266 and ESP32                               */
-/* ------------------------------------------------------------------------- */
-
-#if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-
 int f_blink (int num)
 {
   #define BLINK_DURATION 10     // just long enough to be noticed
@@ -771,32 +727,9 @@ void f_fs (char **tokens)
 
   if (strcmp(tokens[1], "info") == 0)                           // info
   {
-    #ifdef ARDUINO_ESP8266_NODEMCU
-
-    FSInfo fi ;
-    if (SPIFFS.info (fi))
-    {
-      sprintf (line, "totalBytes: %d\r\nusedBytes: %d\r\nblockSize: %d\r\n",
-               fi.totalBytes, fi.usedBytes, fi.blockSize) ;
-      strcat (G_reply_buf, line) ;
-      sprintf (line, "pageSize: %d\r\nmaxOpenFiles: %d\r\n",
-               fi.pageSize, fi.maxOpenFiles) ;
-      strcat (G_reply_buf, line) ;
-      sprintf (line, "maxPathLength: %d\r\n", fi.maxPathLength) ;
-    }
-    else
-    {
-      strcat (G_reply_buf, "FAULT: Cannot obtain fs info.\r\n") ;
-    }
-
-    #endif
-    #ifdef ARDUINO_ESP32_DEV
-
-      sprintf (line, "totalBytes: %d\r\nusedBytes: %d\r\n",
-               SPIFFS.totalBytes(), SPIFFS.usedBytes()) ;
-      strcat (G_reply_buf, line) ;
-
-    #endif
+    sprintf (line, "totalBytes: %d\r\nusedBytes: %d\r\n",
+             SPIFFS.totalBytes(), SPIFFS.usedBytes()) ;
+    strcat (G_reply_buf, line) ;
   }
   else
   if (strcmp(tokens[1], "format") == 0)                         // format
@@ -813,24 +746,6 @@ void f_fs (char **tokens)
   else
   if (strcmp(tokens[1], "ls") == 0)                             // ls
   {
-    #ifdef ARDUINO_ESP8266_NODEMCU
-
-    Dir dir = SPIFFS.openDir ("/") ;
-    while (dir.next())
-    {
-      String s = dir.fileName () ;
-      int len = s.length()+1 ;
-      char filename[len+1] ;
-      s.toCharArray (filename, len) ;
-      File f = SPIFFS.open (s, "r") ;
-      sprintf (line, "%-8d %s\r\n", f.size(), filename) ;
-      f.close () ;
-      strcat (G_reply_buf, line) ;
-    }
-
-    #endif
-    #ifdef ARDUINO_ESP32_DEV
-
     File root = SPIFFS.open ("/", "r") ;
     File f = root.openNextFile () ;
     while (f)
@@ -840,8 +755,6 @@ void f_fs (char **tokens)
       f = root.openNextFile () ;
     }
     root.close () ;
-
-    #endif
   }
   else
   if ((strcmp(tokens[1], "write") == 0) &&                      // write
@@ -1092,6 +1005,8 @@ void f_wifi (char **tokens)
   }
 }
 
+/* ------------------------------------------------------------------------- */
+
 void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
 {
   char msg[MAX_MQTT_LEN + 1], buf[BUF_MEDIUM] ;
@@ -1296,17 +1211,12 @@ void f_delivery (S_thread_entry *p, S_thread_result *r)
 
   while (1)
   {
-    #ifdef ARDUINO_ESP32_DEV
     pthread_mutex_lock (&G_publish_lock) ;
-    #endif
-
     if (strlen(G_pub_topic) == 0)
       break ;
     else
     {
-      #ifdef ARDUINO_ESP32_DEV
       pthread_mutex_unlock (&G_publish_lock) ;
-      #endif
 
       G_Metrics.mqttPubWaits++ ;
       delay (100) ;
@@ -1316,9 +1226,7 @@ void f_delivery (S_thread_entry *p, S_thread_result *r)
   strcpy (G_pub_topic, topic) ;
   strcpy (G_pub_payload, payload) ;
 
-  #ifdef ARDUINO_ESP32_DEV
   pthread_mutex_unlock (&G_publish_lock) ;
-  #endif
 }
 
 /* callback functions for web server */
@@ -1465,56 +1373,53 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            G_Metrics.mqttPubWaits
            ) ;
 
-  #ifdef ARDUINO_ESP32_DEV
+  /* esp32 specific metrics */
 
-    /* esp32 specific metrics */
+  int idx, threads=0 ;
+  char line[BUF_MEDIUM] ;
 
-    int idx, threads=0 ;
-    char line[BUF_MEDIUM] ;
+  for (idx=0 ; idx < MAX_THREADS ; idx++)
+    if (G_thread_entry[idx].state == THREAD_RUNNING)
+      threads++ ;
 
-    for (idx=0 ; idx < MAX_THREADS ; idx++)
-      if (G_thread_entry[idx].state == THREAD_RUNNING)
-        threads++ ;
+  sprintf (line,
+           "ec_free_heap_bytes %ld\n"
+           "ec_threads_running %d\n",
+           xPortGetFreeHeapSize(),
+           threads) ;
+  strcat (G_reply_buf, line) ;
 
-    sprintf (line,
-             "ec_free_heap_bytes %ld\n"
-             "ec_threads_running %d\n",
-             xPortGetFreeHeapSize(),
-             threads) ;
-    strcat (G_reply_buf, line) ;
+  /* individual thread metrics */
 
-    /* individual thread metrics */
+  char metric[BUF_MEDIUM] ;
 
-    char metric[BUF_MEDIUM] ;
+  for (idx=0 ; idx < MAX_THREADS ; idx++)
+    if (G_thread_entry[idx].state == THREAD_RUNNING)
+    {
+      /* this thread is running, print all result values, including tags */
 
-    for (idx=0 ; idx < MAX_THREADS ; idx++)
-      if (G_thread_entry[idx].state == THREAD_RUNNING)
+      int r, t ;
+      for (r=0 ; r < G_thread_entry[idx].num_int_results ; r++)
       {
-        /* this thread is running, print all result values, including tags */
-
-        int r, t ;
-        for (r=0 ; r < G_thread_entry[idx].num_int_results ; r++)
-        {
-          f_buildMetric (&G_thread_entry[idx],
-                         &G_thread_entry[idx].results[r], 0, metric) ;
-          sprintf (line, "%s %d\n", metric,
-                   G_thread_entry[idx].results[r].i_value) ;
-          strcat (G_reply_buf, line) ;
-        }
-        for (r=0 ; r < G_thread_entry[idx].num_float_results ; r++)
-        {
-          f_buildMetric (&G_thread_entry[idx],
-                         &G_thread_entry[idx].results[r], 0, metric) ;
-          String v = String (G_thread_entry[idx].results[r].f_value) ;
-          sprintf (line, "%s %s\n", metric, v.c_str()) ;
-          strcat (G_reply_buf, line) ;
-        }
+        f_buildMetric (&G_thread_entry[idx],
+                       &G_thread_entry[idx].results[r], 0, metric) ;
+        sprintf (line, "%s %d\n", metric,
+                 G_thread_entry[idx].results[r].i_value) ;
+        strcat (G_reply_buf, line) ;
       }
-
-  #endif
-
+      for (r=0 ; r < G_thread_entry[idx].num_float_results ; r++)
+      {
+        f_buildMetric (&G_thread_entry[idx],
+                       &G_thread_entry[idx].results[r], 0, metric) ;
+        String v = String (G_thread_entry[idx].results[r].f_value) ;
+        sprintf (line, "%s %s\n", metric, v.c_str()) ;
+        strcat (G_reply_buf, line) ;
+      }
+    }
   Webs.send (200, "text/plain", G_reply_buf) ;
 }
+
+/* ------------------------------------------------------------------------- */
 
 void f_ota (char *url)
 {
@@ -1698,8 +1603,6 @@ void f_cron ()
   }
   G_req_connect = 0 ;
 
-  #ifdef ARDUINO_ESP32_DEV
-
   /* If this is our first run, check if AUTOEXEC_FILE exists */
 
   if (G_Metrics.cronRuns == 0)
@@ -1729,19 +1632,8 @@ void f_cron ()
       f.close () ;
     }
   }
-
-  #endif
-
   G_Metrics.cronRuns++ ;
 }
-
-#endif
-
-/* ------------------------------------------------------------------------- */
-/* Features specific to ESP32                                                */
-/* ------------------------------------------------------------------------- */
-
-#ifdef ARDUINO_ESP32_DEV
 
 /*
    "tokens" is a string array of 6x params :
@@ -2518,8 +2410,6 @@ void f_esp32 (char **tokens)
   }
 }
 
-#endif
-
 /* ------------------------------------------------------------------------- */
 
 void f_action (char **tokens)
@@ -2529,8 +2419,7 @@ void f_action (char **tokens)
   if ((strcmp(tokens[0], "?") == 0) || (strcmp(tokens[0], "help") == 0))
   {
     strcat (G_reply_buf,
-            "[Common]\r\n"
-            "debug <num>\r\n"
+            "[GPIO]\r\n"
             "hi <GPIO pin>\r\n"
             "lo <GPIO pin>\r\n"
             "aread <GPIO pin> - analog read (always 0 on esp8266)\r\n"
@@ -2538,56 +2427,50 @@ void f_action (char **tokens)
             "bmp180           - barometric pressure (I2C)\r\n"
             "dht22 <dataPin>  - DHT-22 temperature/humidity sensor\r\n"
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
+            "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
+            "tone <GPIO pin> <freq> <dur(ms)>\r\n"
             "lcd backlight <on/off>\r\n"
             "lcd clear\r\n"
             "lcd init\r\n"
             "lcd print <row> <col> <message...>\r\n"
+
+            "\r\n[System]\r\n"
+            "debug <num>\r\n"
+            "fs format\r\n"
+            "fs info\r\n"
+            "fs ls\r\n"
+            "fs read <filename>\r\n"
+            "fs rm <filename>\r\n"
+            "fs rename <old> <new>\r\n"
+            "fs write <filename> <content>\r\n"
+            "ota <url>\r\n"
+            "reload\r\n"
+            "wifi connect\r\n"
+            "wifi scan\r\n"
+            "wifi status\r\n"
+            "wifi ssid <ssid>\r\n"
+            "wifi pw <password>\r\n"
+            "wifi disconnect\r\n"
             "uptime\r\n"
-            "version\r\n") ;
+            "version\r\n"
 
-    #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-      strcat (G_reply_buf,
-              "\r\n[Config Files]\r\n"
-              "/hostname   <hostname>\r\n"
-              "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
-              "/mqtt.pub   <topic to publish>\r\n"
-              "/mqtt.sub   <topic to subscribe>\r\n"
-              "/mqtt.tags  <meta=\"value\",...>\r\n"
-              "/udp.port   <port>\r\n"
-              "/wifi.ssid  <ssid>\r\n"
-              "/wifi.pw    <pw>\r\n") ;
+            "\r\n[ESP32 specific]\r\n"
+            "esp32 hall\r\n"
+            "esp32 sleep <secs>\r\n"
+            "esp32 thread_help\r\n"
+            "esp32 thread_list\r\n"
+            "esp32 thread_start <name>\r\n"
+            "esp32 thread_stop <name>\r\n"
 
-      strcat (G_reply_buf,
-              "\r\n[ESP8266 or ESP32]\r\n"
-              "fs format\r\n"
-              "fs info\r\n"
-              "fs ls\r\n"
-              "fs read <filename>\r\n"
-              "fs rm <filename>\r\n"
-              "fs rename <old> <new>\r\n"
-              "fs write <filename> <content>\r\n"
-              "ota <url>\r\n"
-              "reload\r\n"
-              "wifi connect\r\n"
-              "wifi scan\r\n"
-              "wifi status\r\n"
-              "wifi ssid <ssid>\r\n"
-              "wifi pw <password>\r\n"
-              "wifi disconnect\r\n") ;
-    #endif
-
-    #ifdef ARDUINO_ESP32_DEV
-      strcat (G_reply_buf,
-              "\r\n[ESP32 only]\r\n"
-              "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
-              "tone <GPIO pin> <freq> <dur(ms)>\r\n"
-              "esp32 hall\r\n"
-              "esp32 sleep <secs>\r\n"
-              "esp32 thread_help\r\n"
-              "esp32 thread_list\r\n"
-              "esp32 thread_start <name>\r\n"
-              "esp32 thread_stop <name>\r\n") ;
-    #endif
+            "\r\n[Config Files]\r\n"
+            "/hostname   <hostname>\r\n"
+            "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
+            "/mqtt.pub   <topic to publish>\r\n"
+            "/mqtt.sub   <topic to subscribe>\r\n"
+            "/mqtt.tags  <meta=\"value\",...>\r\n"
+            "/udp.port   <port>\r\n"
+            "/wifi.ssid  <ssid>\r\n"
+            "/wifi.pw    <pw>\r\n") ;
   }
   else
   if ((strcmp(tokens[0], "debug") == 0) && (tokens[1] != NULL))
@@ -2694,8 +2577,6 @@ void f_action (char **tokens)
   {
     f_lcd (tokens) ;
   }
-
-  #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
   else
   if ((strcmp(tokens[0], "fs") == 0) && (tokens[1] != NULL))
   {
@@ -2718,9 +2599,6 @@ void f_action (char **tokens)
   {
     f_ota (tokens[1]) ;
   }
-  #endif
-
-  #ifdef ARDUINO_ESP32_DEV
   else
   if ((strcmp(tokens[0], "adxl335") == 0) && (tokens[1] != NULL) &&
       (tokens[2] != NULL) && (tokens[3] != NULL) &&
@@ -2761,7 +2639,6 @@ void f_action (char **tokens)
     sprintf (line, "PWM %.2fhz\r\n", d) ;
     strcat (G_reply_buf, line) ;
   }
-  #endif
   else
   {
     strcat (G_reply_buf, "FAULT: Enter 'help' for commands.\r\n") ;
@@ -2783,109 +2660,104 @@ void setup ()
   G_reply_buf[0] = 0 ;
   G_hostname[0] = 0 ;
 
-  #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
+  cfg_wifi_ssid[0] = 0 ;
+  cfg_wifi_pw[0] = 0 ;
+  G_mqtt_pub[0] = 0 ;
+  G_mqtt_sub[0] = 0 ;
+  G_mqtt_tags[0] = 0 ;
+  G_mqtt_stopic[0] = 0 ;
+  G_pub_topic[0] = 0 ;
+  G_pub_payload[0] = 0 ;
+  G_next_cron = CRON_INTERVAL * 1000 ;
+  pinMode (LED_BUILTIN, OUTPUT) ;
 
-    cfg_wifi_ssid[0] = 0 ;
-    cfg_wifi_pw[0] = 0 ;
-    G_mqtt_pub[0] = 0 ;
-    G_mqtt_sub[0] = 0 ;
-    G_mqtt_tags[0] = 0 ;
-    G_mqtt_stopic[0] = 0 ;
-    G_pub_topic[0] = 0 ;
-    G_pub_payload[0] = 0 ;
-    G_next_cron = CRON_INTERVAL * 1000 ;
-    pinMode (LED_BUILTIN, OUTPUT) ;
+  /*
+     if wifi ssid and password are available, try connect to wifi now.
+     if udp server port is defined, configure it now.
+  */
 
-    /*
-       if wifi ssid and password are available, try connect to wifi now.
-       if udp server port is defined, configure it now.
-    */
+  char line[BUF_SIZE] ;
 
-    char line[BUF_SIZE] ;
-
-    if (SPIFFS.begin())
+  if (SPIFFS.begin())
+  {
+    Serial.println ("NOTICE: Checking built-in configuration.") ;
+    File f_ssid = SPIFFS.open (WIFI_SSID_FILE, "r") ;
+    File f_pw = SPIFFS.open (WIFI_PW_FILE, "r") ;
+    if ((f_ssid) && (f_pw) &&
+        (f_ssid.size() > 0) && (f_pw.size() > 0) &&
+        (f_ssid.size() <= MAX_SSID_LEN) && (f_pw.size() <= MAX_PASSWD_LEN))
     {
-      Serial.println ("NOTICE: Checking built-in configuration.") ;
-      File f_ssid = SPIFFS.open (WIFI_SSID_FILE, "r") ;
-      File f_pw = SPIFFS.open (WIFI_PW_FILE, "r") ;
-      if ((f_ssid) && (f_pw) &&
-          (f_ssid.size() > 0) && (f_pw.size() > 0) &&
-          (f_ssid.size() <= MAX_SSID_LEN) && (f_pw.size() <= MAX_PASSWD_LEN))
+      int s_amt = f_ssid.readBytes (cfg_wifi_ssid, MAX_SSID_LEN) ;
+      if (s_amt > 0)
+        cfg_wifi_ssid[s_amt] = 0 ;
+      int p_amt = f_pw.readBytes (cfg_wifi_pw, MAX_PASSWD_LEN) ;
+      if (p_amt > 0)
+        cfg_wifi_pw[p_amt] = 0 ;
+      if ((s_amt > 0) && (p_amt > 0))
       {
-        int s_amt = f_ssid.readBytes (cfg_wifi_ssid, MAX_SSID_LEN) ;
-        if (s_amt > 0)
-          cfg_wifi_ssid[s_amt] = 0 ;
-        int p_amt = f_pw.readBytes (cfg_wifi_pw, MAX_PASSWD_LEN) ;
-        if (p_amt > 0)
-          cfg_wifi_pw[p_amt] = 0 ;
-        if ((s_amt > 0) && (p_amt > 0))
+        sprintf (line, "NOTICE: Wifi config loaded for %s.", cfg_wifi_ssid) ;
+        Serial.println (line) ;
+        WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
+
+        /* fire up our web server only if WiFi is already configured */
+
+        Webs.on ("/", f_handleWeb) ;
+        Webs.on ("/v1", f_v1api) ;
+        Webs.on ("/metrics", f_handleWebMetrics) ;
+        Webs.begin () ;
+        sprintf (line, "NOTICE: Web server started on port %d.", WEB_PORT) ;
+        Serial.println (line) ;
+      }
+    }
+    if (f_ssid)
+      f_ssid.close () ;
+    if (f_pw)
+      f_pw.close () ;
+
+    File f_udp = SPIFFS.open (UDP_PORT_FILE, "r") ;
+    if ((f_udp) && (f_udp.size() > 0))
+    {
+      char msg[BUF_SIZE] ;
+      int amt = f_udp.readBytes (msg, 6) ; // port numbers are 5 chars max
+      if (amt > 0)
+      {
+        msg[amt] = 0 ;
+        cfg_udp_port = atoi (msg) ;
+        if ((cfg_udp_port < 65535) && (cfg_udp_port > 0))
         {
-          sprintf (line, "NOTICE: Wifi config loaded for %s.", cfg_wifi_ssid) ;
+          sprintf (line, "NOTICE: UDP server on port %d.", cfg_udp_port) ;
           Serial.println (line) ;
-          WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
-
-          /* fire up our web server only if WiFi is already configured */
-
-          Webs.on ("/", f_handleWeb) ;
-          Webs.on ("/v1", f_v1api) ;
-          Webs.on ("/metrics", f_handleWebMetrics) ;
-          Webs.begin () ;
-          sprintf (line, "NOTICE: Web server started on port %d.", WEB_PORT) ;
+          G_Udp.begin (cfg_udp_port) ;
+        }
+        else
+        {
+          sprintf (line, "WARNING: Invalid udp port '%s'.", msg) ;
           Serial.println (line) ;
+          cfg_udp_port = 0 ;
         }
       }
-      if (f_ssid)
-        f_ssid.close () ;
-      if (f_pw)
-        f_pw.close () ;
-
-      File f_udp = SPIFFS.open (UDP_PORT_FILE, "r") ;
-      if ((f_udp) && (f_udp.size() > 0))
-      {
-        char msg[BUF_SIZE] ;
-        int amt = f_udp.readBytes (msg, 6) ; // port numbers are 5 chars max
-        if (amt > 0)
-        {
-          msg[amt] = 0 ;
-          cfg_udp_port = atoi (msg) ;
-          if ((cfg_udp_port < 65535) && (cfg_udp_port > 0))
-          {
-            sprintf (line, "NOTICE: UDP server on port %d.", cfg_udp_port) ;
-            Serial.println (line) ;
-            G_Udp.begin (cfg_udp_port) ;
-          }
-          else
-          {
-            sprintf (line, "WARNING: Invalid udp port '%s'.", msg) ;
-            Serial.println (line) ;
-            cfg_udp_port = 0 ;
-          }
-        }
-      }
-      if (f_udp)
-        f_udp.close () ;
     }
-    else
-    {
-      Serial.println ("WARNING: Could not initialize SPIFFS.") ;
-    }
+    if (f_udp)
+      f_udp.close () ;
+  }
+  else
+  {
+    Serial.println ("WARNING: Could not initialize SPIFFS.") ;
+  }
 
-    #if defined ARDUINO_ESP32_DEV
-     G_thread_entry = (S_thread_entry*) malloc (sizeof(S_thread_entry) *
-                                                MAX_THREADS) ;
-     int i ;
-     for (i=0 ; i < MAX_THREADS ; i++)
-       memset (&G_thread_entry[i], 0, sizeof(S_thread_entry)) ;
-       pthread_mutex_init (&G_thread_entry[i].lock, NULL) ;
-     sprintf (line, "NOTICE: Max allowed threads %d.", MAX_THREADS) ;
-     Serial.println (line) ;
-     pthread_mutex_init (&G_publish_lock, NULL) ;
-    #endif
+  G_thread_entry = (S_thread_entry*) malloc (sizeof(S_thread_entry) *
+                                              MAX_THREADS) ;
+  int i ;
+  for (i=0 ; i < MAX_THREADS ; i++)
+    memset (&G_thread_entry[i], 0, sizeof(S_thread_entry)) ;
+    pthread_mutex_init (&G_thread_entry[i].lock, NULL) ;
+  sprintf (line, "NOTICE: Max allowed threads %d.", MAX_THREADS) ;
+  Serial.println (line) ;
+  pthread_mutex_init (&G_publish_lock, NULL) ;
 
-    digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
-    delay (1000) ;
-    digitalWrite (LED_BUILTIN, HIGH) ;
-  #endif
+  digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
+  delay (1000) ;
+  digitalWrite (LED_BUILTIN, HIGH) ;
 
   memset (&G_Metrics, 0, sizeof(G_Metrics)) ;
   Serial.println ("NOTICE: Ready.") ;
@@ -2978,8 +2850,6 @@ void loop ()
     G_serial_pos = 0 ;
   }
 
-  #if defined ARDUINO_ESP8266_NODEMCU || ARDUINO_ESP32_DEV
-
   if (cfg_udp_port > 0)
   {
     int pktsize = G_Udp.parsePacket () ;
@@ -3031,10 +2901,7 @@ void loop ()
   {
     G_psClient.loop () ;        // handle incoming messages & keepalives
 
-    #ifdef ARDUINO_ESP32_DEV
     pthread_mutex_lock (&G_publish_lock) ;
-    #endif
-
     if (strlen(G_pub_topic) > 0)
     {
       if (G_debug)
@@ -3049,10 +2916,7 @@ void loop ()
       G_pub_topic[0] = 0 ;
       G_pub_payload[0] = 0 ;
     }
-
-    #ifdef ARDUINO_ESP32_DEV
     pthread_mutex_unlock (&G_publish_lock) ;
-    #endif
   }
 
   /* handle web requests */
@@ -3079,19 +2943,15 @@ void loop ()
     G_next_cron = G_next_cron + (CRON_INTERVAL * 1000) ;
   }
 
-  #endif
-
   delay (10) ; // mandatory sleep to prevent excessive power drain
 
-  #ifdef ARDUINO_ESP32_DEV
-    if (G_sleep)
-    {
-      G_sleep = 0 ;
-      Serial.println ("NOTICE: entering sleep mode.") ;
-      delay (100) ; // allow serial buffer to flush
-      esp_light_sleep_start () ;
-      Serial.println ("NOTICE: exiting sleep mode.") ;
-    }
-  #endif
+  if (G_sleep)
+  {
+    G_sleep = 0 ;
+    Serial.println ("NOTICE: entering sleep mode.") ;
+    delay (100) ; // allow serial buffer to flush
+    esp_light_sleep_start () ;
+    Serial.println ("NOTICE: exiting sleep mode.") ;
+  }
 }
 
