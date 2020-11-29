@@ -1,9 +1,7 @@
 /*
    Build/Upload
 
-     % arduino-cli lib install PubSubClient
      % arduino-cli lib install ArduinoOTA
-
      % arduino-cli compile -b esp32:esp32:esp32 .
      % arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32 .
 
@@ -46,7 +44,6 @@
      test wifi boot up config
        fs write /wifi.ssid superman
        fs write /wifi.pw changeme
-       fs write /udp.port 8266
 
      test thread creation
        esp32 thread_start count1
@@ -209,9 +206,7 @@
 #include <Wire.h>
 #include <SPIFFS.h>
 #include <Update.h>
-#include <WiFiUdp.h>
 #include <WebServer.h>
-#include <PubSubClient.h>
 
 #include "LiquidCrystal_I2C.h"
 
@@ -224,9 +219,7 @@
 
 #define WIFI_SSID_FILE "/wifi.ssid"
 #define WIFI_PW_FILE "/wifi.pw"
-#define UDP_PORT_FILE "/udp.port"
 #define MQTT_CFG_FILE "/mqtt.cfg"
-#define MQTT_SUB_FILE "/mqtt.sub"
 #define MQTT_PUB_FILE "/mqtt.pub"
 #define MQTT_TAGS_FILE "/mqtt.tags"
 #define AUTOEXEC_FILE "/autoexec.cfg"
@@ -272,14 +265,10 @@
 
 char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
 char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
-int cfg_udp_port=0 ;
 
 int G_sleep = 0 ;                  // a flag to tell us to enter sleep mode
-int G_req_connect = 0 ;            // threads requesting wifi/mqtt connection
 char G_mqtt_pub[MAX_MQTT_LEN] ;    // mqtt topic prefix we publish to
-char G_mqtt_sub[MAX_MQTT_LEN] ;    // mqtt topic prefix we subscribe to
 char G_mqtt_tags[MAX_MQTT_LEN] ;   // tags included in each publish
-char G_mqtt_stopic[MAX_MQTT_LEN] ; // the (command) topic we subscribe to
 char G_pub_topic[MAX_MQTT_LEN] ;   // current topic we publish to
 char G_pub_payload[MAX_MQTT_LEN] ; // current payload we will publish
 
@@ -343,8 +332,6 @@ struct internal_metrics
   unsigned long serialInBytes ;
   unsigned long serialCmds ;
   unsigned long serialOverruns ;
-  unsigned long udpInBytes ;
-  unsigned long udpCmds ;
   unsigned long restInBytes ;
   unsigned long restCmds ;
   unsigned long mqttConnects ;
@@ -358,9 +345,6 @@ typedef struct internal_metrics S_Metrics ;
 S_Metrics G_Metrics ;
 S_thread_entry *G_thread_entry ;
 
-WiFiUDP G_Udp ;                    // our UDP server socket
-WiFiClient G_wClient ;
-PubSubClient G_psClient (G_wClient) ;
 WebServer Webs(WEB_PORT) ;    // our built-in webserver
 LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
@@ -420,6 +404,8 @@ int f_i2c_readUShort (int device, unsigned char addr, unsigned short *result)
   return (1) ;
 }
 
+/* ------------------------------------------------------------------------- */
+/* "Drivers" for various sensor devices                                      */
 /* ------------------------------------------------------------------------- */
 
 /*
@@ -629,6 +615,96 @@ float f_hcsr04 (int trigPin, int echoPin)
 }
 
 /*
+   "tokens" is a string array of 6x params :
+     <don't_care> <x_pin> <y_pin> <z_pin> <total_dur> <interval>
+
+   "i_results" is an array of 10x ints which store the number of samples
+   examined, folled by min/ave/max values of the X/Y/Z axis respectively.
+*/
+
+void f_adxl335 (char **tokens, int *i_results)
+{
+  #define MAX_DURATION 60000 // take readings for a maximum of 60 secs
+
+  int x_value, y_value, z_value ;
+  int x_min, y_min, z_min ;
+  int x_max, y_max, z_max ;
+
+  int samples = 0 ;
+  int x_total = 0, y_total = 0, z_total =0 ;
+
+  int x_pin = atoi (tokens[1]) ;
+  int y_pin = atoi (tokens[2]) ;
+  int z_pin = atoi (tokens[3]) ;
+  unsigned long total_duration = atoi (tokens[4]) ;
+  unsigned long interval = atoi (tokens[5]) ;
+
+  /* sanity check some parameters first */
+
+  if (total_duration > MAX_DURATION) total_duration = MAX_DURATION ;
+  if (total_duration < 1) total_duration = 1 ;
+  if (interval < 1) interval = 1 ;
+
+  pinMode (x_pin, INPUT) ;
+  pinMode (y_pin, INPUT) ;
+  pinMode (z_pin, INPUT) ;
+
+  unsigned long start_time = millis () ;
+  unsigned long end_time = start_time + total_duration ;
+
+  while (start_time < end_time)
+  {
+    x_value = analogRead (x_pin) ;
+    y_value = analogRead (y_pin) ;
+    z_value = analogRead (z_pin) ;
+
+    if (samples == 0)
+    {
+      x_min = x_max = x_value ;
+      y_min = y_max = y_value ;
+      z_min = z_max = z_value ;
+    }
+    else
+    {
+      if (x_value < x_min) x_min = x_value ;
+      if (y_value < y_min) y_min = y_value ;
+      if (z_value < z_min) z_min = z_value ;
+
+      if (x_value > x_max) x_max = x_value ;
+      if (y_value > y_max) y_max = y_value ;
+      if (z_value > z_max) z_max = z_value ;
+    }
+    x_total = x_total + x_value ;
+    y_total = y_total + y_value ;
+    z_total = z_total + z_value ;
+
+    if (interval == 0)
+      start_time = millis () ;
+    else
+    {
+      start_time = start_time + interval ;
+      int nap = start_time - millis() ;
+      if (nap > 0)
+        delay (nap) ;
+    }
+    samples++ ;
+  }
+
+  /* now write our results into the int array */
+
+  i_results[0] = samples ;
+  i_results[1] = x_min ;
+  i_results[2] = x_total / samples ;
+  i_results[3] = x_max ;
+  i_results[4] = y_min ;
+  i_results[5] = y_total / samples ;
+  i_results[6] = y_max ;
+  i_results[7] = z_min ;
+  i_results[8] = z_total / samples ;
+  i_results[9] = z_max ;
+}
+
+/*
    Control an I2C LCD via a LCM1602 module.
 */
 
@@ -700,6 +776,10 @@ void f_lcd (char **tokens)
     strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
 }
+
+/* ------------------------------------------------------------------------- */
+/* System Management                                                         */
+/* ------------------------------------------------------------------------- */
 
 int f_blink (int num)
 {
@@ -888,10 +968,7 @@ void f_wifi (char **tokens)
       default:
         strcat (G_reply_buf, "UNKNOWN\r\n") ; break ;
     }
-
     snprintf (line, BUF_SIZE, "rssi: %d dBm\r\n", WiFi.RSSI()) ;
-    strcat (G_reply_buf, line) ;
-    snprintf (line, BUF_SIZE, "udp_port: %d\r\n", cfg_udp_port) ;
     strcat (G_reply_buf, line) ;
 
     unsigned char mac[6] ;
@@ -904,39 +981,9 @@ void f_wifi (char **tokens)
              WiFi.subnetMask().toString().c_str()) ;
     strcat (G_reply_buf, line) ;
 
-    strcat (G_reply_buf, "mqtt_state: ") ;
-    switch (G_psClient.state())
-    {
-      case MQTT_CONNECTION_TIMEOUT:
-        strcat (G_reply_buf, "MQTT_CONNECTION_TIMEOUT\r\n") ; break ;
-      case MQTT_CONNECTION_LOST:
-        strcat (G_reply_buf, "MQTT_CONNECTION_LOST\r\n") ; break ;
-      case MQTT_CONNECT_FAILED:
-        strcat (G_reply_buf, "MQTT_CONNECT_FAILED\r\n") ; break ;
-      case MQTT_DISCONNECTED:
-        strcat (G_reply_buf, "MQTT_DISCONNECTED\r\n") ; break ;
-      case MQTT_CONNECTED:
-        strcat (G_reply_buf, "MQTT_CONNECTED\r\n") ; break ;
-      case MQTT_CONNECT_BAD_PROTOCOL:
-        strcat (G_reply_buf, "MQTT_CONNECT_BAD_PROTOCOL\r\n") ; break ;
-      case MQTT_CONNECT_BAD_CLIENT_ID:
-        strcat (G_reply_buf, "MQTT_CONNECT_BAD_CLIENT_ID\r\n") ; break ;
-      case MQTT_CONNECT_UNAVAILABLE:
-        strcat (G_reply_buf, "MQTT_CONNECT_UNAVAILABLE\r\n") ; break ;
-      case MQTT_CONNECT_BAD_CREDENTIALS:
-        strcat (G_reply_buf, "MQTT_CONNECT_BAD_CREDENTIALS\r\n") ; break ;
-      case MQTT_CONNECT_UNAUTHORIZED:
-        strcat (G_reply_buf, "MQTT_CONNECT_UNAUTHORIZED\r\n") ; break ;
-    }
-
     if (strlen(G_hostname) > 0)
     {
       snprintf (line, BUF_SIZE, "hostname: %s\r\n", G_hostname) ;
-      strcat (G_reply_buf, line) ;
-    }
-    if (strlen(G_mqtt_stopic) > 0)
-    {
-      snprintf (line, BUF_SIZE, "subscribed_topic: %s\r\n", G_mqtt_stopic) ;
       strcat (G_reply_buf, line) ;
     }
   }
@@ -1006,168 +1053,8 @@ void f_wifi (char **tokens)
 }
 
 /* ------------------------------------------------------------------------- */
-
-void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
-{
-  char msg[MAX_MQTT_LEN + 1], buf[BUF_MEDIUM] ;
-
-  if (length > MAX_MQTT_LEN)
-  {
-    G_Metrics.mqttOversize++ ;
-    return ;
-  }
-  memcpy (msg, payload, length) ;
-  msg[length] = 0 ;
-  G_Metrics.mqttSubs++ ;
-
-  /* print the command we received to console and parse it */
-
-  snprintf (buf, BUF_MEDIUM, "NOTICE: mqtt [%s] %s", topic, msg) ;
-  Serial.println (buf) ;
-
-  int idx = 0 ;
-  char *tokens[MAX_TOKENS] ;
-  char *p = strtok (msg, " ") ;
-  while ((p) && (idx < MAX_TOKENS))
-  {
-    tokens[idx] = p ;
-    idx++ ;
-    p = strtok (NULL, " ") ;
-  }
-  tokens[idx] = NULL ;
-
-  /* now execute the command we've parsed */
-
-  G_reply_buf[0] = 0 ;
-  if (tokens[0] != NULL)
-    f_action (tokens) ;
-  if (strlen (G_reply_buf) > 0)
-  {
-    Serial.print (G_reply_buf) ;
-    if (G_reply_buf[strlen(G_reply_buf)-1] != '\n')
-      Serial.print ("\r\n") ;                         // add CRNL if needed
-  }
-}
-
-void f_mqtt_connect ()
-{
-  char buf[BUF_SIZE], line[BUF_SIZE] ;
-  File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
-  if (f != NULL)
-  {
-    int amt = f.readBytes (buf, BUF_SIZE-1) ;
-    f.close () ;
-    if (amt > 0)
-    {
-      buf[amt] = 0 ;
-      strcpy (G_mqtt_sub, buf) ;
-    }
-  }
-  f = SPIFFS.open (MQTT_PUB_FILE, "r") ;      // publish file is mandatory
-  if (f == NULL)
-  {
-    sprintf (line, "WARNING: Cannot read MQTT publish file '%s'.",
-             MQTT_PUB_FILE) ;
-    Serial.println (line) ;
-    return ;
-  }
-  else
-  {
-    int amt = f.readBytes (buf, BUF_SIZE-1) ;
-    f.close () ;
-    if (amt > 0)
-    {
-      buf[amt] = 0 ;
-      strcpy (G_mqtt_pub, buf) ;
-    }
-  }
-
-  f = SPIFFS.open (MQTT_CFG_FILE, "r") ;      // broker config is mandatory
-  if (f == NULL)
-  {
-    sprintf (line, "WARNING: Cannot read MQTT subscribe file '%s'.",
-             MQTT_CFG_FILE) ;
-    Serial.println (line) ;
-  }
-  else
-  {
-    int amt = f.readBytes (buf, BUF_SIZE-1) ;
-    f.close () ;
-    if (amt > 0)
-    {
-      buf[amt] = 0 ;
-      char *mqtt_host, *mqtt_port, *user, *pw ;
-
-      if (((mqtt_host = strtok (buf, ",")) == NULL) ||
-          ((mqtt_port = strtok (NULL, ",")) == NULL) ||
-          ((user = strtok (NULL, ",")) == NULL) ||
-          ((pw = strtok (NULL, ",")) == NULL))
-      {
-        sprintf (line, "WARNING: Cannot parse %s.", MQTT_CFG_FILE) ;
-        Serial.println (line) ;
-      }
-      else
-      {
-        char id[BUF_SIZE] ;
-        unsigned char mac[6] ;
-        WiFi.macAddress(mac) ;
-        sprintf (id, "%x:%x:%x:%x:%x:%x",
-                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
-        G_psClient.setServer (mqtt_host, atoi(mqtt_port)) ;
-        if (G_psClient.connect (id, user, pw))
-        {
-          G_Metrics.mqttConnects++ ;
-          if (strlen(G_mqtt_sub) > 0)
-          {
-            /* by default, subscribe to a topic "<subscribe_prefix>/<mac>" */
-
-            char topic[MAX_MQTT_LEN] ;
-            snprintf (topic, MAX_MQTT_LEN, "%s/%s", G_mqtt_sub, id) ;
-
-            /*
-               subscribe to "<subscribe_prefix>/<hostname>" if HOSTNAME_FILE
-               exists
-            */
-
-            File f = SPIFFS.open (HOSTNAME_FILE, "r") ;
-            if (f != NULL)
-            {
-              int amt = f.readBytes (G_hostname, BUF_SIZE) ;
-              if (amt > 0)
-              {
-                G_hostname[amt] = 0 ;
-                snprintf (topic, MAX_MQTT_LEN, "%s/%s",
-                          G_mqtt_sub, G_hostname) ;
-              }
-              f.close () ;
-            }
-
-            strcpy (G_mqtt_stopic, topic) ;
-            G_psClient.subscribe (topic) ;
-            G_psClient.setCallback (f_mqtt_callback) ;
-          }
-
-          /* take this opportunity to read MQTT_TAGS_FILE */
-
-          File f = SPIFFS.open (MQTT_TAGS_FILE, "r") ;
-          if (f != NULL)
-          {
-            int amt = f.readBytes (G_mqtt_tags, MAX_MQTT_LEN-1) ;
-            if (amt > 0)
-              G_mqtt_tags[amt] = 0 ;
-            f.close () ;
-          }
-        }
-        else
-        {
-          sprintf (line, "WARNING: Cannot connect to broker %s:%d.",
-                   mqtt_host, atoi(mqtt_port)) ;
-          Serial.println (line) ;
-        }
-      }
-    }
-  }
-}
+/* Network IO                                                                */
+/* ------------------------------------------------------------------------- */
 
 /*
    This function is supplied the S_thread_entry of the calling thread, and
@@ -1227,6 +1114,23 @@ void f_delivery (S_thread_entry *p, S_thread_result *r)
   strcpy (G_pub_payload, payload) ;
 
   pthread_mutex_unlock (&G_publish_lock) ;
+}
+
+void f_publish (char *topic, char *payload)
+{
+  if (G_debug)
+  {
+    char line[BUF_MEDIUM] ;
+    snprintf (line, BUF_MEDIUM, "DEBUG: publishing %s->%s", topic, payload) ;
+    Serial.println (line) ;
+  }
+
+
+
+
+
+
+
 }
 
 /* callback functions for web server */
@@ -1344,40 +1248,36 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
   if (G_debug)
     Serial.println ("DEBUG: f_handleWebMetrics()") ;
 
+  char line[BUF_MEDIUM] ;
   sprintf (G_reply_buf,
            "ec_uptime_secs %ld\n"
            "ec_serial_in_bytes %ld\n"
            "ec_serial_commands %ld\n"
            "ec_serial_overruns %ld\n"
-           "ec_udp_in_bytes %ld\n"
-           "ec_udp_commands %ld\n"
            "ec_rest_in_bytes %ld\n"
            "ec_rest_commands %ld\n"
            "ec_mqtt_connects %ld\n"
            "ec_mqtt_pubs %ld\n"
            "ec_mqtt_subs %ld\n"
            "ec_mqtt_oversize %ld\n"
-           "ec_mqtt_pub_waits %ld\n",
+           "ec_mqtt_pub_waits %ld\n"
+           "ec_last_stack_addr 0x%x\n",
            millis() / 1000,
            G_Metrics.serialInBytes,
            G_Metrics.serialCmds,
            G_Metrics.serialOverruns,
-           G_Metrics.udpInBytes,
-           G_Metrics.udpCmds,
            G_Metrics.restInBytes,
            G_Metrics.restCmds,
            G_Metrics.mqttConnects,
            G_Metrics.mqttPubs,
            G_Metrics.mqttSubs,
            G_Metrics.mqttOversize,
-           G_Metrics.mqttPubWaits
-           ) ;
+           G_Metrics.mqttPubWaits,
+           line) ;
 
   /* esp32 specific metrics */
 
   int idx, threads=0 ;
-  char line[BUF_MEDIUM] ;
-
   for (idx=0 ; idx < MAX_THREADS ; idx++)
     if (G_thread_entry[idx].state == THREAD_RUNNING)
       threads++ ;
@@ -1595,13 +1495,6 @@ void f_cron ()
     args[2] = NULL ;
     f_wifi (args) ;
   }
-  if (G_psClient.connected() == false)
-  {
-    if (G_debug)
-      Serial.println ("DEBUG: f_cron() calling f_mqtt_connect()") ;
-    f_mqtt_connect () ;
-  }
-  G_req_connect = 0 ;
 
   /* If this is our first run, check if AUTOEXEC_FILE exists */
 
@@ -1633,96 +1526,6 @@ void f_cron ()
     }
   }
   G_Metrics.cronRuns++ ;
-}
-
-/*
-   "tokens" is a string array of 6x params :
-     <don't_care> <x_pin> <y_pin> <z_pin> <total_dur> <interval>
-
-   "i_results" is an array of 10x ints which store the number of samples
-   examined, folled by min/ave/max values of the X/Y/Z axis respectively.
-*/
-
-void f_adxl335 (char **tokens, int *i_results)
-{
-  #define MAX_DURATION 60000 // take readings for a maximum of 60 secs
-
-  int x_value, y_value, z_value ;
-  int x_min, y_min, z_min ;
-  int x_max, y_max, z_max ;
-
-  int samples = 0 ;
-  int x_total = 0, y_total = 0, z_total =0 ;
-
-  int x_pin = atoi (tokens[1]) ;
-  int y_pin = atoi (tokens[2]) ;
-  int z_pin = atoi (tokens[3]) ;
-  unsigned long total_duration = atoi (tokens[4]) ;
-  unsigned long interval = atoi (tokens[5]) ;
-
-  /* sanity check some parameters first */
-
-  if (total_duration > MAX_DURATION) total_duration = MAX_DURATION ;
-  if (total_duration < 1) total_duration = 1 ;
-  if (interval < 1) interval = 1 ;
-
-  pinMode (x_pin, INPUT) ;
-  pinMode (y_pin, INPUT) ;
-  pinMode (z_pin, INPUT) ;
-
-  unsigned long start_time = millis () ;
-  unsigned long end_time = start_time + total_duration ;
-
-  while (start_time < end_time)
-  {
-    x_value = analogRead (x_pin) ;
-    y_value = analogRead (y_pin) ;
-    z_value = analogRead (z_pin) ;
-
-    if (samples == 0)
-    {
-      x_min = x_max = x_value ;
-      y_min = y_max = y_value ;
-      z_min = z_max = z_value ;
-    }
-    else
-    {
-      if (x_value < x_min) x_min = x_value ;
-      if (y_value < y_min) y_min = y_value ;
-      if (z_value < z_min) z_min = z_value ;
-
-      if (x_value > x_max) x_max = x_value ;
-      if (y_value > y_max) y_max = y_value ;
-      if (z_value > z_max) z_max = z_value ;
-    }
-    x_total = x_total + x_value ;
-    y_total = y_total + y_value ;
-    z_total = z_total + z_value ;
-
-    if (interval == 0)
-      start_time = millis () ;
-    else
-    {
-      start_time = start_time + interval ;
-      int nap = start_time - millis() ;
-      if (nap > 0)
-        delay (nap) ;
-    }
-    samples++ ;
-  }
-
-  /* now write our results into the int array */
-
-  i_results[0] = samples ;
-  i_results[1] = x_min ;
-  i_results[2] = x_total / samples ;
-  i_results[3] = x_max ;
-  i_results[4] = y_min ;
-  i_results[5] = y_total / samples ;
-  i_results[6] = y_max ;
-  i_results[7] = z_min ;
-  i_results[8] = z_total / samples ;
-  i_results[9] = z_max ;
 }
 
 /* ===================== */
@@ -2466,9 +2269,7 @@ void f_action (char **tokens)
             "/hostname   <hostname>\r\n"
             "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
             "/mqtt.pub   <topic to publish>\r\n"
-            "/mqtt.sub   <topic to subscribe>\r\n"
             "/mqtt.tags  <meta=\"value\",...>\r\n"
-            "/udp.port   <port>\r\n"
             "/wifi.ssid  <ssid>\r\n"
             "/wifi.pw    <pw>\r\n") ;
   }
@@ -2663,24 +2464,19 @@ void setup ()
   cfg_wifi_ssid[0] = 0 ;
   cfg_wifi_pw[0] = 0 ;
   G_mqtt_pub[0] = 0 ;
-  G_mqtt_sub[0] = 0 ;
   G_mqtt_tags[0] = 0 ;
-  G_mqtt_stopic[0] = 0 ;
   G_pub_topic[0] = 0 ;
   G_pub_payload[0] = 0 ;
   G_next_cron = CRON_INTERVAL * 1000 ;
   pinMode (LED_BUILTIN, OUTPUT) ;
 
-  /*
-     if wifi ssid and password are available, try connect to wifi now.
-     if udp server port is defined, configure it now.
-  */
-
   char line[BUF_SIZE] ;
-
   if (SPIFFS.begin())
   {
     Serial.println ("NOTICE: Checking built-in configuration.") ;
+
+    /* if wifi ssid and password are available, try connect to wifi now.  */
+
     File f_ssid = SPIFFS.open (WIFI_SSID_FILE, "r") ;
     File f_pw = SPIFFS.open (WIFI_PW_FILE, "r") ;
     if ((f_ssid) && (f_pw) &&
@@ -2714,31 +2510,32 @@ void setup ()
     if (f_pw)
       f_pw.close () ;
 
-    File f_udp = SPIFFS.open (UDP_PORT_FILE, "r") ;
-    if ((f_udp) && (f_udp.size() > 0))
+    /* if other config files are present, load them into memory now */
+
+    File f_cfg = SPIFFS.open (MQTT_PUB_FILE, "r") ;
+    if (f_cfg)
     {
-      char msg[BUF_SIZE] ;
-      int amt = f_udp.readBytes (msg, 6) ; // port numbers are 5 chars max
+      int amt = f_cfg.readBytes (G_mqtt_pub, MAX_MQTT_LEN) ;
       if (amt > 0)
       {
-        msg[amt] = 0 ;
-        cfg_udp_port = atoi (msg) ;
-        if ((cfg_udp_port < 65535) && (cfg_udp_port > 0))
-        {
-          sprintf (line, "NOTICE: UDP server on port %d.", cfg_udp_port) ;
-          Serial.println (line) ;
-          G_Udp.begin (cfg_udp_port) ;
-        }
-        else
-        {
-          sprintf (line, "WARNING: Invalid udp port '%s'.", msg) ;
-          Serial.println (line) ;
-          cfg_udp_port = 0 ;
-        }
+        G_mqtt_pub[amt] = 0 ;
+        snprintf (line, BUF_SIZE, "NOTICE: publish prefix '%s'.", G_mqtt_pub) ;
+        Serial.println (line) ;
       }
+      f_cfg.close () ;
     }
-    if (f_udp)
-      f_udp.close () ;
+    f_cfg = SPIFFS.open (HOSTNAME_FILE, "r") ;
+    if (f_cfg)
+    {
+      int amt = f_cfg.readBytes (G_hostname, BUF_SIZE) ;
+      if (amt > 0)
+      {
+        G_hostname[amt] = 0 ;
+        snprintf (line, BUF_SIZE, "NOTICE: hostname is '%s'.", G_hostname) ;
+        Serial.println (line) ;
+      }
+      f_cfg.close () ;
+    }
   }
   else
   {
@@ -2850,74 +2647,24 @@ void loop ()
     G_serial_pos = 0 ;
   }
 
-  if (cfg_udp_port > 0)
+
+  pthread_mutex_lock (&G_publish_lock) ;
+  if (strlen(G_pub_topic) > 0)
   {
-    int pktsize = G_Udp.parsePacket () ;
-    if (pktsize)
+    if (G_debug)
     {
-      /* if a UDP packet arrived, parse the command and send a response */
-
-      char udp_buf[BUF_SIZE] ;
-      int amt = G_Udp.read (udp_buf, BUF_SIZE) ;
-      if (amt > 0)
-      {
-        udp_buf[amt] = 0 ;
-        G_Metrics.udpInBytes = G_Metrics.udpInBytes + amt ;
-        G_Metrics.udpCmds++ ;
-
-        int idx = 0 ;
-        char *tokens[MAX_TOKENS] ;
-        char *p = strtok (udp_buf, " ") ;
-        while ((p) && (idx < MAX_TOKENS))
-        {
-          tokens[idx] = p ;
-          idx++ ;
-          p = strtok (NULL, " ") ;
-        }
-        tokens[idx] = NULL ;
-        G_reply_buf[0] = 0 ;
-        if (idx > 0)
-          f_action (tokens) ;
-
-        int rlen = strlen (G_reply_buf) ;
-        if (rlen >= REPLY_SIZE)
-        {
-          char line[BUF_SIZE] ;
-          sprintf (line, "\r\nWARNING: G_reply_buf is %d bytes, max %d.\r\n",
-                   rlen, REPLY_SIZE) ;
-          Serial.print (line) ;
-        }
-
-        G_Udp.beginPacket (G_Udp.remoteIP(), G_Udp.remotePort()) ;
-        G_Udp.write ((uint8_t*)G_reply_buf, strlen(G_reply_buf)) ;
-        G_Udp.endPacket () ;
-      }
+      char line[BUF_SIZE] ;
+      sprintf (line, "DEBUG: publishing %d bytes.", strlen(G_pub_payload)) ;
+      Serial.println (line) ;
     }
+
+    /* publish our "payload" to "topic" */
+
+    f_publish (G_pub_topic, G_pub_payload) ;
+    G_pub_topic[0] = 0 ;
+    G_pub_payload[0] = 0 ;
   }
-
-  /* if MQTT is connected, handle publish / subscriptions now */
-
-  if (G_psClient.connected())
-  {
-    G_psClient.loop () ;        // handle incoming messages & keepalives
-
-    pthread_mutex_lock (&G_publish_lock) ;
-    if (strlen(G_pub_topic) > 0)
-    {
-      if (G_debug)
-      {
-        char line[BUF_SIZE] ;
-        sprintf (line, "DEBUG: publishing %d bytes.", strlen(G_pub_payload)) ;
-        Serial.println (line) ;
-      }
-
-      G_psClient.publish (G_pub_topic, G_pub_payload) ;
-      G_Metrics.mqttPubs++ ;
-      G_pub_topic[0] = 0 ;
-      G_pub_payload[0] = 0 ;
-    }
-    pthread_mutex_unlock (&G_publish_lock) ;
-  }
+  pthread_mutex_unlock (&G_publish_lock) ;
 
   /* handle web requests */
 
@@ -2935,9 +2682,9 @@ void loop ()
     G_next_blink = G_next_blink + BLINK_FREQ ;
   }
 
-  /* once in a while, run "cron" jobs, or responds to connection request */
+  /* once in a while, run "cron" jobs */
 
-  if ((now > G_next_cron) || (G_req_connect))
+  if (now > G_next_cron)
   {
     f_cron () ;
     G_next_cron = G_next_cron + (CRON_INTERVAL * 1000) ;
