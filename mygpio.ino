@@ -201,12 +201,13 @@
 */
 
 #include <pthread.h>
+#include <lwip/sockets.h>
 
 #include <FS.h>
 #include <Wire.h>
+#include <WiFi.h>
 #include <SPIFFS.h>
 #include <Update.h>
-#include <WebServer.h>
 
 #include "LiquidCrystal_I2C.h"
 
@@ -214,6 +215,7 @@
 #define MAX_PASSWD_LEN 32             // maximum wifi password length
 #define MAX_MQTT_LEN 128              // maximum mqtt topic/message buffer
 #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
+#define MAX_SD_BACKLOG 4              // TCP listening socket backlog
 #define WEB_PORT 80                   // web server listens on this port
 #define CRON_INTERVAL 60              // how often we run f_cron()
 
@@ -238,6 +240,9 @@
 #define MAX_THREAD_TAGS_BUF 80        // length of thread's tags
 #define MAX_THREAD_MSG_BUF 80         // length of thread's "msg"
 #define MAX_THREAD_TAGS 8             // tag pairs in "/tags-<name>"
+
+#define MAX_HTTP_REQUEST 1024
+#define MAX_HTTP_CLIENTS 4            // esp32 supports 8x file descriptors
 
 /* various states for S_thread_entry.state */
 
@@ -267,6 +272,7 @@ char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
 char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
 
 int G_sleep = 0 ;               // a flag to tell us to enter sleep mode
+int G_sd = 0 ;                  // web server's socket descriptor
 char *G_mqtt_pub ;              // mqtt topic prefix we publish to
 char *G_mqtt_tags ;             // tags included in each publish
 char *G_pub_topic ;             // current topic we publish to
@@ -324,6 +330,17 @@ struct thread_entry_s
 } ;
 typedef struct thread_entry_s S_thread_entry ;
 
+/* Data structure of a web client connection */
+
+struct web_client
+{
+  int sd ;                              // the client's socket descriptor
+  int req_pos ;                         // insertion point in "request"
+  char request[MAX_HTTP_REQUEST] ;      // http request from client
+
+} ;
+typedef struct web_client S_WebClient ;
+
 /* internal performance metrics */
 
 struct internal_metrics
@@ -344,8 +361,7 @@ typedef struct internal_metrics S_Metrics ;
 
 S_Metrics *G_Metrics ;
 S_thread_entry *G_thread_entry ;
-
-WebServer Webs(WEB_PORT) ;    // our built-in webserver
+S_WebClient *G_WebClient ;
 LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
 /* function prototypes */
@@ -1135,28 +1151,13 @@ void f_publish (char *topic, char *payload)
 
 /* callback functions for web server */
 
-void f_handleWeb ()                             // for uri "/"
-{
-  if (G_debug)
-    Serial.println ("DEBUG: f_handleWeb()") ;
-
-  Webs.send (200, "text/plain", "OK\n") ;
-}
-
 void f_v1api ()                                 // for uri "/v1"
 {
-  if ((Webs.args() != 1) ||                     // expect exactly 1 arg
-      (Webs.argName(0) != "cmd"))
-  {
-    if (G_debug)
-      Serial.println ("DEBUG: f_v1api() invalid usage") ;
-
-    Webs.send (504, "text/plain", "Invalid usage\r\n") ;
-    return ;
-  }
-
   char url_buf[BUF_MEDIUM] ;
-  strncpy (url_buf, Webs.arg(0).c_str(), BUF_MEDIUM) ;
+
+
+
+
   G_Metrics->restInBytes = G_Metrics->restInBytes + strlen(url_buf) ;
   G_Metrics->restCmds++ ;
 
@@ -1189,10 +1190,9 @@ void f_v1api ()                                 // for uri "/v1"
     Serial.print (line) ;
   }
 
-  if (rlen > 0)
-    Webs.send (200, "text/plain", G_reply_buf) ;
-  else
-    Webs.send (504, "text/plain", "No response\r\n") ;
+
+
+
 }
 
 /*
@@ -1316,7 +1316,130 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
         strcat (G_reply_buf, line) ;
       }
     }
-  Webs.send (200, "text/plain", G_reply_buf) ;
+
+
+
+
+
+
+}
+
+void f_handleWebServer ()
+{
+  int i, max_fd ;
+  struct fd_set fds ;
+  struct timeval tv ;
+
+  tv.tv_usec = 1000 ;
+  tv.tv_sec = 0 ;
+  FD_ZERO (&fds) ;
+  FD_SET (G_sd, &fds) ;
+  max_fd = G_sd ;
+  for (i=0 ; i < MAX_HTTP_CLIENTS ; i++)
+    if (G_WebClient[i].sd > 0)
+    {
+      FD_SET (G_WebClient[i].sd, &fds) ;
+      if (G_WebClient[i].sd > max_fd)
+        max_fd = G_WebClient[i].sd ;
+    }
+
+  if (select (max_fd+1, &fds, NULL, NULL, &tv) > 0)
+  {
+    if (FD_ISSET (G_sd, &fds))          // new client connection
+    {
+      unsigned int slen = sizeof(struct sockaddr_in) ;
+      struct sockaddr_in saddr ;
+      int sd = accept (G_sd, (struct sockaddr*) &saddr, &slen) ;
+      if (sd > 0)
+      {
+        if (G_debug)
+        {
+          char line[BUF_SIZE] ;
+          char ip[20] ;
+          inet_ntop (AF_INET, &saddr.sin_addr, ip, sizeof(ip)) ;
+          snprintf (line, BUF_SIZE, "DEBUG: New webclient from %s on sd %d.",
+                    ip, sd) ;
+          Serial.println (line) ;
+        }
+
+        /* find an available G_WebClient slot, otherwise close the socket */
+
+        int idx ;
+        for (idx=0 ; idx < MAX_HTTP_CLIENTS ; idx++)
+          if (G_WebClient[idx].sd == 0)
+          {
+            G_WebClient[idx].sd = sd ;
+            break ;
+          }
+        if (idx == MAX_HTTP_CLIENTS)
+        {
+          if (G_debug)
+            Serial.println ("DEBUG: max http clients reached.") ;
+          close (sd) ;
+        }
+      }
+    }
+
+    for (i=0 ; i < MAX_HTTP_CLIENTS ; i++)
+      if ((G_WebClient[i].sd >0) && (FD_ISSET (G_WebClient[i].sd, &fds)))
+      {
+        /* activity on this client, could be more data, or a disconnect */
+
+        if (G_debug)
+        {
+          char line[BUF_SIZE] ;
+          snprintf (line, BUF_SIZE, "DEBUG: activity on sd:%d.",
+                    G_WebClient[i].sd) ;
+          Serial.println (line) ;
+        }
+
+        int buf_remaining = MAX_THREAD_MSG_BUF - G_WebClient[i].req_pos - 1 ;
+        if (buf_remaining < 1)                  // client header too long
+        {
+          if (G_debug)
+          {
+            char line[BUF_SIZE] ;
+            snprintf (line, BUF_SIZE, "DEBUG: client sd:%d request too long",
+                      G_WebClient[i].sd) ;
+            Serial.println (line) ;
+          }
+          close (G_WebClient[i].sd) ;
+          G_WebClient[i].sd = 0 ;
+          G_WebClient[i].req_pos = 0 ;
+        }
+        else
+        {
+          int amt = read (G_WebClient[i].sd,
+                          G_WebClient[i].request + G_WebClient[i].req_pos,
+                          buf_remaining) ;
+          if (amt < 1)                          // client closed connection
+          {
+            if (G_debug)
+            {
+              char line[BUF_SIZE] ;
+              snprintf (line, BUF_SIZE, "DEBUG: client on sd:%d disconnected",
+                        G_WebClient[i].sd) ;
+              Serial.println (line) ;
+            }
+            close (G_WebClient[i].sd) ;
+            G_WebClient[i].sd = 0 ;
+            G_WebClient[i].req_pos = 0 ;
+          }
+          else                                  // client send us data
+          {
+            char line[BUF_SIZE] ;
+            if (G_debug)
+            {
+              snprintf (line, BUF_SIZE, "DEBUG: read %d bytes from sd:%d",
+                        amt, G_WebClient[i].sd) ;
+              Serial.println (line) ;
+            }
+            G_WebClient[i].req_pos = G_WebClient[i].req_pos + amt ;
+            G_WebClient[i].request[G_WebClient[i].req_pos] = 0 ;
+          }
+        }
+      }
+  }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2487,14 +2610,23 @@ void setup ()
         Serial.println (line) ;
         WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
 
-        /* fire up our web server only if WiFi is already configured */
+        /* fire up our web server socket */
 
-        Webs.on ("/", f_handleWeb) ;
-        Webs.on ("/v1", f_v1api) ;
-        Webs.on ("/metrics", f_handleWebMetrics) ;
-        Webs.begin () ;
-        sprintf (line, "NOTICE: Web server started on port %d.", WEB_PORT) ;
-        Serial.println (line) ;
+        G_sd = socket (AF_INET, SOCK_STREAM, 0) ;
+        if (G_sd > 0)
+        {
+          struct sockaddr_in saddr ;
+          saddr.sin_family = AF_INET ;
+          saddr.sin_addr.s_addr = htonl(INADDR_ANY) ;
+          saddr.sin_port = htons (WEB_PORT) ;
+
+          if ((bind (G_sd, (struct sockaddr*) &saddr, sizeof(saddr)) == 0) &&
+              (listen (G_sd, MAX_SD_BACKLOG) == 0))
+          {
+            sprintf (line, "NOTICE: Webserver started on port %d.", WEB_PORT) ;
+            Serial.println (line) ;
+          }
+        }
       }
     }
     if (f_ssid)
@@ -2554,12 +2686,20 @@ void setup ()
   G_serial_buf[0] = 0 ;
   G_hostname[0] = 0 ;
 
+  int i ;
+
+  G_WebClient = (S_WebClient*) malloc (sizeof(S_WebClient) *
+                                       MAX_HTTP_CLIENTS) ;
+  for (i=0 ; i < MAX_HTTP_CLIENTS ; i++)
+    memset (&G_WebClient[i], 0, sizeof(S_WebClient)) ;
+
   G_thread_entry = (S_thread_entry*) malloc (sizeof(S_thread_entry) *
                                               MAX_THREADS) ;
-  int i ;
   for (i=0 ; i < MAX_THREADS ; i++)
+  {
     memset (&G_thread_entry[i], 0, sizeof(S_thread_entry)) ;
     pthread_mutex_init (&G_thread_entry[i].lock, NULL) ;
+  }
   sprintf (line, "NOTICE: Max allowed threads %d.", MAX_THREADS) ;
   Serial.println (line) ;
   pthread_mutex_init (&G_publish_lock, NULL) ;
@@ -2678,7 +2818,7 @@ void loop ()
 
   /* handle web requests */
 
-  Webs.handleClient () ;
+  f_handleWebServer () ;
 
   /* once in a while, blink once if wifi is connected, twice otherwise. */
 
