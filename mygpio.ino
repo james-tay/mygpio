@@ -211,7 +211,7 @@
 #include "LiquidCrystal_I2C.h"
 
 #define MAX_SSID_LEN 32
-#define MAX_PASSWD_LEN 64             // maximum wifi password length
+#define MAX_PASSWD_LEN 32             // maximum wifi password length
 #define MAX_MQTT_LEN 128              // maximum mqtt topic/message buffer
 #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
 #define WEB_PORT 80                   // web server listens on this port
@@ -266,17 +266,17 @@
 char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
 char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
 
-int G_sleep = 0 ;                  // a flag to tell us to enter sleep mode
-char G_mqtt_pub[MAX_MQTT_LEN] ;    // mqtt topic prefix we publish to
-char G_mqtt_tags[MAX_MQTT_LEN] ;   // tags included in each publish
-char G_pub_topic[MAX_MQTT_LEN] ;   // current topic we publish to
-char G_pub_payload[MAX_MQTT_LEN] ; // current payload we will publish
+int G_sleep = 0 ;               // a flag to tell us to enter sleep mode
+char *G_mqtt_pub ;              // mqtt topic prefix we publish to
+char *G_mqtt_tags ;             // tags included in each publish
+char *G_pub_topic ;             // current topic we publish to
+char *G_pub_payload ;           // current payload we will publish
 
 char *G_reply_buf ;             // accumulate our reply message here
 int G_serial_pos ;              // index of bytes received on serial port
 int G_debug ;                   // global debug level
-char G_serial_buf[BUF_SIZE+1] ; // accumulate butes on our serial console
-char G_hostname[BUF_SIZE+1] ;   // our hostname
+char *G_serial_buf ;            // accumulate butes on our serial console
+char *G_hostname ;              // our hostname
 
 unsigned long G_next_cron ;        // millis() time of next run
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
@@ -342,7 +342,7 @@ struct internal_metrics
 } ;
 typedef struct internal_metrics S_Metrics ;
 
-S_Metrics G_Metrics ;
+S_Metrics *G_Metrics ;
 S_thread_entry *G_thread_entry ;
 
 WebServer Webs(WEB_PORT) ;    // our built-in webserver
@@ -1105,7 +1105,7 @@ void f_delivery (S_thread_entry *p, S_thread_result *r)
     {
       pthread_mutex_unlock (&G_publish_lock) ;
 
-      G_Metrics.mqttPubWaits++ ;
+      G_Metrics->mqttPubWaits++ ;
       delay (100) ;
     }
   }
@@ -1157,8 +1157,8 @@ void f_v1api ()                                 // for uri "/v1"
 
   char url_buf[BUF_MEDIUM] ;
   strncpy (url_buf, Webs.arg(0).c_str(), BUF_MEDIUM) ;
-  G_Metrics.restInBytes = G_Metrics.restInBytes + strlen(url_buf) ;
-  G_Metrics.restCmds++ ;
+  G_Metrics->restInBytes = G_Metrics->restInBytes + strlen(url_buf) ;
+  G_Metrics->restCmds++ ;
 
   if (G_debug)
   {
@@ -1263,16 +1263,16 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            "ec_mqtt_pub_waits %ld\n"
            "ec_last_stack_addr 0x%x\n",
            millis() / 1000,
-           G_Metrics.serialInBytes,
-           G_Metrics.serialCmds,
-           G_Metrics.serialOverruns,
-           G_Metrics.restInBytes,
-           G_Metrics.restCmds,
-           G_Metrics.mqttConnects,
-           G_Metrics.mqttPubs,
-           G_Metrics.mqttSubs,
-           G_Metrics.mqttOversize,
-           G_Metrics.mqttPubWaits,
+           G_Metrics->serialInBytes,
+           G_Metrics->serialCmds,
+           G_Metrics->serialOverruns,
+           G_Metrics->restInBytes,
+           G_Metrics->restCmds,
+           G_Metrics->mqttConnects,
+           G_Metrics->mqttPubs,
+           G_Metrics->mqttSubs,
+           G_Metrics->mqttOversize,
+           G_Metrics->mqttPubWaits,
            line) ;
 
   /* esp32 specific metrics */
@@ -1498,7 +1498,7 @@ void f_cron ()
 
   /* If this is our first run, check if AUTOEXEC_FILE exists */
 
-  if (G_Metrics.cronRuns == 0)
+  if (G_Metrics->cronRuns == 0)
   {
     File f = SPIFFS.open (AUTOEXEC_FILE, "r") ;
     if (f != NULL)
@@ -1525,7 +1525,7 @@ void f_cron ()
       f.close () ;
     }
   }
-  G_Metrics.cronRuns++ ;
+  G_Metrics->cronRuns++ ;
 }
 
 /* ===================== */
@@ -2454,19 +2454,11 @@ void setup ()
   Serial.begin (DEF_BAUD) ;
   Serial.setTimeout (SERIAL_TIMEOUT) ;
   Serial.println ("\nNOTICE: System boot.") ;
-  G_serial_buf[0] = 0 ;
   G_serial_pos = 0 ;
   G_debug = 0 ;
-  G_reply_buf = (char*) malloc (REPLY_SIZE+1) ;
-  G_reply_buf[0] = 0 ;
-  G_hostname[0] = 0 ;
 
   cfg_wifi_ssid[0] = 0 ;
   cfg_wifi_pw[0] = 0 ;
-  G_mqtt_pub[0] = 0 ;
-  G_mqtt_tags[0] = 0 ;
-  G_pub_topic[0] = 0 ;
-  G_pub_payload[0] = 0 ;
   G_next_cron = CRON_INTERVAL * 1000 ;
   pinMode (LED_BUILTIN, OUTPUT) ;
 
@@ -2542,6 +2534,26 @@ void setup ()
     Serial.println ("WARNING: Could not initialize SPIFFS.") ;
   }
 
+  /* for all large(r) string buffers or structures, do malloc() now */
+
+  G_Metrics = (S_Metrics*) malloc (sizeof(S_Metrics)) ;
+  memset (G_Metrics, 0, sizeof(S_Metrics)) ;
+  G_mqtt_pub = (char*) malloc (MAX_MQTT_LEN + 1) ;
+  G_mqtt_tags = (char*) malloc (MAX_MQTT_LEN + 1) ;
+  G_pub_topic = (char*) malloc (MAX_MQTT_LEN + 1) ;
+  G_pub_payload = (char*) malloc (MAX_MQTT_LEN + 1) ;
+  G_reply_buf = (char*) malloc (REPLY_SIZE+1) ;
+  G_serial_buf = (char*) malloc (BUF_SIZE+1) ;
+  G_hostname = (char*) malloc (BUF_SIZE+1) ;
+
+  G_mqtt_pub[0] = 0 ;
+  G_mqtt_tags[0] = 0 ;
+  G_pub_topic[0] = 0 ;
+  G_pub_payload[0] = 0 ;
+  G_reply_buf[0] = 0 ;
+  G_serial_buf[0] = 0 ;
+  G_hostname[0] = 0 ;
+
   G_thread_entry = (S_thread_entry*) malloc (sizeof(S_thread_entry) *
                                               MAX_THREADS) ;
   int i ;
@@ -2552,11 +2564,9 @@ void setup ()
   Serial.println (line) ;
   pthread_mutex_init (&G_publish_lock, NULL) ;
 
-  digitalWrite (LED_BUILTIN, LOW) ;           // blink to indicate boot.
+  digitalWrite (LED_BUILTIN, LOW) ;           // 1-sec blink to indicate boot.
   delay (1000) ;
   digitalWrite (LED_BUILTIN, HIGH) ;
-
-  memset (&G_Metrics, 0, sizeof(G_Metrics)) ;
   Serial.println ("NOTICE: Ready.") ;
 }
 
@@ -2570,7 +2580,7 @@ void loop ()
   while ((Serial.available() > 0) && (G_serial_pos < BUF_SIZE - 1))
   {
     char c = (char) Serial.read () ;
-    G_Metrics.serialInBytes++ ;
+    G_Metrics->serialInBytes++ ;
     if ((c == '\b') && (G_serial_pos > 0))              // delete previous char
     {
       Serial.print (c) ;
@@ -2588,7 +2598,7 @@ void loop ()
 
     if (c == '\r')
     {
-      G_Metrics.serialCmds++ ;
+      G_Metrics->serialCmds++ ;
       break ;
     }
 
@@ -2598,7 +2608,7 @@ void loop ()
   if (G_serial_pos == BUF_SIZE-1)                        // buffer overrun
   {
     Serial.println ("FAULT: Input overrun.") ;
-    G_Metrics.serialOverruns++ ;
+    G_Metrics->serialOverruns++ ;
     G_serial_pos = 0 ;
     G_serial_buf[0] = 0 ;
   }
