@@ -339,7 +339,9 @@ struct web_client
   int req_pos ;                         // insertion point in "request"
   unsigned long connect_time ;          // millis() timestamp of connection
   char request[MAX_HTTP_REQUEST] ;      // http request from client
-
+  char method[BUF_SIZE] ;               // http method from "request"
+  char uri[BUF_MEDIUM] ;                // URI of http request
+  char query[BUF_MEDIUM] ;              // arguments after "uri"
 } ;
 typedef struct web_client S_WebClient ;
 
@@ -1151,17 +1153,19 @@ void f_publish (char *topic, char *payload)
 
 }
 
-/* callback functions for web server */
-
-void f_v1api ()                                 // for uri "/v1"
+void f_v1api (char *query)
 {
+  int i ;
   char url_buf[BUF_MEDIUM] ;
 
-
-
-
-  G_Metrics->restInBytes = G_Metrics->restInBytes + strlen(url_buf) ;
-  G_Metrics->restCmds++ ;
+  for (i=0 ; query[i] != 0 ; i++)
+  {
+    if (query[i] == '+')
+      url_buf[i] = ' ' ;
+    else
+      url_buf[i] = query[i] ;
+  }
+  url_buf[i] = 0 ;
 
   if (G_debug)
   {
@@ -1191,10 +1195,6 @@ void f_v1api ()                                 // for uri "/v1"
              rlen, REPLY_SIZE) ;
     Serial.print (line) ;
   }
-
-
-
-
 }
 
 /*
@@ -1318,25 +1318,91 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
         strcat (G_reply_buf, line) ;
       }
     }
-
-
-
-
-
-
 }
 
 void f_handleWebRequest (S_WebClient *client)
 {
+  /* from the http "request", identify the Method, URI and query string */
 
+  int idx, len=0 ;
 
+  for (idx=0 ; idx < client->req_pos ; idx++)
+  {
+    if (isspace(client->request[idx]))
+      break ;
+    client->method[idx] = client->request[idx] ;
+    client->method[idx+1] = 0 ;
+    if (idx == BUF_SIZE - 1)
+      break ;
+  }
+  idx++ ;
+  while (idx < client->req_pos)
+  {
+    if ((client->request[idx] == '?') || (isspace(client->request[idx])) ||
+        (client->request[idx] == '\n') || (client->request[idx] == '\r'))
+      break ;
+    client->uri[len] = client->request[idx] ;
+    client->uri[len+1] = 0 ;
+    idx++ ;
+    len++ ;
+  }
+  if (client->request[idx] != '?')
+    client->query[0] = 0 ;
+  else
+  {
+    idx++ ;
+    len = 0 ;
+    while (idx < client->req_pos)
+    {
+      if ((client->request[idx] == '\n') || (client->request[idx] == '\r') ||
+          (isspace(client->request[idx])))
+        break ;
+      client->query[len] = client->request[idx] ;
+      client->query[len+1] = 0 ;
+      idx++ ;
+      len++ ;
+    }
+  }
 
+  if (G_debug)
+  {
+    char line[BUF_MEDIUM] ;
+    snprintf (line, BUF_MEDIUM, "DEBUG: method(%s) uri(%s) query(%s)",
+              client->method, client->uri, client->query) ;
+    Serial.println (line) ;
+  }
 
+  /* at this point, we have parsed enough to decide on what to do with it */
 
+  G_reply_buf[0] = 0 ;
+  G_Metrics->restCmds++ ;
+  G_Metrics->restInBytes = G_Metrics->restInBytes +
+                           strlen(client->uri) + strlen(client->query) ;
 
+  if ((strcmp(client->method, "GET") == 0) &&
+      (strcmp(client->uri, "/metrics") == 0))
+  {
+    f_handleWebMetrics () ;
+  }
+  if ((strcmp(client->method, "GET") == 0) &&
+      (strcmp(client->uri, "/v1") == 0) &&
+      (strncmp(client->query, "cmd=", 4) == 0))
+  {
+    f_v1api (client->query + 4) ;
+  }
 
+  char line[BUF_SIZE] ;
+  strcpy (line, "HTTP/1.1 200 OK\n") ;
+  write (client->sd, line, strlen(line)) ;
+  strcpy (line, "Content-Type: text/plain\n") ;
+  write (client->sd, line, strlen(line)) ;
+  strcpy (line, "Connection: close\n") ;
+  write (client->sd, line, strlen(line)) ;
 
+  /* Now send G_reply_buf */
 
+  write (client->sd, "\n", 1) ;
+  write (client->sd, G_reply_buf, strlen(G_reply_buf)) ;
   close (client->sd) ;
   client->sd = 0 ;
   client->req_pos = 0 ;
