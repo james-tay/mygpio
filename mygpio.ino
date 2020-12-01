@@ -318,8 +318,12 @@ struct thread_entry_s
   char tags_buf[MAX_THREAD_TAGS_BUF] ; // metric and tags (optional)
   char *metric ;                      // pointer into "tags_buf" (optional)
   char *tags[MAX_THREAD_TAGS+1] ;     // pointers into "tags_bufs" (optional)
+
+  /* thread metadata */
+
+  int core ;                          // cpu core ID thread runs on
   unsigned long loops ;               // number of <ft_task> calls so far
-  unsigned long ts_started ;        // millis() timestamp of pthread_create()
+  unsigned long ts_started ;          // millis() timestamp of pthread_create()
   void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
 
   /* IMPORTANT !!! <ft_task> may modify anything below this point */
@@ -2158,13 +2162,13 @@ void ft_hcsr04 (S_thread_entry *p)
 
 void *f_thread_lifecycle (void *p)
 {
-  int i ;
   S_thread_entry *entry = (S_thread_entry*) p ;
 
   /* initialize thread info, indicate thread is now running */
 
   pthread_mutex_lock (&entry->lock) ;
   entry->state = THREAD_RUNNING ;
+  entry->core = xPortGetCoreID () ;
   pthread_mutex_unlock (&entry->lock) ;
 
   while (entry->state == THREAD_RUNNING)
@@ -2429,9 +2433,10 @@ void f_esp32 (char **tokens)
         if (G_thread_entry[i].metric != NULL)
           metric = G_thread_entry[i].metric ;
 
-        sprintf (msg, "%d. %s tid:%d %s age:%ld metric:%s msg:%s\r\n",
+        sprintf (msg, "%d. %s tid:%d cpu:%d '%s' age:%ld metric:%s msg:%s\r\n",
                  num, state,
                  G_thread_entry[i].tid,
+                 G_thread_entry[i].core,
                  G_thread_entry[i].name,
                  (now - G_thread_entry[i].ts_started) / 1000,
                  metric,
@@ -2606,6 +2611,8 @@ void f_action (char **tokens)
   else
   if (strcmp(tokens[0], "version") == 0)
   {
+    sprintf (line, "Running on cpu:%d\r\n", xPortGetCoreID()) ;
+    strcat (G_reply_buf, line) ;
     sprintf (line, "Built: %s, %s\r\n", __DATE__, __TIME__) ;
     strcat (G_reply_buf, line) ;
     sprintf (line, "Data sizes: ptr:%d char:%d "
