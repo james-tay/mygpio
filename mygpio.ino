@@ -200,7 +200,6 @@
      - the OTA implementation does not follow HTTP redirects.
 */
 
-#include <pthread.h>
 #include <lwip/sockets.h>
 
 #include <FS.h>
@@ -248,7 +247,7 @@
 /* various states for S_thread_entry.state */
 
 #define THREAD_READY          0       // ready to be started
-#define THREAD_STARTING       1       // pthread_create() just got called
+#define THREAD_STARTING       1       // thread just got created
 #define THREAD_RUNNING        2       // thread in f_thread_lifecycle()
 #define THREAD_WRAPUP         3       // tell a thread to terminate
 #define THREAD_STOPPED        4       // awaiting pthread_join()
@@ -305,9 +304,9 @@ typedef struct thread_result_s S_thread_result ;
 
 struct thread_entry_s
 {
+  TaskHandle_t tid ;
   char name[MAX_THREAD_NAME] ;
   unsigned char state ;
-  pthread_t tid ;
   SemaphoreHandle_t lock ;            // lock before making changes here
 
   /* input arguments to <ft_task> */
@@ -2169,6 +2168,12 @@ void *f_thread_lifecycle (void *p)
   xSemaphoreTake (entry->lock, portMAX_DELAY) ;
   entry->state = THREAD_STOPPED ;
   xSemaphoreGive (entry->lock) ;
+
+  while (1) // wait for death
+  {
+    delay (1000) ;
+    entry->loops++ ;
+  }
 }
 
 void f_thread_create (char *name)
@@ -2182,7 +2187,6 @@ void f_thread_create (char *name)
     if (G_thread_entry[idx].state == THREAD_STOPPED)
     {
       xSemaphoreTake (G_thread_entry[idx].lock, portMAX_DELAY) ;
-      pthread_join (G_thread_entry[idx].tid, NULL) ;
       G_thread_entry[idx].state = THREAD_READY;
       G_thread_entry[idx].name[0] = 0 ;
       xSemaphoreGive (G_thread_entry[idx].lock) ;
@@ -2324,16 +2328,18 @@ void f_thread_create (char *name)
 
   /* (almost) everything prep'ed ... finally create the thread */
 
-  pthread_t tid ;
   G_thread_entry[idx].state = THREAD_STARTING ;
-  pthread_create (&tid, NULL, f_thread_lifecycle,
-                  (void*) &G_thread_entry[idx]) ;
-  G_thread_entry[idx].tid = tid ;
+  xTaskCreate ((TaskFunction_t) f_thread_lifecycle,
+               G_thread_entry[idx].name,
+               4096,
+               &G_thread_entry[idx],
+               tskIDLE_PRIORITY,
+               &G_thread_entry[idx].tid) ;
 
   xSemaphoreGive (G_thread_entry[idx].lock) ;
 
-  sprintf (line, "thread '%s' created with tid:%d in_args:%d\r\n",
-           name, tid, num_args) ;
+  sprintf (line, "thread '%s' created in_args:%d\r\n",
+           name, num_args) ;
   strcat (G_reply_buf, line) ;
 }
 
@@ -2348,8 +2354,10 @@ void f_thread_stop (char *name)
     if ((G_thread_entry[idx].state == THREAD_RUNNING) &&
         (strcmp(G_thread_entry[idx].name, name) == 0))
     {
-      G_thread_entry[idx].state = THREAD_WRAPUP ;
-      pthread_join (G_thread_entry[idx].tid, NULL) ;
+      G_thread_entry[idx].state = THREAD_WRAPUP ; // give it a chance to finish
+      delay (1000) ;
+      vTaskDelete (G_thread_entry[idx].tid) ;
+      G_thread_entry[idx].state = THREAD_STOPPED ;
       sprintf (line, "tid:%d '%s' stopped.\r\n",
                G_thread_entry[idx].tid, name) ;
       strcat (G_reply_buf, line) ;
@@ -2422,11 +2430,12 @@ void f_esp32 (char **tokens)
         if (G_thread_entry[i].metric != NULL)
           metric = G_thread_entry[i].metric ;
 
-        sprintf (msg, "%d. %s tid:%d cpu:%d '%s' age:%ld metric:%s msg:%s\r\n",
-                 num, state,
-                 G_thread_entry[i].tid,
-                 G_thread_entry[i].core,
+        sprintf (msg, "%d. %s:%s loops:%d cpu:%d age:%ld metric:%s msg:%s\r\n",
+                 num,
                  G_thread_entry[i].name,
+                 state,
+                 G_thread_entry[i].loops,
+                 G_thread_entry[i].core,
                  (now - G_thread_entry[i].ts_started) / 1000,
                  metric,
                  G_thread_entry[i].msg) ;
