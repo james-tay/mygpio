@@ -287,7 +287,7 @@ char *G_hostname ;              // our hostname
 
 unsigned long G_next_cron ;        // millis() time of next run
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
-pthread_mutex_t G_publish_lock ;      // signal main thread to publish()
+SemaphoreHandle_t G_publish_lock ;      // signal main thread to publish()
 
 /* Data structure of a single thread result value (with multiple tags) */
 
@@ -308,7 +308,7 @@ struct thread_entry_s
   char name[MAX_THREAD_NAME] ;
   unsigned char state ;
   pthread_t tid ;
-  pthread_mutex_t lock ;              // lock before making changes here
+  SemaphoreHandle_t lock ;            // lock before making changes here
 
   /* input arguments to <ft_task> */
 
@@ -1109,26 +1109,16 @@ void f_delivery (S_thread_entry *p, S_thread_result *r)
     sprintf (v, " %d.%02d", int(r->f_value), (int)(r->f_value*100)%100) ;
   strcat (payload, v) ;
 
-  if (G_debug)
-  {
-    Serial.print ("DEBUG: publish(") ;
-    Serial.print (topic) ;
-    Serial.print (")(") ;
-    Serial.print (payload) ;
-    Serial.println (")") ;
-  }
-
   /* write to G_pub_topic and G_pub_payload, only when they're empty */
 
   while (1)
   {
-    pthread_mutex_lock (&G_publish_lock) ;
+    xSemaphoreTake (G_publish_lock, portMAX_DELAY) ;
     if (strlen(G_pub_topic) == 0)
       break ;
     else
     {
-      pthread_mutex_unlock (&G_publish_lock) ;
-
+      xSemaphoreGive (G_publish_lock) ;
       G_Metrics->mqttPubWaits++ ;
       delay (100) ;
     }
@@ -1136,8 +1126,7 @@ void f_delivery (S_thread_entry *p, S_thread_result *r)
 
   strcpy (G_pub_topic, topic) ;
   strcpy (G_pub_payload, payload) ;
-
-  pthread_mutex_unlock (&G_publish_lock) ;
+  xSemaphoreGive (G_publish_lock) ;
 }
 
 void f_publish (char *topic, char *payload)
@@ -2166,10 +2155,10 @@ void *f_thread_lifecycle (void *p)
 
   /* initialize thread info, indicate thread is now running */
 
-  pthread_mutex_lock (&entry->lock) ;
+  xSemaphoreTake (entry->lock, portMAX_DELAY) ;
   entry->state = THREAD_RUNNING ;
   entry->core = xPortGetCoreID () ;
-  pthread_mutex_unlock (&entry->lock) ;
+  xSemaphoreGive (entry->lock) ;
 
   while (entry->state == THREAD_RUNNING)
   {
@@ -2177,9 +2166,9 @@ void *f_thread_lifecycle (void *p)
     entry->loops++ ;
   }
 
-  pthread_mutex_lock (&entry->lock) ;
+  xSemaphoreTake (entry->lock, portMAX_DELAY) ;
   entry->state = THREAD_STOPPED ;
-  pthread_mutex_unlock (&entry->lock) ;
+  xSemaphoreGive (entry->lock) ;
 }
 
 void f_thread_create (char *name)
@@ -2192,11 +2181,11 @@ void f_thread_create (char *name)
   for (idx=0 ; idx < MAX_THREADS ; idx++)
     if (G_thread_entry[idx].state == THREAD_STOPPED)
     {
-      pthread_mutex_lock (&G_thread_entry[idx].lock) ;
+      xSemaphoreTake (G_thread_entry[idx].lock, portMAX_DELAY) ;
       pthread_join (G_thread_entry[idx].tid, NULL) ;
       G_thread_entry[idx].state = THREAD_READY;
       G_thread_entry[idx].name[0] = 0 ;
-      pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
+      xSemaphoreGive (G_thread_entry[idx].lock) ;
     }
 
   /* do validations first */
@@ -2247,7 +2236,7 @@ void f_thread_create (char *name)
 
   /* found an available G_thread_entry, lock it, update and fire it up */
 
-  pthread_mutex_lock (&G_thread_entry[idx].lock) ; /* START CRITICAL SECTION */
+  xSemaphoreTake (G_thread_entry[idx].lock, portMAX_DELAY) ;
 
   /*
      try read optional tags config file, parse it in G_thread_entry[].tags,
@@ -2329,7 +2318,7 @@ void f_thread_create (char *name)
     G_thread_entry[idx].name[0] = 0 ;
     sprintf (line, "FAULT: no such ft_task '%s'.\r\n", ft_taskname) ;
     strcat (G_reply_buf, line) ;
-    pthread_mutex_unlock (&G_thread_entry[idx].lock) ;
+    xSemaphoreGive (G_thread_entry[idx].lock) ;
     return ;
   }
 
@@ -2341,7 +2330,7 @@ void f_thread_create (char *name)
                   (void*) &G_thread_entry[idx]) ;
   G_thread_entry[idx].tid = tid ;
 
-  pthread_mutex_unlock (&G_thread_entry[idx].lock) ; /* END CRITICAL SECTION */
+  xSemaphoreGive (G_thread_entry[idx].lock) ;
 
   sprintf (line, "thread '%s' created with tid:%d in_args:%d\r\n",
            name, tid, num_args) ;
@@ -2825,11 +2814,11 @@ void setup ()
   for (i=0 ; i < MAX_THREADS ; i++)
   {
     memset (&G_thread_entry[i], 0, sizeof(S_thread_entry)) ;
-    pthread_mutex_init (&G_thread_entry[i].lock, NULL) ;
+    G_thread_entry[i].lock = xSemaphoreCreateMutex () ;
   }
   sprintf (line, "NOTICE: Max allowed threads %d.", MAX_THREADS) ;
   Serial.println (line) ;
-  pthread_mutex_init (&G_publish_lock, NULL) ;
+  G_publish_lock = xSemaphoreCreateMutex () ;
 
   digitalWrite (LED_BUILTIN, LOW) ;           // 1-sec blink to indicate boot.
   delay (1000) ;
@@ -2925,7 +2914,7 @@ void loop ()
   }
 
 
-  pthread_mutex_lock (&G_publish_lock) ;
+  xSemaphoreTake (G_publish_lock, portMAX_DELAY) ;
   if (strlen(G_pub_topic) > 0)
   {
     if (G_debug)
@@ -2941,7 +2930,7 @@ void loop ()
     G_pub_topic[0] = 0 ;
     G_pub_payload[0] = 0 ;
   }
-  pthread_mutex_unlock (&G_publish_lock) ;
+  xSemaphoreGive (G_publish_lock) ;
 
   /* handle web requests */
 
