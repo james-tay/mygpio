@@ -243,6 +243,7 @@
 
 #define MAX_HTTP_REQUEST 1024
 #define MAX_HTTP_CLIENTS 4            // esp32 supports 8x file descriptors
+#define MAX_HTTP_RTIME 20             // seconds to receive an http request
 
 /* various states for S_thread_entry.state */
 
@@ -336,6 +337,7 @@ struct web_client
 {
   int sd ;                              // the client's socket descriptor
   int req_pos ;                         // insertion point in "request"
+  unsigned long connect_time ;          // millis() timestamp of connection
   char request[MAX_HTTP_REQUEST] ;      // http request from client
 
 } ;
@@ -1324,6 +1326,22 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
 
 }
 
+void f_handleWebRequest (S_WebClient *client)
+{
+
+
+
+
+
+
+
+
+
+  close (client->sd) ;
+  client->sd = 0 ;
+  client->req_pos = 0 ;
+}
+
 void f_handleWebServer ()
 {
   int i, max_fd ;
@@ -1369,6 +1387,7 @@ void f_handleWebServer ()
           if (G_WebClient[idx].sd == 0)
           {
             G_WebClient[idx].sd = sd ;
+            G_WebClient[idx].connect_time = millis () ;
             break ;
           }
         if (idx == MAX_HTTP_CLIENTS)
@@ -1393,14 +1412,14 @@ void f_handleWebServer ()
           Serial.println (line) ;
         }
 
-        int buf_remaining = MAX_THREAD_MSG_BUF - G_WebClient[i].req_pos - 1 ;
+        int buf_remaining = MAX_HTTP_REQUEST - G_WebClient[i].req_pos - 1 ;
         if (buf_remaining < 1)                  // client header too long
         {
           if (G_debug)
           {
             char line[BUF_SIZE] ;
-            snprintf (line, BUF_SIZE, "DEBUG: client sd:%d request too long",
-                      G_WebClient[i].sd) ;
+            snprintf (line, BUF_SIZE, "DEBUG: client sd:%d exceeded %d bytes",
+                      G_WebClient[i].sd, MAX_HTTP_REQUEST) ;
             Serial.println (line) ;
           }
           close (G_WebClient[i].sd) ;
@@ -1425,7 +1444,7 @@ void f_handleWebServer ()
             G_WebClient[i].sd = 0 ;
             G_WebClient[i].req_pos = 0 ;
           }
-          else                                  // client send us data
+          else                                  // client sent us data
           {
             char line[BUF_SIZE] ;
             if (G_debug)
@@ -1436,10 +1455,45 @@ void f_handleWebServer ()
             }
             G_WebClient[i].req_pos = G_WebClient[i].req_pos + amt ;
             G_WebClient[i].request[G_WebClient[i].req_pos] = 0 ;
+
+            /* if client's request is 2x empty lines, request is complete */
+
+            if ((strstr(G_WebClient[i].request, "\n\n") != NULL) ||
+                (strstr(G_WebClient[i].request, "\r\n\r\n") != NULL))
+            {
+              int idx = G_WebClient[i].req_pos ;
+              while ((G_WebClient[i].request[idx-1] == '\n') ||
+                     (G_WebClient[i].request[idx-1] == '\r'))
+              {
+                idx-- ;
+                G_WebClient[i].request[idx] = 0 ;
+              }
+              G_WebClient[i].req_pos = idx ;
+              f_handleWebRequest (&G_WebClient[i]) ;
+            }
           }
         }
       }
   }
+
+  /* inspect all connected clients, kick out idle ones */
+
+  unsigned long now = millis () ;
+  for (i=0 ; i < MAX_HTTP_CLIENTS ; i++)
+    if ((G_WebClient[i].sd > 0) &&
+        (G_WebClient[i].connect_time + (MAX_HTTP_RTIME*1000) < now ))
+    {
+      if (G_debug)
+      {
+        char line[BUF_SIZE] ;
+        snprintf (line, BUF_SIZE, "DEBUG: disconnecting idle client sd:%d",
+                  G_WebClient[i].sd) ;
+        Serial.println (line) ;
+      }
+      close (G_WebClient[i].sd) ;
+      G_WebClient[i].sd = 0 ;
+      G_WebClient[i].req_pos = 0 ;
+    }
 }
 
 /* ------------------------------------------------------------------------- */
