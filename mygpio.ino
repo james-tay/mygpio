@@ -207,6 +207,7 @@
 #include <WiFi.h>
 #include <SPIFFS.h>
 #include <Update.h>
+#include <PubSubClient.h>
 
 #include "LiquidCrystal_I2C.h"
 
@@ -222,6 +223,7 @@
 #define WIFI_PW_FILE "/wifi.pw"
 #define MQTT_CFG_FILE "/mqtt.cfg"
 #define MQTT_PUB_FILE "/mqtt.pub"
+#define MQTT_SUB_FILE "/mqtt.sub"
 #define MQTT_TAGS_FILE "/mqtt.tags"
 #define AUTOEXEC_FILE "/autoexec.cfg"
 #define HOSTNAME_FILE "/hostname"
@@ -231,6 +233,7 @@
 #define BLINK_OFF LOW
 
 #define MAX_THREADS 16
+#define MAX_THREAD_STACK 4096
 #define MAX_THREAD_NAME 40
 #define MAX_THREAD_ARGS 8             // number of input args
 #define MAX_THREAD_RESULT_TAGS 8      // meta data tags
@@ -274,7 +277,9 @@ char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
 int G_sleep = 0 ;               // a flag to tell us to enter sleep mode
 int G_sd = 0 ;                  // web server's socket descriptor
 char *G_mqtt_pub ;              // mqtt topic prefix we publish to
+char *G_mqtt_sub ;              // mqtt topic prefix we subscribe to
 char *G_mqtt_tags ;             // tags included in each publish
+char *G_mqtt_stopic ;           // the (command) topic we subscribe to
 char *G_pub_topic ;             // current topic we publish to
 char *G_pub_payload ;           // current payload we will publish
 
@@ -283,6 +288,7 @@ int G_serial_pos ;              // index of bytes received on serial port
 int G_debug ;                   // global debug level
 char *G_serial_buf ;            // accumulate butes on our serial console
 char *G_hostname ;              // our hostname
+
 
 unsigned long G_next_cron ;        // millis() time of next run
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
@@ -370,6 +376,9 @@ S_Metrics *G_Metrics ;
 S_thread_entry *G_thread_entry ;
 S_WebClient *G_WebClient ;
 LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
+
+WiFiClient G_wClient ;
+PubSubClient G_psClient (G_wClient) ;
 
 /* function prototypes */
 
@@ -1004,9 +1013,38 @@ void f_wifi (char **tokens)
              WiFi.subnetMask().toString().c_str()) ;
     strcat (G_reply_buf, line) ;
 
+    strcat (G_reply_buf, "mqtt_state: ") ;
+    switch (G_psClient.state())
+    {
+      case MQTT_CONNECTION_TIMEOUT:
+        strcat (G_reply_buf, "MQTT_CONNECTION_TIMEOUT\r\n") ; break ;
+      case MQTT_CONNECTION_LOST:
+        strcat (G_reply_buf, "MQTT_CONNECTION_LOST\r\n") ; break ;
+      case MQTT_CONNECT_FAILED:
+        strcat (G_reply_buf, "MQTT_CONNECT_FAILED\r\n") ; break ;
+      case MQTT_DISCONNECTED:
+        strcat (G_reply_buf, "MQTT_DISCONNECTED\r\n") ; break ;
+      case MQTT_CONNECTED:
+        strcat (G_reply_buf, "MQTT_CONNECTED\r\n") ; break ;
+      case MQTT_CONNECT_BAD_PROTOCOL:
+        strcat (G_reply_buf, "MQTT_CONNECT_BAD_PROTOCOL\r\n") ; break ;
+      case MQTT_CONNECT_BAD_CLIENT_ID:
+        strcat (G_reply_buf, "MQTT_CONNECT_BAD_CLIENT_ID\r\n") ; break ;
+      case MQTT_CONNECT_UNAVAILABLE:
+        strcat (G_reply_buf, "MQTT_CONNECT_UNAVAILABLE\r\n") ; break ;
+      case MQTT_CONNECT_BAD_CREDENTIALS:
+        strcat (G_reply_buf, "MQTT_CONNECT_BAD_CREDENTIALS\r\n") ; break ;
+      case MQTT_CONNECT_UNAUTHORIZED:
+        strcat (G_reply_buf, "MQTT_CONNECT_UNAUTHORIZED\r\n") ; break ;
+    }
     if (strlen(G_hostname) > 0)
     {
       snprintf (line, BUF_SIZE, "hostname: %s\r\n", G_hostname) ;
+      strcat (G_reply_buf, line) ;
+    }
+    if (strlen(G_mqtt_stopic) > 0)
+    {
+      snprintf (line, BUF_SIZE, "subscribed_topic: %s\r\n", G_mqtt_stopic) ;
       strcat (G_reply_buf, line) ;
     }
   }
@@ -1079,6 +1117,168 @@ void f_wifi (char **tokens)
 /* Network IO                                                                */
 /* ------------------------------------------------------------------------- */
 
+void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
+{
+  char msg[MAX_MQTT_LEN + 1], buf[BUF_MEDIUM] ;
+
+  if (length > MAX_MQTT_LEN)
+  {
+    G_Metrics->mqttOversize++ ;
+    return ;
+  }
+  memcpy (msg, payload, length) ;
+  msg[length] = 0 ;
+  G_Metrics->mqttSubs++ ;
+
+  /* print the command we received to console and parse it */
+
+  snprintf (buf, BUF_MEDIUM, "NOTICE: mqtt [%s] %s", topic, msg) ;
+  Serial.println (buf) ;
+
+  int idx = 0 ;
+  char *tokens[MAX_TOKENS] ;
+  char *p = strtok (msg, " ") ;
+  while ((p) && (idx < MAX_TOKENS))
+  {
+    tokens[idx] = p ;
+    idx++ ;
+    p = strtok (NULL, " ") ;
+  }
+  tokens[idx] = NULL ;
+
+  /* now execute the command we've parsed */
+
+  G_reply_buf[0] = 0 ;
+  if (tokens[0] != NULL)
+    f_action (tokens) ;
+  if (strlen (G_reply_buf) > 0)
+  {
+    Serial.print (G_reply_buf) ;
+    if (G_reply_buf[strlen(G_reply_buf)-1] != '\n')
+      Serial.print ("\r\n") ;                         // add CRNL if needed
+  }
+}
+
+void f_mqtt_connect ()
+{
+  char buf[BUF_SIZE], line[BUF_SIZE] ;
+  File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
+  if (f != NULL)
+  {
+    int amt = f.readBytes (buf, BUF_SIZE-1) ;
+    f.close () ;
+    if (amt > 0)
+    {
+      buf[amt] = 0 ;
+      strcpy (G_mqtt_sub, buf) ;
+    }
+  }
+  f = SPIFFS.open (MQTT_PUB_FILE, "r") ;      // publish file is mandatory
+  if (f == NULL)
+  {
+    sprintf (line, "WARNING: Cannot read MQTT publish file '%s'.",
+             MQTT_PUB_FILE) ;
+    Serial.println (line) ;
+    return ;
+  }
+  else
+  {
+    int amt = f.readBytes (buf, BUF_SIZE-1) ;
+    f.close () ;
+    if (amt > 0)
+    {
+      buf[amt] = 0 ;
+      strcpy (G_mqtt_pub, buf) ;
+    }
+  }
+
+  f = SPIFFS.open (MQTT_CFG_FILE, "r") ;      // broker config is mandatory
+  if (f == NULL)
+  {
+    sprintf (line, "WARNING: Cannot read MQTT subscribe file '%s'.",
+             MQTT_CFG_FILE) ;
+    Serial.println (line) ;
+  }
+  else
+  {
+    int amt = f.readBytes (buf, BUF_SIZE-1) ;
+    f.close () ;
+    if (amt > 0)
+    {
+      buf[amt] = 0 ;
+      char *mqtt_host, *mqtt_port, *user, *pw ;
+
+      if (((mqtt_host = strtok (buf, ",")) == NULL) ||
+          ((mqtt_port = strtok (NULL, ",")) == NULL) ||
+          ((user = strtok (NULL, ",")) == NULL) ||
+          ((pw = strtok (NULL, ",")) == NULL))
+      {
+        sprintf (line, "WARNING: Cannot parse %s.", MQTT_CFG_FILE) ;
+        Serial.println (line) ;
+      }
+      else
+      {
+        char id[BUF_SIZE] ;
+        unsigned char mac[6] ;
+        WiFi.macAddress(mac) ;
+        sprintf (id, "%x:%x:%x:%x:%x:%x",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
+        G_psClient.setServer (mqtt_host, atoi(mqtt_port)) ;
+        if (G_psClient.connect (id, user, pw))
+        {
+          G_Metrics->mqttConnects++ ;
+          if (strlen(G_mqtt_sub) > 0)
+          {
+            /* by default, subscribe to a topic "<subscribe_prefix>/<mac>" */
+
+            char topic[MAX_MQTT_LEN] ;
+            snprintf (topic, MAX_MQTT_LEN, "%s/%s", G_mqtt_sub, id) ;
+
+            /*
+               subscribe to "<subscribe_prefix>/<hostname>" if HOSTNAME_FILE
+               exists
+            */
+
+            File f = SPIFFS.open (HOSTNAME_FILE, "r") ;
+            if (f != NULL)
+            {
+              int amt = f.readBytes (G_hostname, BUF_SIZE) ;
+              if (amt > 0)
+              {
+                G_hostname[amt] = 0 ;
+                snprintf (topic, MAX_MQTT_LEN, "%s/%s",
+                          G_mqtt_sub, G_hostname) ;
+              }
+              f.close () ;
+            }
+
+            strcpy (G_mqtt_stopic, topic) ;
+            G_psClient.subscribe (topic) ;
+            G_psClient.setCallback (f_mqtt_callback) ;
+          }
+
+          /* take this opportunity to read MQTT_TAGS_FILE */
+
+          File f = SPIFFS.open (MQTT_TAGS_FILE, "r") ;
+          if (f != NULL)
+          {
+            int amt = f.readBytes (G_mqtt_tags, MAX_MQTT_LEN-1) ;
+            if (amt > 0)
+              G_mqtt_tags[amt] = 0 ;
+            f.close () ;
+          }
+        }
+        else
+        {
+          sprintf (line, "WARNING: Cannot connect to broker %s:%d.",
+                   mqtt_host, atoi(mqtt_port)) ;
+          Serial.println (line) ;
+        }
+      }
+    }
+  }
+}
+
 /*
    This function is supplied the S_thread_entry of the calling thread, and
    the result of interest. With some help from f_buildMetric(), our job is to
@@ -1126,23 +1326,6 @@ void f_delivery (S_thread_entry *p, S_thread_result *r)
   strcpy (G_pub_topic, topic) ;
   strcpy (G_pub_payload, payload) ;
   xSemaphoreGive (G_publish_lock) ;
-}
-
-void f_publish (char *topic, char *payload)
-{
-  if (G_debug)
-  {
-    char line[BUF_MEDIUM] ;
-    snprintf (line, BUF_MEDIUM, "DEBUG: publishing %s->%s", topic, payload) ;
-    Serial.println (line) ;
-  }
-
-
-
-
-
-
-
 }
 
 void f_v1api (char *query)
@@ -1729,6 +1912,12 @@ void f_cron ()
     args[1] = "connect" ;
     args[2] = NULL ;
     f_wifi (args) ;
+  }
+  if (G_psClient.connected() == false)
+  {
+    if (G_debug)
+      Serial.println ("DEBUG: f_cron() calling f_mqtt_connect()") ;
+    f_mqtt_connect () ;
   }
 
   /* If this is our first run, check if AUTOEXEC_FILE exists */
@@ -2331,7 +2520,7 @@ void f_thread_create (char *name)
   G_thread_entry[idx].state = THREAD_STARTING ;
   xTaskCreate ((TaskFunction_t) f_thread_lifecycle,
                G_thread_entry[idx].name,
-               4096,
+               MAX_THREAD_STACK,
                &G_thread_entry[idx],
                tskIDLE_PRIORITY,
                &G_thread_entry[idx].tid) ;
@@ -2796,6 +2985,8 @@ void setup ()
   G_Metrics = (S_Metrics*) malloc (sizeof(S_Metrics)) ;
   memset (G_Metrics, 0, sizeof(S_Metrics)) ;
   G_mqtt_pub = (char*) malloc (MAX_MQTT_LEN + 1) ;
+  G_mqtt_sub = (char*) malloc (MAX_MQTT_LEN + 1) ;
+  G_mqtt_stopic = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_mqtt_tags = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_pub_topic = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_pub_payload = (char*) malloc (MAX_MQTT_LEN + 1) ;
@@ -2804,6 +2995,8 @@ void setup ()
   G_hostname = (char*) malloc (BUF_SIZE+1) ;
 
   G_mqtt_pub[0] = 0 ;
+  G_mqtt_sub[0] = 0 ;
+  G_mqtt_stopic[0] = 0 ;
   G_mqtt_tags[0] = 0 ;
   G_pub_topic[0] = 0 ;
   G_pub_payload[0] = 0 ;
@@ -2922,24 +3115,29 @@ void loop ()
     G_serial_pos = 0 ;
   }
 
-
-  xSemaphoreTake (G_publish_lock, portMAX_DELAY) ;
-  if (strlen(G_pub_topic) > 0)
+  if (G_psClient.connected())
   {
-    if (G_debug)
+    xSemaphoreTake (G_publish_lock, portMAX_DELAY) ;
+    if (strlen(G_pub_topic) > 0)
     {
-      char line[BUF_SIZE] ;
-      sprintf (line, "DEBUG: publishing %d bytes.", strlen(G_pub_payload)) ;
-      Serial.println (line) ;
+      if (G_debug)
+      {
+        char line[BUF_SIZE] ;
+        sprintf (line, "DEBUG: publishing %d bytes.", strlen(G_pub_payload)) ;
+        Serial.println (line) ;
+      }
+
+      /* publish our "payload" to "topic" */
+
+      G_psClient.publish (G_pub_topic, G_pub_payload) ;
+      G_pub_topic[0] = 0 ;
+      G_pub_payload[0] = 0 ;
+      G_Metrics->mqttPubs++ ;
     }
+    xSemaphoreGive (G_publish_lock) ;
 
-    /* publish our "payload" to "topic" */
-
-    f_publish (G_pub_topic, G_pub_payload) ;
-    G_pub_topic[0] = 0 ;
-    G_pub_payload[0] = 0 ;
+    G_psClient.loop () ; // handle any incoming messages
   }
-  xSemaphoreGive (G_publish_lock) ;
 
   /* handle web requests */
 
