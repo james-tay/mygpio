@@ -164,10 +164,14 @@
      - A thread may deliver event data by calling f_delivery().
      - The f_delivery() function prepares "<metric>" for delivery via MQTT to
        a topic with the format: "<publish_prefix>/<hostname>/<thread_name>"
+     - In order to present metrics published over MQTT in a manner that's
+       similar to prometheus scrapes, we insert the contents of MQTT_TAGS_FILE
+       in each metric. This file typically has the content :
+         instance="foo:80",job="bar"
      - Each EC subscribes to a topic "<subscribe_prefix>/<hostname>" and awaits
        commands sent to it.
-     - the main thread performs the actual MQTT publish since this library is
-       not thread safe. G_publish_lock controls access to G_pub_topic and
+     - the main thread performs the actual MQTT publish since this library may
+       not be thread safe. G_publish_lock controls access to G_pub_topic and
        G_pub_payload.
 
    Notes
@@ -253,7 +257,7 @@
 #define THREAD_STARTING       1       // thread just got created
 #define THREAD_RUNNING        2       // thread in f_thread_lifecycle()
 #define THREAD_WRAPUP         3       // tell a thread to terminate
-#define THREAD_STOPPED        4       // awaiting pthread_join()
+#define THREAD_STOPPED        4       // thread is as good as dead
 
 /* ====== ALL OTHER GENERAL STUFF ====== */
 
@@ -328,7 +332,7 @@ struct thread_entry_s
 
   int core ;                          // cpu core ID thread runs on
   unsigned long loops ;               // number of <ft_task> calls so far
-  unsigned long ts_started ;          // millis() timestamp of pthread_create()
+  unsigned long ts_started ;          // millis() timestamp of xTaskCreate()
   void (*ft_addr)(struct thread_entry_s*) ; // the <ft_task> this thread runs
 
   /* IMPORTANT !!! <ft_task> may modify anything below this point */
@@ -377,7 +381,7 @@ S_thread_entry *G_thread_entry ;
 S_WebClient *G_WebClient ;
 LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
-WiFiClient G_wClient ;
+WiFiClient G_wClient ; // this is needed to instanciate "G_psClient"
 PubSubClient G_psClient (G_wClient) ;
 
 /* function prototypes */
@@ -1374,8 +1378,8 @@ void f_v1api (char *query)
 
 /*
    This is a convenience function called from f_handleWebMetrics() and also
-   f_delivery. Our job is to build up the metric entry with metadata tags for
-   a given result "r", writing it into the supplied "metric" buffer. If
+   f_delivery(). Our job is to build up the metric entry with metadata tags
+   for a given result "r", writing it into the supplied "metric" buffer. If
    "mqtt_tags" is non-zero, tags from MQTT_TAGS_FILE are added too. Note that
    the result value is not written into the output string "metric".
 */
@@ -1406,11 +1410,11 @@ void f_buildMetric (S_thread_entry *p, S_thread_result *r, int mqtt_tags,
       strcat (all_tags, ",") ;
     strcat (all_tags, one_tag) ;
   }
-  if (mqtt_tags)
+  if ((mqtt_tags) && (strlen(G_mqtt_tags) > 0))
   {
-
-
-
+    if (strlen(all_tags) > 0)
+      strcat (all_tags, ",") ;
+    strcat (all_tags, G_mqtt_tags) ;
   }
   if (strlen(all_tags) > 0)                     // append all_tags to "metric"
   {
@@ -1438,7 +1442,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            "ec_mqtt_subs %ld\n"
            "ec_mqtt_oversize %ld\n"
            "ec_mqtt_pub_waits %ld\n"
-           "ec_last_stack_addr 0x%x\n",
+           "ec_last_stack_addr %d\n",
            millis() / 1000,
            G_Metrics->serialInBytes,
            G_Metrics->serialCmds,
@@ -1884,7 +1888,6 @@ void f_ota (char *url)
     sprintf (line, "NOTICE: Flashed %d bytes in %d secs, please reboot.\r\n",
              amt, (tv_end - tv_start) / 1000) ;
     strcat (G_reply_buf, line) ;
-    Serial.print (line) ;
   }
   else
   {
@@ -2358,7 +2361,7 @@ void *f_thread_lifecycle (void *p)
   entry->state = THREAD_STOPPED ;
   xSemaphoreGive (entry->lock) ;
 
-  while (1) // wait for death
+  while (1) // await death, freeRTOS doesn't like thread functions to return
   {
     delay (1000) ;
     entry->loops++ ;
