@@ -614,8 +614,19 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
     return (0) ;
   }
 
+  unsigned short raw_temp = (data[2] << 8) | data[3] ;
+  char negative=0 ;
+  if (raw_temp & 0x8000)
+  {
+    raw_temp = raw_temp & 0x7FFF ;
+    negative = 1 ;
+  }
+
   *humidity = float (((int) data[0] << 8 ) | data[1]) / 10.0 ;
-  *temperature = float ((((int) data[2] & 0x7f ) << 8 ) | data[3]) / 10.0 ;
+  if (negative)
+    *temperature = float (raw_temp) / -10.0 ;
+  else
+    *temperature = float (raw_temp) / 10.0 ;
   return (1) ;
 }
 
@@ -2773,7 +2784,7 @@ void f_action (char **tokens)
     if (f_dht22 (atoi(tokens[1]), &t, &h))
     {
       sprintf (line, "dht22 - temperature:%d.%02d humidity:%d.%02d\r\n",
-               int(t), (int)(t*100)%100, int(h), (int)(h*100)%100) ;
+               int(t), abs((int)(t*100)%100), int(h), (int)(h*100)%100) ;
       strcat (G_reply_buf, line) ;
     }
   }
