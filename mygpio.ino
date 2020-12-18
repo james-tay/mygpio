@@ -1,7 +1,8 @@
 /*
    Build/Upload
 
-     % arduino-cli lib install ArduinoOTA
+     % arduino-cli lib install ArduinoOTA               # version 1.0.5
+     % arduino-cli lib install PubSubClient             # version 2.8
      % arduino-cli compile -b esp32:esp32:esp32 .
      % arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32 .
 
