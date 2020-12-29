@@ -1159,11 +1159,6 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
   msg[length] = 0 ;
   G_Metrics->mqttSubs++ ;
 
-  /* print the command we received to console and parse it */
-
-  snprintf (buf, BUF_MEDIUM, "NOTICE: mqtt [%s] %s", topic, msg) ;
-  Serial.println (buf) ;
-
   int idx = 0 ;
   char *tokens[MAX_TOKENS] ;
   char *p = strtok (msg, " ") ;
@@ -1180,12 +1175,27 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
   G_reply_buf[0] = 0 ;
   if (tokens[0] != NULL)
     f_action (tokens) ;
-  if (strlen (G_reply_buf) > 0)
+
+  /* if "G_reply_buf" has content, publish it, otherwise serial console */
+
+  if ((strlen (G_reply_buf) > 0) &&
+      (G_psClient.connected()) &&
+      (strlen(G_mqtt_rtopic) > 0))
   {
-    Serial.print (G_reply_buf) ;
-    if (G_reply_buf[strlen(G_reply_buf)-1] != '\n')
-      Serial.print ("\r\n") ;                         // add CRNL if needed
+    while ((strlen(G_reply_buf) > 0) &&
+           ((G_reply_buf[strlen(G_reply_buf)-1] == '\r') ||
+            (G_reply_buf[strlen(G_reply_buf)-1] == '\n')))
+    {
+      G_reply_buf[strlen(G_reply_buf)-1] = 0 ;
+    }
+    G_psClient.publish (G_mqtt_rtopic, G_reply_buf) ;
+    G_Metrics->mqttPubs++ ;
   }
+  else
+  {
+    Serial.println (G_reply_buf) ;
+  }
+  G_reply_buf[0] = 0 ;
 }
 
 /*
@@ -2954,6 +2964,8 @@ void f_action (char **tokens)
 
     if (dur > MAX_DUR)
       dur = MAX_DUR ;
+    if (freq < 1.0) // freq of 0.0 causes a panic
+      freq = 1.0 ;
 
     double d = ledcWriteTone (CHANNEL, freq) ;
     ledcAttachPin (pin, CHANNEL) ;
