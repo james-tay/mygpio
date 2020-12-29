@@ -1,8 +1,13 @@
 /*
    Build/Upload
 
+     % URL="https://dl.espressif.com/dl/package_esp32_index.json"
+     % arduino-cli core update-index --additional-urls $URL
+     % arduino-cli core install esp32:esp32 --additional-urls $URL
+
      % arduino-cli lib install ArduinoOTA               # version 1.0.5
      % arduino-cli lib install PubSubClient             # version 2.8
+
      % arduino-cli compile -b esp32:esp32:esp32 .
      % arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32 .
 
@@ -25,9 +30,9 @@
        lo 1
 
      test DHT22,
-       hi 12
-       dht22 13
-       lo 12
+       hi 14
+       dht22 12
+       lo 14
 
      test BMP180,
        bmp180
@@ -162,7 +167,8 @@
    Publishing/Subscribing events over MQTT
 
      - The global "G_psClient" object handles all MQTT work.
-     - A thread may deliver event data by calling f_delivery().
+     - A thread may deliver event data by calling f_delivery(), which places
+       the message into "G_pub_topic" and "G_pub_payload" respectively.
      - The f_delivery() function prepares "<metric>" for delivery via MQTT to
        a topic with the format: "<publish_prefix>/<hostname>/<thread_name>"
      - In order to present metrics published over MQTT in a manner that's
@@ -171,6 +177,7 @@
          instance="foo:80",job="bar"
      - Each EC subscribes to a topic "<subscribe_prefix>/<hostname>" and awaits
        commands sent to it.
+     - Command responses are published to "<publish_prefix>/<hostname>".
      - the main thread performs the actual MQTT publish since this library may
        not be thread safe. G_publish_lock controls access to G_pub_topic and
        G_pub_payload.
@@ -226,10 +233,10 @@
 
 #define WIFI_SSID_FILE "/wifi.ssid"
 #define WIFI_PW_FILE "/wifi.pw"
-#define MQTT_CFG_FILE "/mqtt.cfg"
-#define MQTT_PUB_FILE "/mqtt.pub"
-#define MQTT_SUB_FILE "/mqtt.sub"
-#define MQTT_TAGS_FILE "/mqtt.tags"
+#define MQTT_CFG_FILE "/mqtt.cfg"     // used in f_mqtt_connect()
+#define MQTT_PUB_FILE "/mqtt.pub"     // loaded into "G_mqtt_pub"
+#define MQTT_SUB_FILE "/mqtt.sub"     // loaded into "G_mqtt_sub"
+#define MQTT_TAGS_FILE "/mqtt.tags"   // loaded into "G_mqtt_tags"
 #define AUTOEXEC_FILE "/autoexec.cfg"
 #define HOSTNAME_FILE "/hostname"
 
@@ -285,7 +292,8 @@ char *G_mqtt_pub ;              // mqtt topic prefix we publish to
 char *G_mqtt_sub ;              // mqtt topic prefix we subscribe to
 char *G_mqtt_tags ;             // tags included in each publish
 char *G_mqtt_stopic ;           // the (command) topic we subscribe to
-char *G_pub_topic ;             // current topic we publish to
+char *G_mqtt_rtopic ;           // the (command) topic we respond to
+char *G_pub_topic ;             // topic prefix we publish sensor data to
 char *G_pub_payload ;           // current payload we will publish
 
 char *G_reply_buf ;             // accumulate our reply message here
@@ -1063,6 +1071,11 @@ void f_wifi (char **tokens)
       snprintf (line, BUF_SIZE, "subscribed_topic: %s\r\n", G_mqtt_stopic) ;
       strcat (G_reply_buf, line) ;
     }
+    if (strlen(G_mqtt_rtopic) > 0)
+    {
+      snprintf (line, BUF_SIZE, "cmd_response_topic: %s\r\n", G_mqtt_rtopic) ;
+      strcat (G_reply_buf, line) ;
+    }
   }
   else
   if (strcmp(tokens[1], "disconnect") == 0)                     // disconnect
@@ -1175,7 +1188,14 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
   }
 }
 
-void f_mqtt_connect ()
+/*
+   This function reads the various MQTT config file and sets up an MQTT
+   connection. It returns 1 on success, otherwise 0 with the error reported
+   on the console. Note that topic subscription(s) are optional, this function
+   still returns 1 if these are not configured.
+*/
+
+int f_mqtt_connect ()
 {
   char buf[BUF_SIZE], line[BUF_SIZE] ;
   File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
@@ -1195,7 +1215,7 @@ void f_mqtt_connect ()
     sprintf (line, "WARNING: Cannot read MQTT publish file '%s'.",
              MQTT_PUB_FILE) ;
     Serial.println (line) ;
-    return ;
+    return (0) ;
   }
   else
   {
@@ -1203,8 +1223,17 @@ void f_mqtt_connect ()
     f.close () ;
     if (amt > 0)
     {
+      char *idx=buf ;
       buf[amt] = 0 ;
-      strcpy (G_mqtt_pub, buf) ;
+      char *p = strtok_r (buf, ",", &idx) ;
+      strcpy (G_mqtt_pub, p) ;
+      p = strtok_r (NULL, ",", &idx) ;
+      if ((p) && (strlen(G_hostname) > 0))
+      {
+        strcpy (G_mqtt_rtopic, p) ;
+        strcat (G_mqtt_rtopic, "/") ;
+        strcat (G_mqtt_rtopic, G_hostname) ;
+      }
     }
   }
 
@@ -1214,12 +1243,19 @@ void f_mqtt_connect ()
     sprintf (line, "WARNING: Cannot read MQTT subscribe file '%s'.",
              MQTT_CFG_FILE) ;
     Serial.println (line) ;
+    return (0) ;
   }
   else
   {
     int amt = f.readBytes (buf, BUF_SIZE-1) ;
     f.close () ;
-    if (amt > 0)
+    if (amt < 1)
+    {
+      sprintf (line, "WARNING: %s is empty.\r\n", MQTT_CFG_FILE) ;
+      Serial.println (line)  ;
+      return (0) ;
+    }
+    else
     {
       buf[amt] = 0 ;
       char *mqtt_host, *mqtt_port, *user, *pw ;
@@ -1231,6 +1267,7 @@ void f_mqtt_connect ()
       {
         sprintf (line, "WARNING: Cannot parse %s.", MQTT_CFG_FILE) ;
         Serial.println (line) ;
+        return (0) ;
       }
       else
       {
@@ -1289,9 +1326,37 @@ void f_mqtt_connect ()
           sprintf (line, "WARNING: Cannot connect to broker %s:%d.",
                    mqtt_host, atoi(mqtt_port)) ;
           Serial.println (line) ;
+          return (0) ;
         }
       }
     }
+    return (1) ;
+  }
+}
+
+/*
+   This function is called from f_action(). It is mainly used for manual
+   connection/disconnection of MQTT, most likely from the console.
+*/
+
+void f_mqtt_ctl (char *ctl)
+{
+  if (strcmp(ctl, "connect") == 0)
+  {
+    if (f_mqtt_connect())
+      strcat (G_reply_buf, "MQTT connected\r\n") ;
+    else
+      strcat (G_reply_buf, "FAULT: check console for errors.\r\n") ;
+  }
+  else
+  if (strcmp(ctl, "disconnect") == 0)
+  {
+    G_psClient.disconnect() ;
+    strcat (G_reply_buf, "MQTT disconnected\r\n") ;
+  }
+  else
+  {
+    strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
 }
 
@@ -2696,6 +2761,8 @@ void f_action (char **tokens)
             "fs rm <filename>\r\n"
             "fs rename <old> <new>\r\n"
             "fs write <filename> <content>\r\n"
+            "mqtt connect\r\n"
+            "mqtt disconnect\r\n"
             "ota <url>\r\n"
             "reload\r\n"
             "wifi connect\r\n"
@@ -2718,7 +2785,7 @@ void f_action (char **tokens)
             "\r\n[Config Files]\r\n"
             "/hostname   <hostname>\r\n"
             "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
-            "/mqtt.pub   <topic to publish>\r\n"
+            "/mqtt.pub   <sensor topic pub prefix>,<cmd topic pub prefix>\r\n"
             "/mqtt.tags  <meta=\"value\",...>\r\n"
             "/wifi.ssid  <ssid>\r\n"
             "/wifi.pw    <pw>\r\n") ;
@@ -2848,6 +2915,11 @@ void f_action (char **tokens)
     ESP.restart () ;
   }
   else
+  if ((strcmp(tokens[0], "mqtt") == 0) && (tokens[1] != NULL))
+  {
+    f_mqtt_ctl (tokens[1]) ;
+  }
+  else
   if ((strcmp(tokens[0], "ota") == 0) && (tokens[1] != NULL))
   {
     f_ota (tokens[1]) ;
@@ -2914,20 +2986,66 @@ void setup ()
   G_next_cron = CRON_INTERVAL * 1000 ;
   pinMode (LED_BUILTIN, OUTPUT) ;
 
+  /* early initialization for primary config global vars */
+
+  G_hostname = (char*) malloc (BUF_SIZE+1) ;
+  G_mqtt_pub = (char*) malloc (MAX_MQTT_LEN + 1) ;
+  G_hostname[0] = 0 ;
+  G_mqtt_pub[0] = 0 ;
+
   char line[BUF_SIZE] ;
   if (SPIFFS.begin())
   {
+    int amt ;
+    File f_cfg, f_pw ;
+
     Serial.println ("NOTICE: Checking built-in configuration.") ;
+
+    /* if other config files are present, load them into memory now */
+
+    f_cfg = SPIFFS.open (MQTT_PUB_FILE, "r") ;
+    f_cfg.seek (0) ;
+    amt = f_cfg.readBytes (G_mqtt_pub, BUF_SIZE) ;
+    if (amt < 1)
+    {
+      snprintf (line, BUF_SIZE, "WARNING: %s read returned %d - %s",
+                MQTT_PUB_FILE, amt, strerror(errno)) ;
+      Serial.println (line) ;
+    }
+    else
+    {
+      G_mqtt_pub[amt] = 0 ;
+      snprintf (line, BUF_SIZE, "NOTICE: publish prefix '%s'.", G_mqtt_pub) ;
+      Serial.println (line) ;
+    }
+    f_cfg.close () ;
+
+    f_cfg = SPIFFS.open (HOSTNAME_FILE, "r") ;
+    amt = f_cfg.readBytes (G_hostname, BUF_SIZE) ;
+    if (amt < 1)
+    {
+      snprintf (line, BUF_SIZE, "WARNING: %s read returned %d - %s",
+                HOSTNAME_FILE, amt, strerror(errno)) ;
+      Serial.println (line) ;
+    }
+    else
+    {
+      G_hostname[amt] = 0 ;
+      snprintf (line, BUF_SIZE, "NOTICE: hostname is '%s'.", G_hostname) ;
+      Serial.println (line) ;
+    }
+    f_cfg.close () ;
+
 
     /* if wifi ssid and password are available, try connect to wifi now.  */
 
-    File f_ssid = SPIFFS.open (WIFI_SSID_FILE, "r") ;
-    File f_pw = SPIFFS.open (WIFI_PW_FILE, "r") ;
-    if ((f_ssid) && (f_pw) &&
-        (f_ssid.size() > 0) && (f_pw.size() > 0) &&
-        (f_ssid.size() <= MAX_SSID_LEN) && (f_pw.size() <= MAX_PASSWD_LEN))
+    f_cfg = SPIFFS.open (WIFI_SSID_FILE) ;
+    f_pw = SPIFFS.open (WIFI_PW_FILE) ;
+    if ((f_cfg) && (f_pw) &&
+        (f_cfg.size() > 0) && (f_pw.size() > 0) &&
+        (f_cfg.size() <= MAX_SSID_LEN) && (f_pw.size() <= MAX_PASSWD_LEN))
     {
-      int s_amt = f_ssid.readBytes (cfg_wifi_ssid, MAX_SSID_LEN) ;
+      int s_amt = f_cfg.readBytes (cfg_wifi_ssid, MAX_SSID_LEN) ;
       if (s_amt > 0)
         cfg_wifi_ssid[s_amt] = 0 ;
       int p_amt = f_pw.readBytes (cfg_wifi_pw, MAX_PASSWD_LEN) ;
@@ -2958,37 +3076,10 @@ void setup ()
         }
       }
     }
-    if (f_ssid)
-      f_ssid.close () ;
+    if (f_cfg)
+      f_cfg.close () ;
     if (f_pw)
       f_pw.close () ;
-
-    /* if other config files are present, load them into memory now */
-
-    File f_cfg = SPIFFS.open (MQTT_PUB_FILE, "r") ;
-    if (f_cfg)
-    {
-      int amt = f_cfg.readBytes (G_mqtt_pub, MAX_MQTT_LEN) ;
-      if (amt > 0)
-      {
-        G_mqtt_pub[amt] = 0 ;
-        snprintf (line, BUF_SIZE, "NOTICE: publish prefix '%s'.", G_mqtt_pub) ;
-        Serial.println (line) ;
-      }
-      f_cfg.close () ;
-    }
-    f_cfg = SPIFFS.open (HOSTNAME_FILE, "r") ;
-    if (f_cfg)
-    {
-      int amt = f_cfg.readBytes (G_hostname, BUF_SIZE) ;
-      if (amt > 0)
-      {
-        G_hostname[amt] = 0 ;
-        snprintf (line, BUF_SIZE, "NOTICE: hostname is '%s'.", G_hostname) ;
-        Serial.println (line) ;
-      }
-      f_cfg.close () ;
-    }
   }
   else
   {
@@ -2999,25 +3090,23 @@ void setup ()
 
   G_Metrics = (S_Metrics*) malloc (sizeof(S_Metrics)) ;
   memset (G_Metrics, 0, sizeof(S_Metrics)) ;
-  G_mqtt_pub = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_mqtt_sub = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_mqtt_stopic = (char*) malloc (MAX_MQTT_LEN + 1) ;
+  G_mqtt_rtopic = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_mqtt_tags = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_pub_topic = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_pub_payload = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_reply_buf = (char*) malloc (REPLY_SIZE+1) ;
   G_serial_buf = (char*) malloc (BUF_SIZE+1) ;
-  G_hostname = (char*) malloc (BUF_SIZE+1) ;
 
-  G_mqtt_pub[0] = 0 ;
   G_mqtt_sub[0] = 0 ;
   G_mqtt_stopic[0] = 0 ;
+  G_mqtt_rtopic[0] = 0 ;
   G_mqtt_tags[0] = 0 ;
   G_pub_topic[0] = 0 ;
   G_pub_payload[0] = 0 ;
   G_reply_buf[0] = 0 ;
   G_serial_buf[0] = 0 ;
-  G_hostname[0] = 0 ;
 
   int i ;
 
