@@ -181,6 +181,14 @@
      - the main thread performs the actual MQTT publish since this library may
        not be thread safe. G_publish_lock controls access to G_pub_topic and
        G_pub_payload.
+     - commands delivered to an EC via MQTT must be in the format :
+         [<tag>|]<command...>
+       where "<tag>" is optional (note the vertical bar separator). Eg,
+         foo|hi 23
+     - responses from commands are pubished with the format :
+         [<tag>|]<output...>
+       where "<tag>" was specified in the command. This allows confirmation
+       of command execution from the command originator's prospective.
 
    Notes
 
@@ -1148,7 +1156,8 @@ void f_wifi (char **tokens)
 
 void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
 {
-  char msg[MAX_MQTT_LEN + 1], buf[BUF_MEDIUM] ;
+  char msg[MAX_MQTT_LEN + 1] ;
+  char *cmd=msg, *tag=NULL ;
 
   if (length > MAX_MQTT_LEN)
   {
@@ -1159,9 +1168,25 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
   msg[length] = 0 ;
   G_Metrics->mqttSubs++ ;
 
-  int idx = 0 ;
+  /* attempt to identify optional "tag" from "cmd" */
+
+  int idx ;
+  for (idx=0 ; idx < strlen(msg) ; idx++)
+  {
+    if (msg[idx] == '|')
+    {
+      tag = msg ;
+      tag[idx] = 0 ;            // found the optional "tag"
+      cmd = msg + idx + 1 ;     // repoint to new "cmd" position
+      break ;
+    }
+  }
+
+  /* parse our "cmd" */
+
+  idx = 0 ;
   char *tokens[MAX_TOKENS] ;
-  char *p = strtok (msg, " ") ;
+  char *p = strtok (cmd, " ") ;
   while ((p) && (idx < MAX_TOKENS))
   {
     tokens[idx] = p ;
@@ -1170,9 +1195,15 @@ void f_mqtt_callback (char *topic, byte *payload, unsigned int length)
   }
   tokens[idx] = NULL ;
 
-  /* now execute the command we've parsed */
+  /* prepend "G_reply_buf" with optional tag and execute the command */
 
   G_reply_buf[0] = 0 ;
+  if (tag != NULL)
+  {
+    strcpy (G_reply_buf, tag) ;
+    strcat (G_reply_buf, "|") ;
+  }
+
   if (tokens[0] != NULL)
     f_action (tokens) ;
 
