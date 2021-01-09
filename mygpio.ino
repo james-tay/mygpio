@@ -312,7 +312,6 @@ int G_debug ;                   // global debug level
 char *G_serial_buf ;            // accumulate butes on our serial console
 char *G_hostname ;              // our hostname
 
-
 unsigned long G_next_cron ;        // millis() time of next run
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
 SemaphoreHandle_t G_publish_lock ;      // signal main thread to publish()
@@ -615,12 +614,28 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
 
   /* convert pulse timings timings into humidity/temperature/checksum */
 
+  char buf[BUF_SIZE] ;
   memset (data, 0, 5) ;
   for (i=0 ; i<40 ; i++)
   {
     data[i/8] <<= 1 ;           // left shift bits, right most bit will be 0
     if (cycles[i] > 50)
+    {
+      if (G_debug)
+      {
+        snprintf (buf, BUF_SIZE, "DEBUG: bit:%d cycle:%d = 1", i, cycles[i]) ;
+        Serial.println (buf) ;
+      }
       data[i/8] |= 1 ;          // set right most bit to 1
+    }
+    else
+    {
+      if (G_debug)
+      {
+        snprintf (buf, BUF_SIZE, "DEBUG: bit:%d cycle:%d = 0", i, cycles[i]) ;
+        Serial.println (buf) ;
+      }
+    }
   }
 
   /* validate checksum */
@@ -628,6 +643,12 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
   unsigned char c = data[0] + data[1] + data[2] + data[3] ;
   if ((c & 0xff) != data[4])
   {
+    if (G_debug)
+    {
+      snprintf (buf, BUF_SIZE, "DEBUG: bad checksum 0x%x, expecting 0x%x.",
+                (int) c, (int) data[4]) ;
+      Serial.println (buf) ;
+    }
     strcat (G_reply_buf, "FAULT: f_dht22() checksum failed.\r\n") ;
     return (0) ;
   }
@@ -2391,7 +2412,10 @@ void ft_hcsr04 (S_thread_entry *p)
 
   while ((job_start < job_end) && (p->state == THREAD_RUNNING))
   {
+    vTaskPrioritySet (p->tid, configMAX_PRIORITIES - 1) ;
     double f_value = f_hcsr04 (trigPin, echoPin) ;
+    vTaskPrioritySet (p->tid, tskIDLE_PRIORITY) ;
+
     if (f_value > 0.0)                          // only process good data
     {
       v_total = v_total + f_value ;
@@ -2452,6 +2476,97 @@ void ft_hcsr04 (S_thread_entry *p)
     p->num_float_results = 4 ;                  // indicate results are good
   else
     p->num_float_results = 0 ;                  // indicate results are bad
+}
+
+void ft_dht22 (S_thread_entry *p)
+{
+  #define DHT22_POWER_ON_DELAY_MS 800
+  #define DHT22_RETRY_DELAY_MS 50
+
+  /* determine our parameters from "in_args" */
+
+  if (p->num_args != 3)
+  {
+    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+  if (p->loops == 0)
+  {
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "measurement" ;
+    p->results[0].data[0] = "\"temperature\"" ;
+    p->results[1].num_tags = 1 ;
+    p->results[1].meta[0] = "measurement" ;
+    p->results[1].data[0] = "\"humidity\"" ;
+  }
+
+  int delay_ms = atoi (p->in_args[0]) ;
+  int dataPin = atoi (p->in_args[1]) ;
+  int pwrPin = atoi (p->in_args[2]) ;
+  unsigned long start_time = millis () ;
+  unsigned long cutoff_time = start_time + delay_ms ;
+
+  /* if pwrPin is > 0, that means it's a real pin, so power it on now */
+
+  if (pwrPin >= 0)
+  {
+    pinMode (pwrPin, OUTPUT) ;
+    digitalWrite (pwrPin, HIGH) ;
+    delay (DHT22_POWER_ON_DELAY_MS) ;
+  }
+
+  int success=0 ;
+  float temperature=0.0, humidity=0.0 ;
+
+  while (millis() < cutoff_time)
+  {
+    /*
+       reading DHT22 data is timing sensitive, set this thread priority high
+       temporarily. If we don't do this, out thread WILL likely get context
+       switched out in the middle of reading DHT22 data.
+    */
+
+    vTaskPrioritySet (p->tid, configMAX_PRIORITIES - 1) ;
+    int result = f_dht22 (dataPin, &temperature, &humidity) ;
+    vTaskPrioritySet (p->tid, tskIDLE_PRIORITY) ;
+
+    if (result)
+    {
+      sprintf (p->msg, "polled in %dms", millis()-start_time) ;
+      success = 1 ;
+      break ;
+    }
+    delay (DHT22_RETRY_DELAY_MS) ;
+  }
+
+  /* if pwrPin is > 0, that means it's a real pin, so power it off now */
+
+  if (pwrPin >= 0)
+  {
+    digitalWrite (pwrPin, LOW) ;
+  }
+
+  /* report results (or failure) */
+
+  if (success)
+  {
+    p->results[0].f_value = temperature ;
+    p->results[1].f_value = humidity ;
+    p->num_float_results = 2 ;
+  }
+  else
+  {
+    snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
+              "failed data:%d pwr:%d", dataPin, pwrPin) ;
+    p->num_float_results = 0 ;
+  }
+
+  /* if we still have extra time, sleep a bit */
+
+  unsigned long now = millis () ;
+  if (now < cutoff_time)
+    delay (cutoff_time - now) ;
 }
 
 /* =========================== */
@@ -2622,6 +2737,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_aread ;
   if (strcmp (ft_taskname, "ft_adxl335") == 0)
     G_thread_entry[idx].ft_addr = ft_adxl335 ;
+  if (strcmp (ft_taskname, "ft_dht22") == 0)
+    G_thread_entry[idx].ft_addr = ft_dht22 ;
   if (strcmp (ft_taskname, "ft_dread") == 0)
     G_thread_entry[idx].ft_addr = ft_dread ;
   if (strcmp (ft_taskname, "ft_hcsr04") == 0)
@@ -2716,6 +2833,7 @@ void f_esp32 (char **tokens)
       "[Currently available <ft_tasks>]\r\n"
       "ft_adxl335,<delay>,<aggr>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
       "ft_aread,<delay>,<inPin>,[pwrPin],[loThres],[hiThres]\r\n"
+      "ft_dht22,<delay>,<dataPin>,<pwrPin>\r\n"
       "ft_dread,<delay>,<pin>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
@@ -2740,15 +2858,16 @@ void f_esp32 (char **tokens)
         if (G_thread_entry[i].metric != NULL)
           metric = G_thread_entry[i].metric ;
 
-        sprintf (msg, "%d. %s:%s loops:%d cpu:%d age:%ld metric:%s msg:%s\r\n",
-                 num,
-                 G_thread_entry[i].name,
-                 state,
-                 G_thread_entry[i].loops,
-                 G_thread_entry[i].core,
-                 (now - G_thread_entry[i].ts_started) / 1000,
-                 metric,
-                 G_thread_entry[i].msg) ;
+        snprintf (msg, BUF_MEDIUM,
+                  "%d. %s:%s loops:%d cpu:%d age:%ld metric:%s msg:%s\r\n",
+                  num,
+                  G_thread_entry[i].name,
+                  state,
+                  G_thread_entry[i].loops,
+                  G_thread_entry[i].core,
+                  (now - G_thread_entry[i].ts_started) / 1000,
+                  metric,
+                  G_thread_entry[i].msg) ;
         strcat (G_reply_buf, msg) ;
         num++ ;
       }
@@ -2924,6 +3043,9 @@ void f_action (char **tokens)
     sprintf (line, "Running on cpu:%d\r\n", xPortGetCoreID()) ;
     strcat (G_reply_buf, line) ;
     sprintf (line, "Built: %s, %s\r\n", __DATE__, __TIME__) ;
+    strcat (G_reply_buf, line) ;
+    sprintf (line, "Thread priority: %d/%d\r\n",
+             uxTaskPriorityGet(NULL), configMAX_PRIORITIES) ;
     strcat (G_reply_buf, line) ;
     sprintf (line, "Data sizes: ptr:%d char:%d "
                    "short:%d int:%d long:%d longlong:%d "
