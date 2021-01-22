@@ -1,6 +1,12 @@
-These tools allow for generic sensor polling on an arduino.
+Most of the detailed documentation (and examples) are in mygpio.ino.
 
-  mygpio.ino - this is the source code for the program in the arduino
+  mygpio.ino - this is the source code for the program in the ESP32
   mygpio.py  - this tool communicates to the arduino via (virtual) serial
 
+Note that compiling "mygpio.ino" requires the following files to be present in the current working directory :
+
+  LiquidCrystal_I2C.h
+  LiquidCrystal_I2C.cpp
+
+obtained from https://github.com/johnrickman/LiquidCrystal_I2C
 
