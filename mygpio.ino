@@ -152,11 +152,11 @@
 
      - In the earlier example, we place the following in "/tags-<name>" :
 
-         sensor_moisture,location=FlowerBed,model=resistance
+         sensor_moisture,location="FlowerBed",model="resistance"
 
-     - Thus, the format for the "/tags-<name>" file is :
+     - Thus, the format for the "/tags-<name>" file is (note the doublequotes):
 
-         <metric>[,<tagN>=<valueN>,...]
+         <metric>[,<tagN>="<valueN>",...]
 
      - A thread may insert its own tags in its "results" structure. These
        custom tags will be merged with those in "/tags-<name>" provided they
