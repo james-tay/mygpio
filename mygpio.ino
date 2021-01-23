@@ -24,6 +24,9 @@
        aread 33
        lo 5
 
+     test capacitive touch pin T6 (ie, GPIO 14)
+       tread 14
+
      test HC-SR04 (needs 5v),
        hi 1
        hcsr04 18 19
@@ -52,7 +55,9 @@
        fs write /wifi.pw changeme
 
      test thread creation
-       esp32 thread_start count1
+       fs write /thread-button1 ft_tread,50,14,50,60
+       fs write /tags-button1 sensor_button,location="Porch"
+       esp32 thread_start button1
 
      test PWM
        tone 15 2000 20
@@ -135,6 +140,14 @@
      c) update f_thread_create() to identify function address
      d) a thread may set its state to THREAD_STOPPED if it chooses to
         terminate early (eg, encountering a critical error state).
+     e) the ft_<task> body generally consists of the sections:
+       - check p->num_args and parse the string arguments
+       - do one time initialization if p->loops is zero.
+         - set p->results[].{num_tags,meta[],data[]} fields if needed
+       - perform the task
+         - call f_delivery() if needed
+       - set p->num_{int|float}_results} to indicate success or failure
+       - add an appropriate delay()
 
    Presenting Metrics For Scraping
 
@@ -2569,6 +2582,88 @@ void ft_dht22 (S_thread_entry *p)
     delay (cutoff_time - now) ;
 }
 
+void ft_tread (S_thread_entry *p)
+{
+  #define TOUCH_SAMPLES 20 // calculate average value to suppress jitter
+
+  if (p->num_args != 4)
+  {
+    strcpy (p->msg, "FATAL! Expecting 4x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  unsigned long start_time = millis () ;
+  int delay_ms = atoi (p->in_args[0]) ;
+  int pin = atoi (p->in_args[1]) ;
+  int loThres = atoi (p->in_args[2]) ;
+  int hiThres = atoi (p->in_args[3]) ;
+
+  if (p->loops == 0)
+  {
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "type" ;
+    p->results[0].data[0] = "\"Cur\"" ;
+    p->results[1].num_tags = 1 ;
+    p->results[1].meta[0] = "type" ;
+    p->results[1].data[0] = "\"Min\"" ;
+    p->results[2].num_tags = 1 ;
+    p->results[2].meta[0] = "type" ;
+    p->results[2].data[0] = "\"Max\"" ;
+    p->results[3].num_tags = 1 ;
+    p->results[3].meta[0] = "type" ;
+    p->results[3].data[0] = "\"State\"" ;
+
+    strcpy (p->msg, "init") ;
+  }
+
+  int i, val, total=0 ;
+  for (i=0 ; i < TOUCH_SAMPLES ; i++)
+    total = total + touchRead (pin) ;   // each call takes about 1ms
+  val = total / TOUCH_SAMPLES ;
+
+  if (p->loops == 0)
+  {
+    p->results[0].i_value = val ;       // current
+    p->results[1].i_value = val ;       // minimum
+    p->results[2].i_value = val ;       // maximum
+    p->results[3].i_value = 0 ;         // state (0|1)
+  }
+  else
+  {
+    int prev = p->results[0].i_value ;
+    p->results[0].i_value = val ;
+    if (val < p->results[1].i_value)    // a lower minimum
+      p->results[1].i_value = val ;
+    if (val > p->results[2].i_value)    // a higher maximum
+      p->results[2].i_value = val ;
+
+    /*
+       Check if we cross from a low to a high, or from high to low. Note
+       that when touched (ie, state=1), "val" goes to a low value.
+    */
+
+    if ((p->results[3].i_value == 1) && (val > hiThres))        // touch off
+    {
+      p->results[3].i_value = 0 ;
+      f_delivery (p, &p->results[3]) ;
+    }
+    if ((p->results[3].i_value == 0) && (val < loThres))        // touch on
+    {
+      p->results[3].i_value = 1 ;
+      f_delivery (p, &p->results[3]) ;
+    }
+  }
+  p->num_int_results = 4 ;
+
+  /* see how long we get to sleep for */
+
+  int nap = delay_ms - (millis() - start_time) ;
+  sprintf (p->msg, "ok, sleep %dms", nap) ;
+  if (nap > 0)
+    delay (nap) ;
+}
+
 /* =========================== */
 /* thread management functions */
 /* =========================== */
@@ -2743,6 +2838,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_dread ;
   if (strcmp (ft_taskname, "ft_hcsr04") == 0)
     G_thread_entry[idx].ft_addr = ft_hcsr04 ;
+  if (strcmp (ft_taskname, "ft_tread") == 0)
+    G_thread_entry[idx].ft_addr = ft_tread ;
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
@@ -2835,6 +2932,7 @@ void f_esp32 (char **tokens)
       "ft_aread,<delay>,<inPin>,[pwrPin],[loThres],[hiThres]\r\n"
       "ft_dht22,<delay>,<dataPin>,<pwrPin>\r\n"
       "ft_dread,<delay>,<pin>\r\n"
+      "ft_tread,<delay>,<pin>,<loThres>,<hiThres>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
       "\r\n"
@@ -2902,6 +3000,7 @@ void f_action (char **tokens)
             "lo <GPIO pin>\r\n"
             "aread <GPIO pin> - analog read (always 0 on esp8266)\r\n"
             "dread <GPIO pin> - digital read\r\n"
+            "tread <GPIO pin> - capacitive touch read\r\n"
             "bmp180           - barometric pressure (I2C)\r\n"
             "dht22 <dataPin>  - DHT-22 temperature/humidity sensor\r\n"
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
@@ -2991,6 +3090,14 @@ void f_action (char **tokens)
     pinMode (pin, INPUT) ;
     int val = digitalRead (pin) ;
     sprintf (line, "digitalRead pin:%d - %d\r\n", pin, val) ;
+    strcat (G_reply_buf, line) ;
+  }
+  else
+  if ((strcmp(tokens[0], "tread") == 0) && (tokens[1] != NULL))
+  {
+    int pin = atoi(tokens[1]) ;
+    int val = touchRead (pin) ;
+    sprintf (line, "touchRead pin:%d - %d\r\n", pin, val) ;
     strcat (G_reply_buf, line) ;
   }
   else
