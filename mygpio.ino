@@ -2613,14 +2613,45 @@ void ft_tread (S_thread_entry *p)
     p->results[3].num_tags = 1 ;
     p->results[3].meta[0] = "type" ;
     p->results[3].data[0] = "\"State\"" ;
-
     strcpy (p->msg, "init") ;
   }
 
-  int i, val, total=0 ;
+  /*
+     Because the touch sensor gets lots of jitter, take multiple samples, find
+     the standard deviation, then calculate the average from values within the
+     standard deviation.
+  */
+
+  int i, val, samples=0 ;
+  float raw[TOUCH_SAMPLES], total=0.0, mean, sd ;
+
   for (i=0 ; i < TOUCH_SAMPLES ; i++)
-    total = total + touchRead (pin) ;   // each call takes about 1ms
-  val = total / TOUCH_SAMPLES ;
+  {
+    raw[i] = float (touchRead (pin)) ;
+    total = total + raw[i] ;
+  }
+  mean = total / float(TOUCH_SAMPLES) ;
+
+  /* sum up the square of each deviation */
+
+  total = 0.0 ;
+  for (i=0 ; i < TOUCH_SAMPLES ; i++)
+    total = total + ((raw[i] - mean) * (raw[i] - mean)) ;
+
+  /* standard deviation is the square root of average variance */
+
+  sd = sqrt (total / float(TOUCH_SAMPLES)) ;
+
+  /* calculate the average of datapoints within the standard deviation */
+
+  total = 0.0 ;
+  for (i=0 ; i < TOUCH_SAMPLES ; i++)
+    if (fabsf (raw[i] - mean) <= sd)
+    {
+      total = total + raw[i] ;
+      samples++ ;
+    }
+  val = int(total / float(samples)) ;
 
   if (p->loops == 0)
   {
@@ -2630,6 +2661,7 @@ void ft_tread (S_thread_entry *p)
     p->results[3].i_value = 0 ;         // state (0|1)
   }
   else
+  if (samples > 1)
   {
     int prev = p->results[0].i_value ;
     p->results[0].i_value = val ;
@@ -2653,13 +2685,13 @@ void ft_tread (S_thread_entry *p)
       p->results[3].i_value = 1 ;
       f_delivery (p, &p->results[3]) ;
     }
+    p->num_int_results = 4 ;
   }
-  p->num_int_results = 4 ;
 
   /* see how long we get to sleep for */
 
   int nap = delay_ms - (millis() - start_time) ;
-  sprintf (p->msg, "ok, sleep %dms", nap) ;
+  sprintf (p->msg, "samples:%d sd:%d nap:%d", samples, (int)sd, nap) ;
   if (nap > 0)
     delay (nap) ;
 }
