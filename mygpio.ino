@@ -666,16 +666,12 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
     return (0) ;
   }
 
+  float raw_temp = ((word)(data[2] & 0x7F)) << 8 | data[3] ;
   if (data[2] & 0x80)
-  {
-    int raw_temp = ((data[2] & 0x7F) << 8) | data[3] ;
     *temperature = raw_temp * -0.1 ;
-  }
   else
-  {
-    int raw_temp = ((data[2] & 0x7F) << 8) | data[3] ;
     *temperature = raw_temp * 0.1 ;
-  }
+
   *humidity = float (((int) data[0] << 8 ) | data[1]) / 10.0 ;
   return (1) ;
 }
@@ -3247,7 +3243,6 @@ void f_action (char **tokens)
       (tokens[2] != NULL) && (tokens[3] != NULL))
   {
     #define CHANNEL 0                           // 16x PWM channels on an ESP32
-    #define RESOLUTION 8                        // resolution of duty cycle
     #define MAX_DUR 2000                        // don't block for too long
 
     int pin = atoi(tokens[1]) ;
