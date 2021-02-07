@@ -240,13 +240,13 @@
 #include <lwip/sockets.h>
 
 #include <FS.h>
-#include <Wire.h>
+#include <Wire.h>                     // this is for I2C support
 #include <WiFi.h>
 #include <SPIFFS.h>
 #include <Update.h>
 #include <PubSubClient.h>
 
-#include <OneWire.h>
+#include <OneWire.h>                  // 1-wire support, typically 16.3 kbps
 #include <DallasTemperature.h>
 #include <LiquidCrystal_I2C.h>
 
@@ -692,11 +692,32 @@ int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
   DallasTemperature sensor (&bus) ;
 
   sensor.begin () ;
-  if (sensor.getDeviceCount() < 1)
+  int devices = sensor.getDeviceCount() ;
+  if (devices < 1)
   {
     strcat (G_reply_buf, "FAULT: no devices found.\r\n") ;
     return (0) ;
   }
+
+  if (G_debug)
+  {
+    int i ;
+    char msg[BUF_SIZE] ;
+    unsigned char cur_addr[9] ;
+
+    for (i=0 ; i < devices ; i++)
+    {
+      if (sensor.getAddress (cur_addr, i))
+      {
+        cur_addr[8] = 0 ;
+        snprintf (msg, BUF_SIZE, "DEBUG: device:%d address:0x%x", i, cur_addr) ;
+      }
+      else
+        snprintf (msg, BUF_SIZE, "DEBUG: cannot get device:%d address", i) ;
+      Serial.println (msg) ;
+    }
+  }
+
   if (! sensor.getAddress (addr, 0))
   {
     strcat (G_reply_buf, "FAULT: cannot get device address.\r\n") ;
@@ -2610,6 +2631,67 @@ void ft_dht22 (S_thread_entry *p)
     delay (cutoff_time - now) ;
 }
 
+void ft_ds18b20 (S_thread_entry *p)
+{
+  #define DS18B20_POWER_ON_DELAY_MS 500
+
+  if (p->num_args != 3)
+  {
+    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  int delay_ms = atoi (p->in_args[0]) ;
+  int dataPin = atoi (p->in_args[1]) ;
+  int pwrPin = atoi (p->in_args[2]) ;
+
+  static thread_local char buf[16] ;
+  unsigned long start_time = millis () ;
+
+  if (p->loops == 0)
+  {
+    p->results[0].num_tags = 2 ;
+    p->results[0].meta[0] = "measurement" ;
+    p->results[0].data[0] = "\"temperature\"" ;
+    p->results[0].meta[1] = "address" ;
+
+    /*
+       turn on the power pin and leave it on in case we have other DS18B20s
+       polled by different threads.
+    */
+
+    pinMode (pwrPin, OUTPUT) ;
+    digitalWrite (pwrPin, HIGH) ;
+    delay (DS18B20_POWER_ON_DELAY_MS) ;
+  }
+
+  float t ;
+  unsigned char addr[9] ;
+  if (f_ds18b20 (dataPin, addr, &t) == 0)
+  {
+    strcpy (p->msg, "Failed to read data.") ;
+    p->num_float_results = 0 ;
+  }
+  else
+  {
+    sprintf (buf, "\"0x%x\"", addr) ;   /* device may have changed */
+    p->results[0].data[1] = buf ;
+    p->results[0].f_value = t ;
+    p->num_float_results = 1 ;
+  }
+
+  /* now figure out how long to nap for */
+
+  unsigned long end_time = millis () ;
+  int duration_ms = end_time - start_time ;
+  if (p->num_float_results)
+    sprintf (p->msg, "polled in %dms", duration_ms) ;
+  int nap = delay_ms - duration_ms ;
+  if (nap > 0)
+    delay (nap) ;
+}
+
 void ft_tread (S_thread_entry *p)
 {
   #define TOUCH_SAMPLES 20 // calculate average value to suppress jitter
@@ -2894,6 +2976,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_adxl335 ;
   if (strcmp (ft_taskname, "ft_dht22") == 0)
     G_thread_entry[idx].ft_addr = ft_dht22 ;
+  if (strcmp (ft_taskname, "ft_ds18b20") == 0)
+    G_thread_entry[idx].ft_addr = ft_ds18b20 ;
   if (strcmp (ft_taskname, "ft_dread") == 0)
     G_thread_entry[idx].ft_addr = ft_dread ;
   if (strcmp (ft_taskname, "ft_hcsr04") == 0)
@@ -2991,6 +3075,7 @@ void f_esp32 (char **tokens)
       "ft_adxl335,<delay>,<aggr>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
       "ft_aread,<delay>,<inPin>,[pwrPin],[loThres],[hiThres]\r\n"
       "ft_dht22,<delay>,<dataPin>,<pwrPin>\r\n"
+      "ft_ds18b20,<delay>,<dataPin>,<pwrPin>\r\n"
       "ft_dread,<delay>,<pin>\r\n"
       "ft_tread,<delay>,<pin>,<loThres>,<hiThres>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
@@ -3191,7 +3276,7 @@ void f_action (char **tokens)
     unsigned char addr[9] ;
     if (f_ds18b20 (atoi(tokens[1]), addr, &t))
     {
-      sprintf (line, "ds18b20 - dev:0x%x temperature:%d.%02d\r\n",
+      sprintf (line, "ds18b20 - address:0x%x temperature:%d.%02d\r\n",
                addr, int(t), abs((int)(t*100)%100)) ;
       strcat (G_reply_buf, line) ;
     }
