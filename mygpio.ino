@@ -7,6 +7,8 @@
 
      % arduino-cli lib install ArduinoOTA               # version 1.0.5
      % arduino-cli lib install PubSubClient             # version 2.8
+     % arduino-cli lib install DallasTemperature        # version 3.9.0
+     % arduino-cli lib install "LiquidCrystal I2C"      # version 1.1.2
 
      % arduino-cli compile -b esp32:esp32:esp32 .
      % arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32 .
@@ -244,7 +246,9 @@
 #include <Update.h>
 #include <PubSubClient.h>
 
-#include "LiquidCrystal_I2C.h"
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <LiquidCrystal_I2C.h>
 
 #define MAX_SSID_LEN 32
 #define MAX_PASSWD_LEN 32             // maximum wifi password length
@@ -673,6 +677,34 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
     *temperature = raw_temp * 0.1 ;
 
   *humidity = float (((int) data[0] << 8 ) | data[1]) / 10.0 ;
+  return (1) ;
+}
+
+/*
+   Polls a DS18B20 on the specified 1-wire pin. Writes the current temperature
+   in the supplied float buffer and the device address in "addr" which must be
+   8+1 bytes long. Returns 1 on success, otherwise 0.
+*/
+
+int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
+{
+  OneWire bus (dataPin) ;
+  DallasTemperature sensor (&bus) ;
+
+  sensor.begin () ;
+  if (sensor.getDeviceCount() < 1)
+  {
+    strcat (G_reply_buf, "FAULT: no devices found.\r\n") ;
+    return (0) ;
+  }
+  if (! sensor.getAddress (addr, 0))
+  {
+    strcat (G_reply_buf, "FAULT: cannot get device address.\r\n") ;
+    return (0) ;
+  }
+  addr[8] = 0 ;
+  sensor.requestTemperatures() ;
+  *temperature = sensor.getTempCByIndex (0) ;
   return (1) ;
 }
 
@@ -3026,20 +3058,22 @@ void f_action (char **tokens)
             "[GPIO]\r\n"
             "hi <GPIO pin>\r\n"
             "lo <GPIO pin>\r\n"
-            "aread <GPIO pin> - analog read (always 0 on esp8266)\r\n"
-            "dread <GPIO pin> - digital read\r\n"
-            "tread <GPIO pin> - capacitive touch read\r\n"
-            "bmp180           - barometric pressure (I2C)\r\n"
-            "dht22 <dataPin>  - DHT-22 temperature/humidity sensor\r\n"
+            "aread <GPIO pin>  - analog read (always 0 on esp8266)\r\n"
+            "dread <GPIO pin>  - digital read\r\n"
+            "tread <GPIO pin>  - capacitive touch read\r\n"
+            "bmp180            - barometric pressure (I2C)\r\n"
+            "dht22 <dataPin>   - DHT-22 temperature/humidity sensor\r\n"
+            "ds18b20 <dataPin> - DS18B20 temperature sensor\r\n"
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
             "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
             "tone <GPIO pin> <freq> <dur(ms)>\r\n"
+            "\r\n"
+            "lcd init          - LCD on I2C\r\n"
             "lcd backlight <on/off>\r\n"
             "lcd clear\r\n"
-            "lcd init\r\n"
             "lcd print <row> <col> <message...>\r\n"
-
-            "\r\n[System]\r\n"
+            "\r\n"
+            "[System]\r\n"
             "debug <num>\r\n"
             "fs format\r\n"
             "fs info\r\n"
@@ -3147,6 +3181,18 @@ void f_action (char **tokens)
     {
       sprintf (line, "dht22 - temperature:%d.%02d humidity:%d.%02d\r\n",
                int(t), abs((int)(t*100)%100), int(h), (int)(h*100)%100) ;
+      strcat (G_reply_buf, line) ;
+    }
+  }
+  else
+  if ((strcmp(tokens[0], "ds18b20") == 0) && (tokens[1] != NULL))
+  {
+    float t=0.0 ;
+    unsigned char addr[9] ;
+    if (f_ds18b20 (atoi(tokens[1]), addr, &t))
+    {
+      sprintf (line, "ds18b20 - dev:0x%x temperature:%d.%02d\r\n",
+               addr, int(t), abs((int)(t*100)%100)) ;
       strcat (G_reply_buf, line) ;
     }
   }
