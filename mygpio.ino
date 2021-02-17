@@ -2397,20 +2397,32 @@ void ft_adxl335 (S_thread_entry *p)
 
 void ft_dread (S_thread_entry *p)
 {
-  if (p->num_args != 2)
+  if (p->num_args != 3)
   {
-    strcpy (p->msg, "FATAL! Expecting 2x arguments") ;
+    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
     p->state = THREAD_STOPPED ;
     return ;
   }
   int delay_ms = atoi (p->in_args[0]) ;
   int pin = atoi (p->in_args[1]) ;
+  int mode = atoi (p->in_args[2]) ;
 
   /* if "loops" is 0, this is our first call, initialize stuff */
 
   if (p->loops == 0)
   {
-    pinMode (pin, INPUT) ;
+    if (mode == 0)
+      pinMode (pin, INPUT) ;
+    else
+    if (mode == 1)
+      pinMode (pin, INPUT_PULLUP) ;
+    else
+    {
+      strcpy (p->msg, "FATAL! Invalid mode") ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+
     p->num_int_results = 1 ;
     p->results[0].num_tags = 0 ;
     strcpy (p->msg, "ok") ;
@@ -3076,7 +3088,7 @@ void f_esp32 (char **tokens)
       "ft_aread,<delay>,<inPin>,[pwrPin],[loThres],[hiThres]\r\n"
       "ft_dht22,<delay>,<dataPin>,<pwrPin>\r\n"
       "ft_ds18b20,<delay>,<dataPin>,<pwrPin>\r\n"
-      "ft_dread,<delay>,<pin>\r\n"
+      "ft_dread,<delay>,<pin>,<0=norm,1=pullup>\r\n"
       "ft_tread,<delay>,<pin>,<loThres>,<hiThres>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
