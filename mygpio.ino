@@ -2646,6 +2646,8 @@ void ft_dht22 (S_thread_entry *p)
 void ft_ds18b20 (S_thread_entry *p)
 {
   #define DS18B20_POWER_ON_DELAY_MS 500
+  #define DS18B20_POWER_OFF_DELAY_MS 500
+  #define DS18B20_RETRIES 10
 
   if (p->num_args != 3)
   {
@@ -2678,27 +2680,44 @@ void ft_ds18b20 (S_thread_entry *p)
     delay (DS18B20_POWER_ON_DELAY_MS) ;
   }
 
+  int retries = DS18B20_RETRIES ;
+  int status = 0 ;
   float t ;
   unsigned char addr[9] ;
-  if (f_ds18b20 (dataPin, addr, &t) == 0)
+
+  while (retries > 0)
   {
-    strcpy (p->msg, "Failed to read data.") ;
-    p->num_float_results = 0 ;
+    memset (addr, 0, 9) ;
+    status = f_ds18b20 (dataPin, addr, &t) ;
+    if (status == 0)
+    {
+      retries-- ;
+      sprintf (p->msg, "Read failed, retries %d.", retries) ;
+      pinMode (pwrPin, OUTPUT) ;
+      digitalWrite (pwrPin, LOW) ;
+      delay (DS18B20_POWER_OFF_DELAY_MS) ;      /* reboot the DS18B20 */
+      digitalWrite (pwrPin, HIGH) ;
+      delay (DS18B20_POWER_ON_DELAY_MS) ;
+    }
+    else
+    {
+      sprintf (buf, "\"0x%x\"", addr) ;   /* device may have changed */
+      p->results[0].data[1] = buf ;
+      p->results[0].f_value = t ;
+      break ;
+    }
   }
-  else
-  {
-    sprintf (buf, "\"0x%x\"", addr) ;   /* device may have changed */
-    p->results[0].data[1] = buf ;
-    p->results[0].f_value = t ;
+  if (status)
     p->num_float_results = 1 ;
-  }
+  else
+    p->num_float_results = 0 ;
 
   /* now figure out how long to nap for */
 
   unsigned long end_time = millis () ;
   int duration_ms = end_time - start_time ;
   if (p->num_float_results)
-    sprintf (p->msg, "polled in %dms", duration_ms) ;
+    sprintf (p->msg, "polled 0x%x in %dms", addr, duration_ms) ;
   int nap = delay_ms - duration_ms ;
   if (nap > 0)
     delay (nap) ;
