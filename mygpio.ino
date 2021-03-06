@@ -1375,7 +1375,7 @@ int f_mqtt_connect ()
     f.close () ;
     if (amt < 1)
     {
-      sprintf (line, "WARNING: %s is empty.\r\n", MQTT_CFG_FILE) ;
+      sprintf (line, "WARNING: %s is empty.", MQTT_CFG_FILE) ;
       Serial.println (line)  ;
       return (0) ;
     }
@@ -3704,9 +3704,10 @@ void loop ()
     G_psClient.loop () ; // handle any incoming messages
   }
 
-  /* handle web requests */
+  /* handle web requests, only if "G_sd" was set */
 
-  f_handleWebServer () ;
+  if (G_sd > 0)
+    f_handleWebServer () ;
 
   /* once in a while, blink once if wifi is connected, twice otherwise. */
 
