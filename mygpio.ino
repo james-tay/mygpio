@@ -924,6 +924,68 @@ void f_lcd (char **tokens)
   }
 }
 
+/*
+   look for "thread_name", set its "p->results[1].i_value" based on "state".
+   Also, read its "p->results[0].i_value" to determine timeout, and then update
+   its "p->results[2].i_value" to new shut off time.
+*/
+
+void f_relay (char *thread_name, char *state)
+{
+  int i ;
+
+  if ((strcmp (state, "on") != 0) && (strcmp(state, "off") != 0))
+  {
+    strcpy (G_reply_buf, "FAULT: invalid state.\r\n") ;
+    return ;
+  }
+
+  for (i=0 ; i < MAX_THREADS ; i++)
+  {
+    if ((G_thread_entry[i].state == THREAD_RUNNING) &&
+        (strcmp (G_thread_entry[i].name, thread_name) == 0))
+    {
+      if (G_thread_entry[i].ft_addr != ft_relay)
+      {
+        strcpy (G_reply_buf, "FAULT: not an ft_relay() thread.\r\n") ;
+        return ;
+      }
+
+      /* read the relay status: 0=off, 1=on, -1=fault */
+
+      char line[BUF_SIZE] ;
+      int cur_state = G_thread_entry[i].results[1].i_value ;
+      if (cur_state < 0)
+      {
+        strcpy (G_reply_buf, "FAULT: relay in fault state.\r\n") ;
+        return ;
+      }
+
+      if (strcmp(state, "on") == 0)
+      {
+        long now = millis () ;
+        long expiry = (G_thread_entry[i].results[0].i_value * 1000) + now ;
+        G_thread_entry[i].results[2].i_value = expiry ;
+        G_thread_entry[i].results[1].i_value = 1 ; // request ON state
+        sprintf (line, "Relay: %d->1\r\n", cur_state) ;
+
+      }
+      else
+      {
+        G_thread_entry[i].results[1].i_value = 0 ; // request OFF state
+        sprintf (line, "Relay: %d->0\r\n", cur_state) ;
+      }
+
+      strcat (G_reply_buf, line) ;
+      return ;
+    }
+  }
+
+  /* if we're here, it means we didn't find "thread_name" */
+
+  strcat (G_reply_buf, "FAULT: invalid thread name.\r\n") ;
+}
+
 /* ------------------------------------------------------------------------- */
 /* System Management                                                         */
 /* ------------------------------------------------------------------------- */
@@ -2837,6 +2899,118 @@ void ft_tread (S_thread_entry *p)
     delay (nap) ;
 }
 
+/*
+   This thread implements safe relay control. A relay is turned on by setting
+   its control pin into INPUT mode (causing the pin to float high). The relay
+   is turned off by setting the control pin to OUTPUT low. To command the relay
+   on or off, an external command "relay <name> on|off" is invoked. Where
+   "<name>" is our thread name. Once we are commanded on, we will stay on for
+   another "dur" seconds before turning off automatically due to timeout (and
+   entering a fault state). Once faulted, we will NOT turn on unless this
+   thread is restarted.
+
+   If we were in an ON state and the ESP32 reboots, the relay will remain in
+   an ON state until this thread starts up (ie, "/autoexec.cfg").
+*/
+
+void ft_relay (S_thread_entry *p)
+{
+  #define RELAY_CHECK_INTERVAL_MS 80
+
+  static thread_local int relay_state, fault_state ;
+
+  if (p->num_args != 2)
+  {
+    strcpy (p->msg, "FATAL! Expecting 2x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  int relay_pin = atoi (p->in_args[0]) ;
+  int duration_secs = atoi (p->in_args[1]) ;
+
+  if (p->loops == 0)
+  {
+    pinMode (relay_pin, INPUT) ;
+    relay_state = 0 ;
+    fault_state = 0 ;
+
+    /* note: f_relay() reads this */
+
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "fault" ;
+    p->results[0].data[0] = "\"timeout\"" ;
+    p->results[0].i_value = duration_secs ;     // timeout to fault (secs)
+
+    /* note: f_relay() reads and updates this */
+
+    p->results[1].num_tags = 1 ;
+    p->results[1].meta[0] = "relay" ;
+    p->results[1].data[0] = "\"state\"" ;
+    p->results[1].i_value = 0 ;                 // 0=off, 1=on, -1=fault
+
+    /* note: f_relay() updates this */
+
+    p->results[2].num_tags = 1 ;
+    p->results[2].meta[0] = "autooff" ;
+    p->results[2].data[0] = "\"time\"" ;
+    p->results[2].i_value = 0 ;                 // millis() auto off time
+
+    p->num_int_results = 3 ;
+  }
+
+  /* if we're in a fault state, turn OFF and do not continue */
+
+  if (fault_state)
+  {
+    digitalWrite (relay_pin, HIGH) ;
+    pinMode (relay_pin, INPUT) ;
+    delay (RELAY_CHECK_INTERVAL_MS) ;
+    return ;
+  }
+
+  /* check for state change request */
+
+  if (relay_state != p->results[1].i_value)
+  {
+    relay_state = p->results[1].i_value ;
+    if (relay_state == 0)                       // turn OFF
+    {
+      digitalWrite (relay_pin, HIGH) ;
+      pinMode (relay_pin, INPUT) ;
+    }
+    if (relay_state == 1)                       // turn ON
+    {
+      pinMode (relay_pin, OUTPUT) ;
+      digitalWrite (relay_pin, LOW) ;
+    }
+  }
+
+  /* report on current state */
+
+  long now = millis () ;
+  if (relay_state == 0)
+    strcpy (p->msg, "state:off") ;
+  else
+  {
+    long time_left_ms = p->results[2].i_value - now ;
+    sprintf (p->msg, "state:on timeout:%ds", time_left_ms / 1000) ;
+  }
+
+  /* if we're ON, check for timeout */
+
+  if ((relay_state) && (now > p->results[2].i_value))
+  {
+    fault_state = 1 ;                   // set our internal fault flag
+    p->results[1].i_value = -1 ;        // expose our fault state
+    digitalWrite (relay_pin, HIGH) ;
+    pinMode (relay_pin, INPUT) ;
+    strcpy (p->msg, "state:off fault:on") ;
+  }
+
+  delay (RELAY_CHECK_INTERVAL_MS) ;
+}
+
 /* =========================== */
 /* thread management functions */
 /* =========================== */
@@ -3015,6 +3189,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_hcsr04 ;
   if (strcmp (ft_taskname, "ft_tread") == 0)
     G_thread_entry[idx].ft_addr = ft_tread ;
+  if (strcmp (ft_taskname, "ft_relay") == 0)
+    G_thread_entry[idx].ft_addr = ft_relay ;
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
@@ -3111,6 +3287,7 @@ void f_esp32 (char **tokens)
       "ft_tread,<delay>,<pin>,<loThres>,<hiThres>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
+      "ft_relay,<pin>,<dur(secs)>\r\n"
       "\r\n"
       "[Notes]\r\n"
       "<delay> - interval between sampling (millisecs)\r\n"
@@ -3182,6 +3359,7 @@ void f_action (char **tokens)
             "ds18b20 <dataPin> - DS18B20 temperature sensor\r\n"
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
             "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
+            "relay <thread name> on|off\r\n"
             "tone <GPIO pin> <freq> <dur(ms)>\r\n"
             "\r\n"
             "lcd init          - LCD on I2C\r\n"
@@ -3399,6 +3577,12 @@ void f_action (char **tokens)
   if (strcmp(tokens[0], "esp32") == 0)
   {
     f_esp32 (tokens) ;
+  }
+  else
+  if ((strcmp(tokens[0], "relay") == 0) && (tokens[1] != NULL) &&
+      (tokens[2] != NULL))
+  {
+    f_relay (tokens[1], tokens[2]) ;
   }
   else
   if ((strcmp(tokens[0], "tone") == 0) && (tokens[1] != NULL) &&
