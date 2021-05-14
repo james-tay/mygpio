@@ -475,6 +475,41 @@ int f_i2c_readUShort (int device, unsigned char addr, unsigned short *result)
   return (1) ;
 }
 
+/*
+   Sets the specified GPIO pin high. If an additional parameter is specified,
+   then the pin stays high for that number of microseconds. Note that for 
+   of "dur_usec" more than MAX_USEC, we'll use delay() instead. See :
+
+  https://www.arduino.cc/reference/en/language/functions/time/delaymicroseconds/
+*/
+
+void f_hi (char **args)
+{
+  #define MAX_USEC 16000
+
+  char line[BUF_SIZE] ;
+  int pin = atoi (args[1]) ;
+  int dur_usec = 0 ;
+  if (args[2] != NULL)
+    dur_usec = atoi (args[2]) ;
+
+  pinMode (pin, OUTPUT) ;
+  sprintf (line, "pin:%d HIGH\r\n", pin) ;
+  digitalWrite (pin, HIGH) ;
+
+  if (dur_usec > 0)
+  {
+    if (dur_usec < MAX_USEC)
+      delayMicroseconds (dur_usec) ;
+    else
+      delay (dur_usec / 1000) ;
+
+    digitalWrite (pin, LOW) ;
+    sprintf (line, "pin:%d PULSED %d usecs\r\n", pin, dur_usec) ;
+  }
+  strcat (G_reply_buf, line) ;
+}
+
 /* ------------------------------------------------------------------------- */
 /* "Drivers" for various sensor devices                                      */
 /* ------------------------------------------------------------------------- */
@@ -3349,7 +3384,7 @@ void f_action (char **tokens)
   {
     strcat (G_reply_buf,
             "[GPIO]\r\n"
-            "hi <GPIO pin>\r\n"
+            "hi <GPIO pin> [pulse (usecs)]\r\n"
             "lo <GPIO pin>\r\n"
             "aread <GPIO pin>  - analog read (always 0 on esp8266)\r\n"
             "dread <GPIO pin>  - digital read\r\n"
@@ -3415,11 +3450,7 @@ void f_action (char **tokens)
   else
   if ((strcmp(tokens[0], "hi") == 0) && (tokens[1] != NULL))
   {
-    int pin = atoi(tokens[1]) ;
-    pinMode (pin, OUTPUT) ;
-    digitalWrite (pin, HIGH) ;
-    sprintf (line, "pin:%d HIGH\r\n", pin) ;
-    strcat (G_reply_buf, line) ;
+    f_hi (tokens) ;
   }
   else
   if ((strcmp(tokens[0], "lo") == 0) && (tokens[1] != NULL))
