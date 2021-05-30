@@ -132,6 +132,12 @@
        in the main thread.
      - Threads can be started on the first f_cron() run by specifying their
        names (comma separated) in "/autoexec.cfg".
+     - Typically, sensors polled by individual threads have a dedicated "power"
+       pin and the sensor is momentarily powered on when needed. If 2 or more
+       sensors have a shared "power" pin, then these sensors are never powered
+       off (once powered on). This is automatically implemented with the global
+       array called "G_pin_flags" which is a bit mask. Once bits are set in
+       this array, they can only be cleared by a reboot.
 
    Writing ft_<tasks>
 
@@ -296,9 +302,10 @@
 
 /* ====== ALL OTHER GENERAL STUFF ====== */
 
-#define DEF_BAUD 9600
+#define DEF_BAUD 9600           // USB serial port baud rate
 #define SERIAL_TIMEOUT 1000     // serial timeout in milliseconds
 #define BLINK_FREQ 5000         // blink to indicate we're alive (ms)
+#define MAX_GPIO_PINS 40        // total number of GPIO pins in G_pin_flags[]
 #define MAX_TOKENS 10
 #define BUF_SIZE 80
 #define BUF_MEDIUM 256
@@ -309,6 +316,13 @@
 #define LCD_ADDR 0x27
 #define LCD_WIDTH 16
 #define LCD_ROWS 2
+
+/* various bit masked flags used in G_pin_flags[] */
+
+#define PFLAGS_POWER 1          // is a device's power pin
+#define PFLAGS_SHARED_POWER 2   // shared power pin
+
+/* ======= ALL GLOBAL VARIABLES ====== */
 
 char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
 char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
@@ -328,6 +342,7 @@ int G_serial_pos ;              // index of bytes received on serial port
 int G_debug ;                   // global debug level
 char *G_serial_buf ;            // accumulate butes on our serial console
 char *G_hostname ;              // our hostname
+unsigned char *G_pin_flags ;    // array of flags for each GPIO pin
 
 unsigned long G_next_cron ;        // millis() time of next run
 unsigned long G_next_blink=BLINK_FREQ ; // "wall clock" time for next blink
@@ -3333,6 +3348,9 @@ void f_esp32 (char **tokens)
   {
     int i, num=1 ;
     unsigned long now = millis () ;
+
+    /* print details on all threads */
+
     for (i=0 ; i < MAX_THREADS ; i++)
       if ((G_thread_entry[i].state == THREAD_RUNNING) ||
           (G_thread_entry[i].state == THREAD_STOPPED))
@@ -3357,6 +3375,19 @@ void f_esp32 (char **tokens)
         strcat (G_reply_buf, msg) ;
         num++ ;
       }
+
+    /* print details on the G_pin_flags[] array */
+
+    char line[BUF_SIZE] ;
+    strcat (G_reply_buf, "PinFlags:\r\n  ") ;
+    for (i=0 ; i < MAX_GPIO_PINS ; i++)
+    {
+      if ((i > 0) && (i % 10 == 0))     // prevent line from getting too long
+        strcat (G_reply_buf, "\r\n  ") ;
+      sprintf (line, ":%x", G_pin_flags[i]) ;
+      strcat (G_reply_buf, line) ;
+    }
+    strcat (G_reply_buf, "\r\n") ;
   }
   else
   if ((strcmp(tokens[1], "thread_start") == 0) && (tokens[2] != NULL)) // start
@@ -3774,6 +3805,7 @@ void setup ()
   G_pub_payload = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_reply_buf = (char*) malloc (REPLY_SIZE+1) ;
   G_serial_buf = (char*) malloc (BUF_SIZE+1) ;
+  G_pin_flags = (unsigned char*) malloc (MAX_GPIO_PINS) ;
 
   G_mqtt_sub[0] = 0 ;
   G_mqtt_stopic[0] = 0 ;
@@ -3784,10 +3816,10 @@ void setup ()
   G_reply_buf[0] = 0 ;
   G_serial_buf[0] = 0 ;
 
-  int i ;
-
+  memset (G_pin_flags, 0, MAX_GPIO_PINS) ;
   G_WebClient = (S_WebClient*) malloc (sizeof(S_WebClient) *
                                        MAX_HTTP_CLIENTS) ;
+  int i ;
   for (i=0 ; i < MAX_HTTP_CLIENTS ; i++)
     memset (&G_WebClient[i], 0, sizeof(S_WebClient)) ;
 
