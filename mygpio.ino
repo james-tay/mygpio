@@ -145,7 +145,16 @@
        until the next reboot.
 
      - This functionality is automatically implemented with the global array
-       called "G_pin_flags" which tracks pin usage.
+       called "G_pin_flags" which tracks pin usage. This array can be inspected
+       from the "pinflags" command.
+
+     - Any thread accessing "G_pin_flags" (read or write) in a non-atomic
+       manner, must first acquire "G_pinflags_lock". This is especially
+       important during concurrent ft_<task> creation.
+
+     - Any ft_<task> controlling a power pin, must call f_register_power_pin()
+       as early as possible, and must NOT power it off if the "is_shared_power"
+       flag is set.
 
    Writing ft_<tasks>
 
@@ -343,6 +352,7 @@ char *G_pub_payload ;           // current payload we will publish
 char *G_reply_buf ;             // accumulate our reply message here
 int G_serial_pos ;              // index of bytes received on serial port
 int G_debug ;                   // global debug level
+int G_reboot=0 ;                // setting this to 1 triggers a reboot
 char *G_serial_buf ;            // accumulate butes on our serial console
 char *G_hostname ;              // our hostname
 
@@ -434,13 +444,15 @@ struct pin_flag
 {
   unsigned char is_power_pin ;          // pin supplies power to a device
   unsigned char is_shared_power ;       // is a shared power pin
-  S_thread_entry *users ;  // MAX_THREAD pointer(s) to thread(s) using this pin
+  S_thread_entry **users ;  // MAX_THREAD pointers to threads using this pin
 } ;
 typedef struct pin_flag S_pin_flag ;
 
+S_pin_flag *G_pin_flags ;            // array of structs for each GPIO pin
+SemaphoreHandle_t G_pinflags_lock ;  // lock before ANY access to "G_pin_flags"
+
 S_Metrics *G_Metrics ;
 S_thread_entry *G_thread_entry ;
-S_pin_flag *G_pin_flags ;
 S_WebClient *G_WebClient ;
 LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
@@ -1356,6 +1368,96 @@ void f_wifi (char **tokens)
   {
     strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
+}
+
+/*
+   This function is called by an ft_<task> when it has identified a power
+   pin. Our job is to update the G_pin_flags array with this information.
+   In particular, if another thread uses this pin for delivering power, we
+   set the "is_power_pin" flag. We return the number of threads sharing this
+   power pin (this is informational only).
+*/
+
+int f_register_power_pin (int powerPin, S_thread_entry *thread_p)
+{
+  xSemaphoreTake (G_pinflags_lock, portMAX_DELAY) ;
+  S_pin_flag *pf = &G_pin_flags[powerPin] ;
+  pf->is_power_pin = 1 ;
+
+  /* count the number of active threads (excluding us) which own this pin */
+
+  int idx, users=0, self=-1 ;
+  for (idx=0 ; idx < MAX_THREADS ; idx++)
+  {
+    if (pf->users[idx] != NULL)
+    {
+      if (strcmp(pf->users[idx]->name, thread_p->name) == 0)
+        self = idx ;                                    // our former index
+      if ((pf->users[idx]->state == THREAD_RUNNING) &&
+          (strcmp(pf->users[idx]->name, thread_p->name) != 0))
+        users++ ;                                       // found active thread
+    }
+  }
+
+  if (users > 0)
+    pf->is_shared_power = 1 ;                           // tag this as shared
+
+  /* if not already in the list, set us as one of the users of this pin */
+
+  if (self < 0)
+    for (idx=0 ; idx < MAX_THREADS ; idx++)
+      if (pf->users[idx] == NULL)
+      {
+        pf->users[idx] = thread_p ;
+        break ;
+      }
+
+  xSemaphoreGive (G_pinflags_lock) ;
+  return (users) ;
+}
+
+/*
+   This function is called from f_action(). Our job is to examine all GPIO
+   pins and print any flags of interest.
+*/
+
+void f_pin_flags ()
+{
+  int idx ;
+  char line[BUF_SIZE] ;
+
+  xSemaphoreTake (G_pinflags_lock, portMAX_DELAY) ;
+  for (idx=0 ; idx < MAX_GPIO_PINS ; idx++)
+  {
+    line[0] = 0 ;
+    snprintf (line, BUF_SIZE, "GPIO%d: ", idx) ;
+    strcat (G_reply_buf, line) ;
+    line[0] = 0 ;
+
+    if (G_pin_flags[idx].is_power_pin)
+      strcat (G_reply_buf, "is_power_pin ") ;
+    if (G_pin_flags[idx].is_shared_power)
+      strcat (G_reply_buf, "is_shared_power ") ;
+
+    int i ;
+    for (i=0 ; i < MAX_THREADS ; i++)
+      if ((G_pin_flags[idx].users[i] != NULL) &&
+          (G_pin_flags[idx].users[i]->state == THREAD_RUNNING))
+      {
+        if (strlen(line) == 0)
+          snprintf (line, BUF_SIZE, "users:%s",
+                    G_pin_flags[idx].users[i]->name) ;
+        else
+        {
+          strcat (line, ",") ;
+          strcat (line, G_pin_flags[idx].users[i]->name) ;
+        }
+      }
+    if (strlen(line) > 0)
+      strcat (G_reply_buf, line) ;
+    strcat (G_reply_buf, "\r\n") ;
+  }
+  xSemaphoreGive (G_pinflags_lock) ;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2341,10 +2443,11 @@ void ft_aread (S_thread_entry *p)
 
   int delay_ms = atoi (p->in_args[0]) ;
   int inPin = atoi (p->in_args[1]) ;
+  int pwrPin = -1 ;
 
-  char *pwrPin=NULL, *loThres=NULL, *hiThres=NULL ;
+  char *loThres=NULL, *hiThres=NULL ;
   if (p->num_args > 2)
-    pwrPin = p->in_args[2] ;            // optional arg
+    pwrPin = atoi(p->in_args[2]) ;      // optional arg
   if (p->num_args > 3)
     loThres = p->in_args[3] ;           // optional arg
   if (p->num_args > 4)
@@ -2355,8 +2458,11 @@ void ft_aread (S_thread_entry *p)
   if (p->loops == 0)
   {
     pinMode (inPin, INPUT) ;
-    if ((pwrPin) && (strlen(pwrPin) > 0))
-      pinMode (atoi(pwrPin), OUTPUT) ;
+    if (pwrPin >= 0)
+    {
+      pinMode (pwrPin, OUTPUT) ;
+      f_register_power_pin (pwrPin, p) ;
+    }
     p->num_int_results = 1 ;
     p->results[1].i_value = millis () ; // use this to store time of last run
     strcpy (p->msg, "ok") ;
@@ -2364,8 +2470,8 @@ void ft_aread (S_thread_entry *p)
 
   /* power on device (if specified) and wait till half time before we poll */
 
-  if ((pwrPin) && (strlen(pwrPin) > 0))
-    digitalWrite (atoi(pwrPin), HIGH) ;         // power on device
+  if (pwrPin >= 0)
+    digitalWrite (pwrPin, HIGH) ;       // power on device
 
   #define MAX_POWER_UP_DELAY 50
 
@@ -2376,8 +2482,8 @@ void ft_aread (S_thread_entry *p)
     delay (nap) ;
 
   int cur_value = analogRead (inPin) ;          // read new value
-  if ((pwrPin != NULL) && (strlen(pwrPin) > 0))
-    digitalWrite (atoi(pwrPin), LOW) ;          // power off device
+  if ((pwrPin >= 0) && (G_pin_flags[pwrPin].is_shared_power == 0))
+    digitalWrite (pwrPin, LOW) ;                // power off device
 
   /* if "loThres" or "hiThres" is defined, check for state change */
 
@@ -2431,12 +2537,6 @@ void ft_adxl335 (S_thread_entry *p)
   if (p->loops == 0)
   {
     int pwrPin = atoi (p->in_args[5]) ;
-
-    if (pwrPin < MAX_GPIO_PINS)
-    {
-
-    }
-
     pinMode (pwrPin, OUTPUT) ;
     digitalWrite (pwrPin, HIGH) ;
     delay (50) ;
@@ -3448,6 +3548,7 @@ void f_action (char **tokens)
             "mqtt connect\r\n"
             "mqtt disconnect\r\n"
             "ota <url>\r\n"
+            "pinflags\r\n"
             "reload\r\n"
             "wifi connect\r\n"
             "wifi scan\r\n"
@@ -3611,11 +3712,16 @@ void f_action (char **tokens)
     f_wifi (tokens) ;
   }
   else
+  if (strcmp(tokens[0], "pinflags") == 0)
+  {
+    f_pin_flags () ;
+  }
+  else
   if (strcmp(tokens[0], "reload") == 0)
   {
     Serial.println ("Rebooting.") ;
-    delay (1000) ;
-    ESP.restart () ;
+    strcat (G_reply_buf, "Rebooting.\r\n") ;
+    G_reboot = 1 ;
   }
   else
   if ((strcmp(tokens[0], "mqtt") == 0) && (tokens[1] != NULL))
@@ -3808,7 +3914,6 @@ void setup ()
   G_pub_payload = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_reply_buf = (char*) malloc (REPLY_SIZE+1) ;
   G_serial_buf = (char*) malloc (BUF_SIZE+1) ;
-  G_pin_flags = (S_pin_flag*) malloc (MAX_GPIO_PINS * sizeof(S_pin_flag)) ;
 
   G_mqtt_sub[0] = 0 ;
   G_mqtt_stopic[0] = 0 ;
@@ -3821,18 +3926,21 @@ void setup ()
 
   G_WebClient = (S_WebClient*) malloc (sizeof(S_WebClient) *
                                        MAX_HTTP_CLIENTS) ;
-  int i ;
+  int i, j ;
   size_t sz ;
   for (i=0 ; i < MAX_HTTP_CLIENTS ; i++)
     memset (&G_WebClient[i], 0, sizeof(S_WebClient)) ;
 
+  G_pin_flags = (S_pin_flag*) malloc (MAX_GPIO_PINS * sizeof(S_pin_flag)) ;
   for (i=0 ; i < MAX_GPIO_PINS ; i++)
   {
     memset (&G_pin_flags[i], 0, sizeof(S_pin_flag)) ;
     sz = MAX_THREADS * sizeof(S_thread_entry*) ;
-    G_pin_flags[i].users = (S_thread_entry*) malloc (sz) ;
-    memset (G_pin_flags[i].users, 0, sz) ;
+    G_pin_flags[i].users = (S_thread_entry**) malloc (sz) ;
+    for (j=0 ; j<MAX_THREADS ; j++)
+      G_pin_flags[i].users[j] = NULL ;
   }
+  G_pinflags_lock = xSemaphoreCreateMutex () ;
 
   sz = MAX_THREADS * sizeof(S_thread_entry) ;
   G_thread_entry = (S_thread_entry*) malloc (sz) ;
@@ -3997,5 +4105,8 @@ void loop ()
     esp_light_sleep_start () ;
     Serial.println ("NOTICE: exiting sleep mode.") ;
   }
+
+  if (G_reboot)
+    ESP.restart () ;
 }
 
