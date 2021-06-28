@@ -173,6 +173,8 @@
          - call f_delivery() if needed
        - set p->num_{int|float}_results} to indicate success or failure
        - add an appropriate delay()
+       - if its p->state is set to THREAD_WRAPUP, the thread has exactly 1
+         second to exit cleanly before being terminated.
 
    Presenting Metrics For Scraping
 
@@ -268,6 +270,8 @@
 #include <SPIFFS.h>
 #include <Update.h>
 #include <PubSubClient.h>
+#include <soc/i2s_reg.h>
+#include <driver/i2s.h>
 
 #include <OneWire.h>                  // 1-wire support, typically 16.3 kbps
 #include <DallasTemperature.h>
@@ -3180,6 +3184,185 @@ void ft_relay (S_thread_entry *p)
   delay (RELAY_CHECK_INTERVAL_MS) ;
 }
 
+/*
+   This function initializes an I2S audio source and then enters a main loop
+   where it reads samples from a DMA buffer and sends them via UDP. This
+   function lives in its main loop does not return unless "p->state" is set
+   to THREAD_WRAPUP.
+*/
+
+void ft_i2sin (S_thread_entry *p)
+{
+  #define DEST_LEN 24                 // buffer for storing "<ip>:<port>"
+  #define INPUT_PORT I2S_NUM_0        // audio input always uses port 0
+  #define BITS_PER_SAMPLE 32          // update i2s_config.bits_per_sample too
+  #define DMA_BUFS 2                  // number of DMA buffers
+  #define DMA_SAMPLES 256             // samples per DMA buffer
+  #define DMA_WAITTICKS 100           // max ticks i2s_read() will wait
+
+  #define DMA_BUFSIZE (BITS_PER_SAMPLE / 8 * DMA_SAMPLES) // buffer to malloc()
+
+  if (p->num_args != 5)
+  {
+    strcpy (p->msg, "FATAL! Expecting 5x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  int sampleRate = atoi (p->in_args[0]) ;
+  int SCKpin = atoi (p->in_args[1]) ;
+  int WSpin = atoi (p->in_args[2]) ;
+  int SDpin = atoi (p->in_args[3]) ;
+
+  int sd = -1 ;                         // xmit UDP socket descriptor
+  struct sockaddr_in dest_addr ;        // destination address (and port)
+  size_t dma_read = 0 ;                 // number of bytes read from DMA
+  void *dma_buf = NULL ;                // work buffer to copy DMA data to
+  esp_err_t e ;                         // generic error return value
+
+  /* parse "<ip>:<port>" */
+
+  char ip[DEST_LEN] ;
+  if (strlen(p->in_args[4]) >= DEST_LEN-1)
+  {
+    strcpy (p->msg, "Invalid <ip>:<port>") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+  strcpy (ip, p->in_args[4]) ;
+  int idx, port=0 ;
+  for (idx=1 ; idx < strlen(ip) ; idx++)
+  {
+    if (ip[idx] == ':')
+    {
+      ip[idx] = 0 ;
+      port = atoi (ip + idx + 1) ;
+    }
+  }
+  if ((port == 0) || (port > 65535))
+  {
+    strcpy (p->msg, "Invalid port number") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  /* do one time I2S initialization (well, per thread instance) */
+
+  if (p->loops == 0)
+  {
+    const i2s_config_t i2s_config = {
+      .mode = i2s_mode_t (I2S_MODE_MASTER | I2S_MODE_RX),
+      .sample_rate = sampleRate,
+      .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+      .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_I2S |
+                                                 I2S_COMM_FORMAT_I2S_MSB),
+      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+      .dma_buf_count = DMA_BUFS,
+      .dma_buf_len = DMA_SAMPLES
+    } ;
+
+    const i2s_pin_config_t pin_config = {
+      .bck_io_num = SCKpin,                     // serial clock
+      .ws_io_num = WSpin,                       // word select
+      .data_out_num = I2S_PIN_NO_CHANGE,        // not used for audio in
+      .data_in_num = SDpin                      // serial data
+    } ;
+
+    e = i2s_driver_install (INPUT_PORT, &i2s_config, 0, NULL) ;
+    if (e != ESP_OK)
+    {
+      sprintf (p->msg, "i2s_driver_install() failed %d", e) ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+
+    /* the following 2x lines are hacks to make the SPH0645 work right */
+
+    REG_SET_BIT (I2S_TIMING_REG(INPUT_PORT), BIT(9)) ;
+    REG_SET_BIT (I2S_CONF_REG(INPUT_PORT), I2S_RX_MSB_SHIFT) ;
+
+    e = i2s_set_pin (INPUT_PORT, &pin_config) ;
+    if (e != ESP_OK)
+    {
+      sprintf (p->msg, "i2s_set_pin exit() failed %d", e) ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+
+    sprintf (p->msg, "streaming to %s:%d", ip, port) ;
+
+    /* track i2s_read() success/failures, and timing info in our results[] */
+
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "dma_read" ;
+    p->results[0].data[0] = "\"success\"" ;
+    p->results[0].i_value = 0 ;                // i2s_read() bytes_read == size
+
+    p->results[1].num_tags = 1 ;
+    p->results[1].meta[0] = "dma_read" ;
+    p->results[1].data[0] = "\"fails\"" ;
+    p->results[1].i_value = 0 ;                // i2s_read() bytes_read < size
+
+    p->results[2].num_tags = 1 ;
+    p->results[2].meta[0] = "mainloop" ;
+    p->results[2].data[0] = "\"ms\"" ;
+    p->results[2].i_value = 0 ;                // millisecs last main loop
+
+    p->num_int_results = 3 ;
+
+    /* prepare a UDP socket which we use to stream audio data */
+
+    sd = socket (AF_INET, SOCK_DGRAM, IPPROTO_IP) ;
+    if (sd < 0)
+    {
+      strcpy (p->msg, "socket(SOCK_DRAM) failed") ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+    dest_addr.sin_addr.s_addr = inet_addr (ip) ;
+    dest_addr.sin_family = AF_INET ;
+    dest_addr.sin_port = htons (port) ;
+
+    /* allocate a buffer to copy DMA contents to */
+
+    dma_buf = malloc (DMA_BUFSIZE) ;
+    if (dma_buf == NULL)
+    {
+      sprintf (p->msg, "dma_buf malloc(%d) failed", DMA_BUFSIZE) ;
+      p->state = THREAD_STOPPED ;
+      if (sd >= 0) close (sd) ;
+      return ;
+    }
+  }
+
+  while (p->state == THREAD_RUNNING)
+  {
+    int tv_start = millis () ;
+    dma_read = 0 ;
+    e = i2s_read (INPUT_PORT, dma_buf, DMA_BUFSIZE, &dma_read, DMA_WAITTICKS) ;
+    if ((e == ESP_OK) && (dma_read == DMA_BUFSIZE))
+    {
+      sendto (sd, dma_buf, DMA_BUFSIZE, 0, (struct sockaddr*) &dest_addr,
+              sizeof(dest_addr)) ;
+      p->results[0].i_value++ ;
+    }
+    else
+      p->results[1].i_value++ ;
+
+    p->results[2].i_value = millis() - tv_start ;
+  }
+
+  /* if we're here, we're shutting down, clean up resources */
+
+  if (sd >= 0) close (sd) ;
+  free (dma_buf) ;
+  i2s_stop (INPUT_PORT) ;
+  i2s_driver_uninstall (INPUT_PORT) ;
+
+  strcpy (p->msg, "resources released") ; // indicate successful exit
+}
+
 /* =========================== */
 /* thread management functions */
 /* =========================== */
@@ -3360,6 +3543,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_tread ;
   if (strcmp (ft_taskname, "ft_relay") == 0)
     G_thread_entry[idx].ft_addr = ft_relay ;
+  if (strcmp (ft_taskname, "ft_i2sin") == 0)
+    G_thread_entry[idx].ft_addr = ft_i2sin ;
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
@@ -3456,6 +3641,7 @@ void f_esp32 (char **tokens)
       "ft_tread,<delay>,<pin>,<loThres>,<hiThres>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
+      "ft_i2sin,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<ip:port>\r\n"
       "ft_relay,<pin>,<dur(secs)>\r\n"
       "\r\n"
       "[Notes]\r\n"
@@ -3681,6 +3867,16 @@ void f_action (char **tokens)
   else
   if (strcmp(tokens[0], "version") == 0)
   {
+    /* attempt to measure tick period in milliseconds */
+
+    #define TEST_TICKS 500
+    int tv_start = millis () ;
+    vTaskDelay (TEST_TICKS) ;
+    int tv_end = millis () ;
+    float tick_ms = (float) (tv_end - tv_start) / (float) TEST_TICKS ;
+    char tick_str[8] ;
+    dtostrf (tick_ms, 2, 4, tick_str) ;
+
     sprintf (line, "Running on cpu:%d\r\n", xPortGetCoreID()) ;
     strcat (G_reply_buf, line) ;
     sprintf (line, "Built: %s, %s\r\n", __DATE__, __TIME__) ;
@@ -3694,6 +3890,8 @@ void f_action (char **tokens)
              sizeof(void*), sizeof(char),
              sizeof(short), sizeof(int), sizeof(long), sizeof(long long),
              sizeof(float), sizeof(double)) ;
+    strcat (G_reply_buf, line) ;
+    sprintf (line, "Tick duration: %s ms\r\n", tick_str) ;
     strcat (G_reply_buf, line) ;
   }
   else
