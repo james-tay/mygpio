@@ -3202,9 +3202,9 @@ void ft_i2sin (S_thread_entry *p)
 
   #define DMA_BUFSIZE (BITS_PER_SAMPLE / 8 * DMA_SAMPLES) // buffer to malloc()
 
-  if (p->num_args != 5)
+  if ((p->num_args != 5) && (p->num_args != 6))
   {
-    strcpy (p->msg, "FATAL! Expecting 5x arguments") ;
+    strcpy (p->msg, "FATAL! Expecting 5x or 6x arguments") ;
     p->state = THREAD_STOPPED ;
     return ;
   }
@@ -3215,9 +3215,13 @@ void ft_i2sin (S_thread_entry *p)
   int SDpin = atoi (p->in_args[3]) ;
 
   int sd = -1 ;                         // xmit UDP socket descriptor
+  double gain = 1.0 ;                   // software amplification (optional)
+  double sample_ref = 0.0 ;             // the "zero" value for analog samples
   struct sockaddr_in dest_addr ;        // destination address (and port)
   size_t dma_read = 0 ;                 // number of bytes read from DMA
-  void *dma_buf = NULL ;                // work buffer to copy DMA data to
+  unsigned long *dma_buf = NULL ;       // work buffer to copy DMA data to
+  unsigned long sample_lo, sample_hi ;  // used to calculate dynamic range
+  unsigned long long total = 0 ;        // used to calculate sample zero ref
   esp_err_t e ;                         // generic error return value
 
   /* parse "<ip>:<port>" */
@@ -3245,6 +3249,11 @@ void ft_i2sin (S_thread_entry *p)
     p->state = THREAD_STOPPED ;
     return ;
   }
+
+  /* software gain is optional */
+
+  if (p->num_args == 6)
+    gain = atof (p->in_args[5]) ;
 
   /* do one time I2S initialization (well, per thread instance) */
 
@@ -3290,8 +3299,6 @@ void ft_i2sin (S_thread_entry *p)
       return ;
     }
 
-    sprintf (p->msg, "streaming to %s:%d", ip, port) ;
-
     /* track i2s_read() success/failures, and timing info in our results[] */
 
     p->results[0].num_tags = 1 ;
@@ -3305,11 +3312,16 @@ void ft_i2sin (S_thread_entry *p)
     p->results[1].i_value = 0 ;                // i2s_read() bytes_read < size
 
     p->results[2].num_tags = 1 ;
-    p->results[2].meta[0] = "mainloop" ;
+    p->results[2].meta[0] = "loop_work" ;
     p->results[2].data[0] = "\"ms\"" ;
-    p->results[2].i_value = 0 ;                // millisecs last main loop
+    p->results[2].i_value = 0 ;                // millisecs last main work
 
-    p->num_int_results = 3 ;
+    p->results[3].num_tags = 1 ;
+    p->results[3].meta[0] = "loop_total" ;
+    p->results[3].data[0] = "\"ms\"" ;
+    p->results[3].i_value = 0 ;                // millisecs last main loop
+
+    p->num_int_results = 4 ;
 
     /* prepare a UDP socket which we use to stream audio data */
 
@@ -3326,7 +3338,7 @@ void ft_i2sin (S_thread_entry *p)
 
     /* allocate a buffer to copy DMA contents to */
 
-    dma_buf = malloc (DMA_BUFSIZE) ;
+    dma_buf = (unsigned long*) malloc (DMA_BUFSIZE) ;
     if (dma_buf == NULL)
     {
       sprintf (p->msg, "dma_buf malloc(%d) failed", DMA_BUFSIZE) ;
@@ -3334,15 +3346,55 @@ void ft_i2sin (S_thread_entry *p)
       if (sd >= 0) close (sd) ;
       return ;
     }
+
+    /* do a test read */
+
+    e = i2s_read (INPUT_PORT, dma_buf, DMA_BUFSIZE, &dma_read, DMA_WAITTICKS) ;
+    if ((e != ESP_OK) || (dma_read != DMA_BUFSIZE))
+    {
+      sprintf (p->msg, "i2s_read() failed %d", e) ;
+      if (sd >= 0) close (sd) ;
+      free (dma_buf) ;
+      i2s_stop (INPUT_PORT) ;
+      i2s_driver_uninstall (INPUT_PORT) ;
+      return ;
+    }
+    sprintf (p->msg, "udp->%s:%d", ip, port) ;  // indicate we're all set !
   }
 
+  unsigned int tv_loop=0, tv_work=0, tv_end ;
   while (p->state == THREAD_RUNNING)
   {
-    int tv_start = millis () ;
+    tv_loop = millis () ;
     dma_read = 0 ;
     e = i2s_read (INPUT_PORT, dma_buf, DMA_BUFSIZE, &dma_read, DMA_WAITTICKS) ;
+    tv_work = millis () ;
     if ((e == ESP_OK) && (dma_read == DMA_BUFSIZE))
     {
+      /* if optional gain is set, process it now */
+
+      if (gain != 1.0)
+      {
+        sample_lo = sample_hi = total = dma_buf[0] ; // recalculate reference
+        for (idx=1 ; idx < DMA_SAMPLES ; idx++)
+        {
+          if (dma_buf[idx] < sample_lo)
+            sample_lo = dma_buf[idx] ;          // FUTURE? this is not used now
+          if (dma_buf[idx] > sample_hi)
+            sample_hi = dma_buf[idx] ;          // FUTURE? this is not used now
+          total = total + dma_buf[idx] ;
+        }
+        long long ll = total / DMA_SAMPLES ;
+        sample_ref = (double) (ll) ; // analog signal's "zero" level
+
+        for (idx=0 ; idx < DMA_SAMPLES ; idx++) // apply the software gain
+        {
+          double f = (double) dma_buf[idx] ;
+          f = ((f - sample_ref) * gain) + sample_ref ;
+          dma_buf[idx] = (unsigned long) f ;
+        }
+      }
+
       sendto (sd, dma_buf, DMA_BUFSIZE, 0, (struct sockaddr*) &dest_addr,
               sizeof(dest_addr)) ;
       p->results[0].i_value++ ;
@@ -3350,7 +3402,9 @@ void ft_i2sin (S_thread_entry *p)
     else
       p->results[1].i_value++ ;
 
-    p->results[2].i_value = millis() - tv_start ;
+    tv_end = millis() ;
+    p->results[2].i_value = tv_end - tv_work ; // time for my logic in loop
+    p->results[3].i_value = tv_end - tv_loop ; // time for entire loop
   }
 
   /* if we're here, we're shutting down, clean up resources */
@@ -3641,7 +3695,7 @@ void f_esp32 (char **tokens)
       "ft_tread,<delay>,<pin>,<loThres>,<hiThres>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
-      "ft_i2sin,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<ip:port>\r\n"
+      "ft_i2sin,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<ip:port>[,<gain>]\r\n"
       "ft_relay,<pin>,<dur(secs)>\r\n"
       "\r\n"
       "[Notes]\r\n"
