@@ -313,6 +313,15 @@
 #define MAX_HTTP_CLIENTS 4            // esp32 supports 8x file descriptors
 #define MAX_HTTP_RTIME 20             // seconds to receive an http request
 
+/* my I2S settings */
+
+#define MYI2S_BITS_PER_SAMPLE 32      // update i2s_config.bits_per_sample too
+#define MYI2S_DMA_BUFS 2              // number of DMA buffers
+#define MYI2S_DMA_SAMPLES 256         // samples per DMA buffer
+#define MYI2S_DMA_WAITTICKS 100       // max ticks i2s_read() will wait
+#define MYI2S_INPUT_PORT I2S_NUM_0    // audio input always uses port 0
+#define MYI2S_OUTPUT_PORT I2S_NUM_1   // audio output always uses port 1
+
 /* various states for S_thread_entry.state */
 
 #define THREAD_READY          0       // ready to be started
@@ -3193,15 +3202,6 @@ void ft_relay (S_thread_entry *p)
 
 void ft_i2sin (S_thread_entry *p)
 {
-  #define DEST_LEN 24                 // buffer for storing "<ip>:<port>"
-  #define INPUT_PORT I2S_NUM_0        // audio input always uses port 0
-  #define BITS_PER_SAMPLE 32          // update i2s_config.bits_per_sample too
-  #define DMA_BUFS 2                  // number of DMA buffers
-  #define DMA_SAMPLES 256             // samples per DMA buffer
-  #define DMA_WAITTICKS 100           // max ticks i2s_read() will wait
-
-  #define DMA_BUFSIZE (BITS_PER_SAMPLE / 8 * DMA_SAMPLES) // buffer to malloc()
-
   if ((p->num_args != 5) && (p->num_args != 6))
   {
     strcpy (p->msg, "FATAL! Expecting 5x or 6x arguments") ;
@@ -3213,6 +3213,7 @@ void ft_i2sin (S_thread_entry *p)
   int SCKpin = atoi (p->in_args[1]) ;
   int WSpin = atoi (p->in_args[2]) ;
   int SDpin = atoi (p->in_args[3]) ;
+  int dma_bufsize = MYI2S_BITS_PER_SAMPLE / 8 * MYI2S_DMA_SAMPLES ;
 
   int sd = -1 ;                         // xmit UDP socket descriptor
   double gain = 1.0 ;                   // software amplification (optional)
@@ -3226,6 +3227,7 @@ void ft_i2sin (S_thread_entry *p)
 
   /* parse "<ip>:<port>" */
 
+  #define DEST_LEN 24 // buffer for storing "<ip>:<port>"
   char ip[DEST_LEN] ;
   if (strlen(p->in_args[4]) >= DEST_LEN-1)
   {
@@ -3267,8 +3269,8 @@ void ft_i2sin (S_thread_entry *p)
       .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_I2S |
                                                  I2S_COMM_FORMAT_I2S_MSB),
       .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-      .dma_buf_count = DMA_BUFS,
-      .dma_buf_len = DMA_SAMPLES
+      .dma_buf_count = MYI2S_DMA_BUFS,
+      .dma_buf_len = MYI2S_DMA_SAMPLES
     } ;
 
     const i2s_pin_config_t pin_config = {
@@ -3278,7 +3280,7 @@ void ft_i2sin (S_thread_entry *p)
       .data_in_num = SDpin                      // serial data
     } ;
 
-    e = i2s_driver_install (INPUT_PORT, &i2s_config, 0, NULL) ;
+    e = i2s_driver_install (MYI2S_INPUT_PORT, &i2s_config, 0, NULL) ;
     if (e != ESP_OK)
     {
       sprintf (p->msg, "i2s_driver_install() failed %d", e) ;
@@ -3288,13 +3290,13 @@ void ft_i2sin (S_thread_entry *p)
 
     /* the following 2x lines are hacks to make the SPH0645 work right */
 
-    REG_SET_BIT (I2S_TIMING_REG(INPUT_PORT), BIT(9)) ;
-    REG_SET_BIT (I2S_CONF_REG(INPUT_PORT), I2S_RX_MSB_SHIFT) ;
+    REG_SET_BIT (I2S_TIMING_REG(MYI2S_INPUT_PORT), BIT(9)) ;
+    REG_SET_BIT (I2S_CONF_REG(MYI2S_INPUT_PORT), I2S_RX_MSB_SHIFT) ;
 
-    e = i2s_set_pin (INPUT_PORT, &pin_config) ;
+    e = i2s_set_pin (MYI2S_INPUT_PORT, &pin_config) ;
     if (e != ESP_OK)
     {
-      sprintf (p->msg, "i2s_set_pin exit() failed %d", e) ;
+      sprintf (p->msg, "i2s_set_pin() failed %d", e) ;
       p->state = THREAD_STOPPED ;
       return ;
     }
@@ -3330,6 +3332,8 @@ void ft_i2sin (S_thread_entry *p)
     {
       strcpy (p->msg, "socket(SOCK_DRAM) failed") ;
       p->state = THREAD_STOPPED ;
+      i2s_stop (MYI2S_INPUT_PORT) ;
+      i2s_driver_uninstall (MYI2S_INPUT_PORT) ;
       return ;
     }
     dest_addr.sin_addr.s_addr = inet_addr (ip) ;
@@ -3338,25 +3342,28 @@ void ft_i2sin (S_thread_entry *p)
 
     /* allocate a buffer to copy DMA contents to */
 
-    dma_buf = (unsigned long*) malloc (DMA_BUFSIZE) ;
+    dma_buf = (unsigned long*) malloc (dma_bufsize) ;
     if (dma_buf == NULL)
     {
-      sprintf (p->msg, "dma_buf malloc(%d) failed", DMA_BUFSIZE) ;
+      sprintf (p->msg, "dma_buf malloc(%d) failed", dma_bufsize) ;
       p->state = THREAD_STOPPED ;
       if (sd >= 0) close (sd) ;
+      i2s_stop (MYI2S_INPUT_PORT) ;
+      i2s_driver_uninstall (MYI2S_INPUT_PORT) ;
       return ;
     }
 
     /* do a test read */
 
-    e = i2s_read (INPUT_PORT, dma_buf, DMA_BUFSIZE, &dma_read, DMA_WAITTICKS) ;
-    if ((e != ESP_OK) || (dma_read != DMA_BUFSIZE))
+    e = i2s_read (MYI2S_INPUT_PORT, dma_buf, dma_bufsize, &dma_read,
+                  MYI2S_DMA_WAITTICKS) ;
+    if ((e != ESP_OK) || (dma_read != dma_bufsize))
     {
       sprintf (p->msg, "i2s_read() failed %d", e) ;
       if (sd >= 0) close (sd) ;
       free (dma_buf) ;
-      i2s_stop (INPUT_PORT) ;
-      i2s_driver_uninstall (INPUT_PORT) ;
+      i2s_stop (MYI2S_INPUT_PORT) ;
+      i2s_driver_uninstall (MYI2S_INPUT_PORT) ;
       return ;
     }
     sprintf (p->msg, "udp->%s:%d", ip, port) ;  // indicate we're all set !
@@ -3367,16 +3374,17 @@ void ft_i2sin (S_thread_entry *p)
   {
     tv_loop = millis () ;
     dma_read = 0 ;
-    e = i2s_read (INPUT_PORT, dma_buf, DMA_BUFSIZE, &dma_read, DMA_WAITTICKS) ;
+    e = i2s_read (MYI2S_INPUT_PORT, dma_buf, dma_bufsize, &dma_read,
+                  MYI2S_DMA_WAITTICKS) ;
     tv_work = millis () ;
-    if ((e == ESP_OK) && (dma_read == DMA_BUFSIZE))
+    if ((e == ESP_OK) && (dma_read == dma_bufsize))
     {
       /* if optional gain is set, process it now */
 
       if (gain != 1.0)
       {
         sample_lo = sample_hi = total = dma_buf[0] ; // recalculate reference
-        for (idx=1 ; idx < DMA_SAMPLES ; idx++)
+        for (idx=1 ; idx < MYI2S_DMA_SAMPLES ; idx++)
         {
           if (dma_buf[idx] < sample_lo)
             sample_lo = dma_buf[idx] ;          // FUTURE? this is not used now
@@ -3384,10 +3392,10 @@ void ft_i2sin (S_thread_entry *p)
             sample_hi = dma_buf[idx] ;          // FUTURE? this is not used now
           total = total + dma_buf[idx] ;
         }
-        long long ll = total / DMA_SAMPLES ;
+        long long ll = total / MYI2S_DMA_SAMPLES ;
         sample_ref = (double) (ll) ; // analog signal's "zero" level
 
-        for (idx=0 ; idx < DMA_SAMPLES ; idx++) // apply the software gain
+        for (idx=0 ; idx < MYI2S_DMA_SAMPLES ; idx++) // apply software gain
         {
           double f = (double) dma_buf[idx] ;
           f = ((f - sample_ref) * gain) + sample_ref ;
@@ -3395,7 +3403,7 @@ void ft_i2sin (S_thread_entry *p)
         }
       }
 
-      sendto (sd, dma_buf, DMA_BUFSIZE, 0, (struct sockaddr*) &dest_addr,
+      sendto (sd, dma_buf, dma_bufsize, 0, (struct sockaddr*) &dest_addr,
               sizeof(dest_addr)) ;
       p->results[0].i_value++ ;
     }
@@ -3411,8 +3419,116 @@ void ft_i2sin (S_thread_entry *p)
 
   if (sd >= 0) close (sd) ;
   free (dma_buf) ;
-  i2s_stop (INPUT_PORT) ;
-  i2s_driver_uninstall (INPUT_PORT) ;
+  i2s_stop (MYI2S_INPUT_PORT) ;
+  i2s_driver_uninstall (MYI2S_INPUT_PORT) ;
+
+  strcpy (p->msg, "resources released") ; // indicate successful exit
+}
+
+/*
+   This function initializes an I2S audio output and enters a main loop
+   where it reads UDP packets and places them into a DMA buffer. This function
+   lives in its main loop and does not return unless "p->state" is set to
+   THREAD_WRAPUP.
+*/
+
+void ft_i2sout (S_thread_entry *p)
+{
+  if (p->num_args != 5)
+  {
+    strcpy (p->msg, "FATAL! Expecting 5x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  int sampleRate = atoi (p->in_args[0]) ;
+  int SCKpin = atoi (p->in_args[1]) ;
+  int WSpin = atoi (p->in_args[2]) ;
+  int SDpin = atoi (p->in_args[3]) ;
+  int udpPort = atoi (p->in_args[4]) ;
+
+  int sd = -1 ;                                 // recv UDP socket descriptor
+  esp_err_t e ;                                 // generic error return value
+
+  /* do one time I2S initialization (well, per thread instance) */
+
+  if (p->loops == 0)
+  {
+    const i2s_config_t i2s_config = {
+      .mode = i2s_mode_t (I2S_MODE_MASTER | I2S_MODE_TX),
+      .sample_rate = sampleRate,
+      .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+      .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_I2S |
+                                                 I2S_COMM_FORMAT_I2S_MSB),
+      .intr_alloc_flags = 0,
+      .dma_buf_count = MYI2S_DMA_BUFS,
+      .dma_buf_len = MYI2S_DMA_SAMPLES
+    } ;
+
+    const i2s_pin_config_t pin_config = {
+      .bck_io_num = SCKpin,
+      .ws_io_num = WSpin,
+      .data_out_num = SDpin,
+      .data_in_num = I2S_PIN_NO_CHANGE
+    } ;
+
+    e = i2s_driver_install (MYI2S_OUTPUT_PORT, &i2s_config, 0, NULL) ;
+    if (e != ESP_OK)
+    {
+      sprintf (p->msg, "i2s_driver_install() failed %d", e) ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+
+    e = i2s_set_pin (MYI2S_OUTPUT_PORT, &pin_config) ;
+    if (e != ESP_OK)
+    {
+      sprintf (p->msg, "i2s_set_pin() failed %d", e) ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+
+    /* prepare a UDP socket and bind it to its listening port */
+
+    sd = socket (AF_INET, SOCK_DGRAM, IPPROTO_IP) ;
+    if (sd < 0)
+    {
+      strcpy (p->msg, "socket(SOCK_DRAM) failed") ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+
+    struct sockaddr_in addr ;
+    memset (&addr, 0, sizeof(addr)) ;
+    addr.sin_family = AF_INET ;
+    addr.sin_addr.s_addr = INADDR_ANY ;
+    addr.sin_port = htons (udpPort) ;
+    if (bind (sd, (const struct sockaddr*) &addr, sizeof(addr)) < 0)
+    {
+      close (sd) ;
+      i2s_stop (MYI2S_OUTPUT_PORT) ;
+      i2s_driver_uninstall (MYI2S_OUTPUT_PORT) ;
+      strcpy (p->msg, "bind() failed") ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+
+    sprintf (p->msg, "udp->%d", udpPort) ;
+  }
+
+  while (p->state == THREAD_RUNNING)
+  {
+    delay (20000) ;
+
+
+
+    p->state = THREAD_STOPPED ;
+  }
+
+  if (sd > 0) close (sd) ;
+  i2s_stop (MYI2S_OUTPUT_PORT) ;
+  i2s_driver_uninstall (MYI2S_OUTPUT_PORT) ;
 
   strcpy (p->msg, "resources released") ; // indicate successful exit
 }
@@ -3443,10 +3559,7 @@ void *f_thread_lifecycle (void *p)
   xSemaphoreGive (entry->lock) ;
 
   while (1) // await death, freeRTOS doesn't like thread functions to return
-  {
     delay (1000) ;
-    entry->loops++ ;
-  }
 }
 
 void f_thread_create (char *name)
@@ -3599,6 +3712,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_relay ;
   if (strcmp (ft_taskname, "ft_i2sin") == 0)
     G_thread_entry[idx].ft_addr = ft_i2sin ;
+  if (strcmp (ft_taskname, "ft_i2sout") == 0)
+    G_thread_entry[idx].ft_addr = ft_i2sout ;
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
@@ -3696,6 +3811,7 @@ void f_esp32 (char **tokens)
       "ft_counter,<delay>,<start_value>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
       "ft_i2sin,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<ip:port>[,<gain>]\r\n"
+      "ft_i2sout,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<UDPport>\r\n"
       "ft_relay,<pin>,<dur(secs)>\r\n"
       "\r\n"
       "[Notes]\r\n"
