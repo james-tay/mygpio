@@ -3446,8 +3446,10 @@ void ft_i2sout (S_thread_entry *p)
   int WSpin = atoi (p->in_args[2]) ;
   int SDpin = atoi (p->in_args[3]) ;
   int udpPort = atoi (p->in_args[4]) ;
+  int dma_bufsize = MYI2S_BITS_PER_SAMPLE / 8 * MYI2S_DMA_SAMPLES ;
 
   int sd = -1 ;                                 // recv UDP socket descriptor
+  unsigned long *dma_buf = NULL ;               // work buffer to recv UDP data
   esp_err_t e ;                                 // generic error return value
 
   /* do one time I2S initialization (well, per thread instance) */
@@ -3489,6 +3491,30 @@ void ft_i2sout (S_thread_entry *p)
       return ;
     }
 
+    /* track UDP recv() metrics */
+
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "recv" ;
+    p->results[0].data[0] = "\"ok\"" ;
+    p->results[0].i_value = 0 ;         // recv() returns "dma_bufsize"
+
+    p->results[1].num_tags = 1 ;
+    p->results[1].meta[0] = "recv" ;
+    p->results[1].data[0] = "\"short\"" ;
+    p->results[1].i_value = 0 ;         // recv() returns < "dma_bufsize"
+
+    p->results[2].num_tags = 1 ;
+    p->results[2].meta[0] = "recv" ;
+    p->results[2].data[0] = "\"idle\"" ;
+    p->results[2].i_value = 0 ;         // select() timed out
+
+    p->results[3].num_tags = 1 ;
+    p->results[3].meta[0] = "dma_write" ;
+    p->results[3].data[0] = "\"fails\"" ;
+    p->results[3].i_value = 0 ;         // i2s_write() failed
+
+    p->num_int_results = 4 ;
+
     /* prepare a UDP socket and bind it to its listening port */
 
     sd = socket (AF_INET, SOCK_DGRAM, IPPROTO_IP) ;
@@ -3514,19 +3540,65 @@ void ft_i2sout (S_thread_entry *p)
       return ;
     }
 
+    /* allocate a buffer to copy UDP packet contents into */
+
+    dma_buf = (unsigned long*) malloc (dma_bufsize) ;
+    if (dma_buf == NULL)
+    {
+      sprintf (p->msg, "dma_buf malloc(%d) failed", dma_bufsize) ;
+      close (sd) ;
+      i2s_stop (MYI2S_OUTPUT_PORT) ;
+      i2s_driver_uninstall (MYI2S_OUTPUT_PORT) ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+
     sprintf (p->msg, "udp->%d", udpPort) ;
   }
 
+  /*
+     this is our main loop. it is very important that we do NOT block for
+     too long, as we must check for a thread termination request.
+  */
+
+  size_t written ;
+  fd_set rfds ;
+  struct timeval tv ;
   while (p->state == THREAD_RUNNING)
   {
-    delay (20000) ;
+    tv.tv_sec = 0 ;
+    tv.tv_usec = 200000 ;       // 200 millisecs
+    FD_ZERO (&rfds) ;
+    FD_SET (sd, &rfds) ;
+    int result = select (sd + 1, &rfds, NULL, NULL, &tv) ;
+    if (result == 0)
+      p->results[2].i_value++ ;         // select() timed out
+    if (result == 1)
+    {
+      /*
+         it's very important that we use the MSG_DONTWAIT flag here to
+         prevent recv() from blocking. By right select() handles our blocking
+         wait in a controlled manner. Not using MSG_DONTWAIT causes this
+         thread to block excessively, which is bad.
+      */
 
-
-
-    p->state = THREAD_STOPPED ;
+      size_t amt = recv (sd, dma_buf, dma_bufsize, MSG_DONTWAIT) ;
+      if (amt < dma_bufsize)
+        p->results[1].i_value++ ;       // recv() returned insufficient data
+      if (amt == dma_bufsize)
+      {
+        p->results[0].i_value++ ;       // recv() returned expected amount
+        written = 0 ;
+        e = i2s_write (MYI2S_OUTPUT_PORT, dma_buf, amt, &written,
+                       MYI2S_DMA_WAITTICKS) ;
+        if ((e != ESP_OK) || (written != amt))
+          p->results[3].i_value++ ;
+      }
+    }
   }
 
   if (sd > 0) close (sd) ;
+  free (dma_buf) ;
   i2s_stop (MYI2S_OUTPUT_PORT) ;
   i2s_driver_uninstall (MYI2S_OUTPUT_PORT) ;
 
