@@ -262,6 +262,7 @@
      - the OTA implementation does not follow HTTP redirects.
 */
 
+#include <soc/rtc.h>
 #include <lwip/sockets.h>
 
 #include <FS.h>
@@ -4134,7 +4135,7 @@ void f_action (char **tokens)
   {
     /* attempt to measure tick period in milliseconds */
 
-    #define TEST_TICKS 500
+    #define TEST_TICKS 200
     int tv_start = millis () ;
     vTaskDelay (TEST_TICKS) ;
     int tv_end = millis () ;
@@ -4142,7 +4143,16 @@ void f_action (char **tokens)
     char tick_str[8] ;
     dtostrf (tick_ms, 2, 4, tick_str) ;
 
+    /* detect cpu clock frequency */
+
+    rtc_cpu_freq_t cpu_freq = rtc_clk_cpu_freq_get() ;
+    uint32_t hz = rtc_clk_cpu_freq_value (cpu_freq) ;
+
+    /* now report all our findings */
+
     sprintf (line, "Running on cpu:%d\r\n", xPortGetCoreID()) ;
+    strcat (G_reply_buf, line) ;
+    sprintf (line, "CPU speed: %u hz\r\n", hz) ;
     strcat (G_reply_buf, line) ;
     sprintf (line, "Built: %s, %s\r\n", __DATE__, __TIME__) ;
     strcat (G_reply_buf, line) ;
