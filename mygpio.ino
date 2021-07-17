@@ -3561,19 +3561,42 @@ void ft_i2sout (S_thread_entry *p)
      too long, as we must check for a thread termination request.
   */
 
+  int i ;
   size_t written ;
   fd_set rfds ;
   struct timeval tv ;
+
   while (p->state == THREAD_RUNNING)
   {
+    /*
+       We want select() to only pause for a very short time. This is because
+       during unusually long waits, the I2S subsystem is still reading off 
+       our DMA buffers, and the audio playback will sound like noise.
+    */
+
     tv.tv_sec = 0 ;
-    tv.tv_usec = 200000 ;       // 200 millisecs
+    tv.tv_usec = 10000 ;       // 10 millisecs
     FD_ZERO (&rfds) ;
     FD_SET (sd, &rfds) ;
     int result = select (sd + 1, &rfds, NULL, NULL, &tv) ;
     if (result == 0)
-      p->results[2].i_value++ ;         // select() timed out
-    if (result == 1)
+    {
+      /*
+         If select() timed out, it means our audio stream got interrupted.
+         It's very important that we zero out our DMA buffers otherwise the
+         I2S subsystem continues to playback buffer contents, which for all
+         practical purposes will sound like noise.
+      */
+
+      p->results[2].i_value++ ;
+      for (i=0 ; i < MYI2S_DMA_BUFS ; i++)
+      {
+        memset (dma_buf, 0, dma_bufsize) ;
+        i2s_write (MYI2S_OUTPUT_PORT, dma_buf, dma_bufsize, &written,
+                   MYI2S_DMA_WAITTICKS) ;
+      }
+    }
+    if ((result == 1) && (FD_ISSET (sd, &rfds)))
     {
       /*
          it's very important that we use the MSG_DONTWAIT flag here to
