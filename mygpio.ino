@@ -3324,7 +3324,12 @@ void ft_i2sin (S_thread_entry *p)
     p->results[3].data[0] = "\"ms\"" ;
     p->results[3].i_value = 0 ;                // millisecs last main loop
 
-    p->num_int_results = 4 ;
+    p->results[4].num_tags = 1 ;
+    p->results[4].meta[0] = "signal" ;
+    p->results[4].data[0] = "\"dynrange\"" ;
+    p->results[4].i_value = 0 ;                // dynamic range (before gain)
+
+    p->num_int_results = 5 ;
 
     /* prepare a UDP socket which we use to stream audio data */
 
@@ -3380,22 +3385,25 @@ void ft_i2sin (S_thread_entry *p)
     tv_work = millis () ;
     if ((e == ESP_OK) && (dma_read == dma_bufsize))
     {
+      /* measure our samples to find dynamic range and zero reference value */
+
+      sample_lo = sample_hi = total = dma_buf[0] ; // recalculate reference
+      for (idx=1 ; idx < MYI2S_DMA_SAMPLES ; idx++)
+      {
+        if (dma_buf[idx] < sample_lo)
+          sample_lo = dma_buf[idx] ;
+        if (dma_buf[idx] > sample_hi)
+          sample_hi = dma_buf[idx] ;
+        total = total + dma_buf[idx] ;
+      }
+      long long ll = total / MYI2S_DMA_SAMPLES ;
+      sample_ref = (double) (ll) ;                    // signal's "zero" level
+      p->results[4].i_value = sample_hi - sample_lo ; // signal's dynamic range
+
       /* if optional gain is set, process it now */
 
       if (gain != 1.0)
       {
-        sample_lo = sample_hi = total = dma_buf[0] ; // recalculate reference
-        for (idx=1 ; idx < MYI2S_DMA_SAMPLES ; idx++)
-        {
-          if (dma_buf[idx] < sample_lo)
-            sample_lo = dma_buf[idx] ;          // FUTURE? this is not used now
-          if (dma_buf[idx] > sample_hi)
-            sample_hi = dma_buf[idx] ;          // FUTURE? this is not used now
-          total = total + dma_buf[idx] ;
-        }
-        long long ll = total / MYI2S_DMA_SAMPLES ;
-        sample_ref = (double) (ll) ; // analog signal's "zero" level
-
         for (idx=0 ; idx < MYI2S_DMA_SAMPLES ; idx++) // apply software gain
         {
           double f = (double) dma_buf[idx] ;
@@ -3559,24 +3567,26 @@ void ft_i2sout (S_thread_entry *p)
 
   /*
      this is our main loop. it is very important that we do NOT block for
-     too long, as we must check for a thread termination request.
+     too long, as we must check for a thread termination request. We want
+     select() to only pause for a very short time. This is because during
+     unusually long waits (ie, poor wifi), the I2S subsystem is still reading
+     off our DMA buffers, and the audio playback will sound like noise. Thus
+     select() waits for twice our expected usec_per_packet :
+
+       packets_per_sec = sample_rate / samples_per_pkt
+       usec_per_packet = 1000000 / packets_per_sec
   */
 
-  int i ;
+  int i, usec_per_packet=0 ;
   size_t written ;
   fd_set rfds ;
   struct timeval tv ;
 
+  usec_per_packet = 1000000 / (sampleRate / MYI2S_DMA_SAMPLES) ;
   while (p->state == THREAD_RUNNING)
   {
-    /*
-       We want select() to only pause for a very short time. This is because
-       during unusually long waits, the I2S subsystem is still reading off 
-       our DMA buffers, and the audio playback will sound like noise.
-    */
-
     tv.tv_sec = 0 ;
-    tv.tv_usec = 10000 ;       // 10 millisecs
+    tv.tv_usec = usec_per_packet * 2 ;
     FD_ZERO (&rfds) ;
     FD_SET (sd, &rfds) ;
     int result = select (sd + 1, &rfds, NULL, NULL, &tv) ;
