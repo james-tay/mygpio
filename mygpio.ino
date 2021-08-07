@@ -317,7 +317,8 @@
 /* my I2S settings */
 
 #define MYI2S_BITS_PER_SAMPLE 32      // update i2s_config.bits_per_sample too
-#define MYI2S_DMA_BUFS 2              // number of DMA buffers
+#define MYI2S_DMA_IN_BUFS 2           // number of DMA buffers sampling audio
+#define MYI2S_DMA_OUT_BUFS 32         // number of DMA buffers outputing audio
 #define MYI2S_DMA_SAMPLES 256         // samples per DMA buffer
 #define MYI2S_DMA_WAITTICKS 100       // max ticks i2s_read() will wait
 #define MYI2S_INPUT_PORT I2S_NUM_0    // audio input always uses port 0
@@ -3270,7 +3271,7 @@ void ft_i2sin (S_thread_entry *p)
       .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_I2S |
                                                  I2S_COMM_FORMAT_I2S_MSB),
       .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-      .dma_buf_count = MYI2S_DMA_BUFS,
+      .dma_buf_count = MYI2S_DMA_IN_BUFS,
       .dma_buf_len = MYI2S_DMA_SAMPLES
     } ;
 
@@ -3398,7 +3399,10 @@ void ft_i2sin (S_thread_entry *p)
       }
       long long ll = total / MYI2S_DMA_SAMPLES ;
       sample_ref = (double) (ll) ;                    // signal's "zero" level
-      p->results[4].i_value = sample_hi - sample_lo ; // signal's dynamic range
+
+      /* calculate dynamic range as a percentage against a 32-bit number */
+
+      p->results[4].i_value = (sample_hi - sample_lo) * 100 / ULONG_MAX ;
 
       /* if optional gain is set, process it now */
 
@@ -3457,9 +3461,10 @@ void ft_i2sout (S_thread_entry *p)
   int udpPort = atoi (p->in_args[4]) ;
   int dma_bufsize = MYI2S_BITS_PER_SAMPLE / 8 * MYI2S_DMA_SAMPLES ;
 
-  int sd = -1 ;                                 // recv UDP socket descriptor
-  unsigned long *dma_buf = NULL ;               // work buffer to recv UDP data
-  esp_err_t e ;                                 // generic error return value
+  int sd = -1 ;                         // recv UDP socket descriptor
+  unsigned long *dma_buf = NULL ;       // work buffer to recv UDP data
+  double sample_ref = 0.0 ;             // the "zero" value for analog values
+  esp_err_t e ;                         // generic error return value
 
   /* do one time I2S initialization (well, per thread instance) */
 
@@ -3473,7 +3478,7 @@ void ft_i2sout (S_thread_entry *p)
       .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_I2S |
                                                  I2S_COMM_FORMAT_I2S_MSB),
       .intr_alloc_flags = 0,
-      .dma_buf_count = MYI2S_DMA_BUFS,
+      .dma_buf_count = MYI2S_DMA_OUT_BUFS,
       .dma_buf_len = MYI2S_DMA_SAMPLES
     } ;
 
@@ -3522,7 +3527,12 @@ void ft_i2sout (S_thread_entry *p)
     p->results[3].data[0] = "\"fails\"" ;
     p->results[3].i_value = 0 ;         // i2s_write() failed
 
-    p->num_int_results = 4 ;
+    p->results[4].num_tags = 1 ;
+    p->results[4].meta[0] = "signal" ;
+    p->results[4].data[0] = "\"dynrange\"" ;
+    p->results[4].i_value = 0 ;         // current "dynamic range" percentage
+
+    p->num_int_results = 5 ;
 
     /* prepare a UDP socket and bind it to its listening port */
 
@@ -3561,8 +3571,6 @@ void ft_i2sout (S_thread_entry *p)
       p->state = THREAD_STOPPED ;
       return ;
     }
-
-    sprintf (p->msg, "udp->%d", udpPort) ;
   }
 
   /*
@@ -3571,22 +3579,27 @@ void ft_i2sout (S_thread_entry *p)
      select() to only pause for a very short time. This is because during
      unusually long waits (ie, poor wifi), the I2S subsystem is still reading
      off our DMA buffers, and the audio playback will sound like noise. Thus
-     select() waits for twice our expected usec_per_packet :
+     select() waits for about half the time it takes to play through our DMA
+     buffers
 
        packets_per_sec = sample_rate / samples_per_pkt
        usec_per_packet = 1000000 / packets_per_sec
   */
 
-  int i, usec_per_packet=0 ;
+  int i, idx, usec_per_packet=0 ;
+  unsigned long sample_lo, sample_hi ;
+  unsigned long long total = 0 ;
   size_t written ;
   fd_set rfds ;
   struct timeval tv ;
 
   usec_per_packet = 1000000 / (sampleRate / MYI2S_DMA_SAMPLES) ;
+  sprintf (p->msg, "%d usec/pkt", usec_per_packet) ;
+
   while (p->state == THREAD_RUNNING)
   {
     tv.tv_sec = 0 ;
-    tv.tv_usec = usec_per_packet * 2 ;
+    tv.tv_usec = usec_per_packet * (MYI2S_DMA_OUT_BUFS / 2) ;
     FD_ZERO (&rfds) ;
     FD_SET (sd, &rfds) ;
     int result = select (sd + 1, &rfds, NULL, NULL, &tv) ;
@@ -3600,7 +3613,7 @@ void ft_i2sout (S_thread_entry *p)
       */
 
       p->results[2].i_value++ ;
-      for (i=0 ; i < MYI2S_DMA_BUFS ; i++)
+      for (i=0 ; i < MYI2S_DMA_OUT_BUFS ; i++)
       {
         memset (dma_buf, 0, dma_bufsize) ;
         i2s_write (MYI2S_OUTPUT_PORT, dma_buf, dma_bufsize, &written,
@@ -3621,6 +3634,24 @@ void ft_i2sout (S_thread_entry *p)
         p->results[1].i_value++ ;       // recv() returned insufficient data
       if (amt == dma_bufsize)
       {
+        /* inspect samples to find dynamic range and zero reference value */
+
+        sample_lo = sample_hi = total = dma_buf[0] ;
+        for (idx=1 ; idx < MYI2S_DMA_SAMPLES ; idx++)
+        {
+          if (dma_buf[idx] < sample_lo)
+            sample_lo = dma_buf[idx] ;
+          if (dma_buf[idx] > sample_hi)
+            sample_hi = dma_buf[idx] ;
+          total = total + dma_buf[idx] ;
+        }
+        long long ll = total / MYI2S_DMA_SAMPLES ;
+        sample_ref = (double) (ll) ;                    // "zero" level
+
+        /* calculate dynamic range as a percentage against a 32-bit number */
+
+        p->results[4].i_value = (sample_hi - sample_lo) * 100 / ULONG_MAX ;
+
         p->results[0].i_value++ ;       // recv() returned expected amount
         written = 0 ;
         e = i2s_write (MYI2S_OUTPUT_PORT, dma_buf, amt, &written,
