@@ -3328,7 +3328,7 @@ void ft_i2sin (S_thread_entry *p)
     p->results[4].num_tags = 1 ;
     p->results[4].meta[0] = "signal" ;
     p->results[4].data[0] = "\"dynrange\"" ;
-    p->results[4].i_value = 0 ;                // dynamic range (before gain)
+    p->results[4].i_value = 0 ;                // dynamic range (after gain)
 
     p->num_int_results = 5 ;
 
@@ -3400,9 +3400,13 @@ void ft_i2sin (S_thread_entry *p)
       long long ll = total / MYI2S_DMA_SAMPLES ;
       sample_ref = (double) (ll) ;                    // signal's "zero" level
 
-      /* calculate dynamic range as a percentage against a 32-bit number */
+      /*
+         calculate dynamic range as a percentage against an unsigned 24-bit
+         number (despite physical storage being 32-bit).
+      */
 
-      p->results[4].i_value = (sample_hi - sample_lo) * 100 / ULONG_MAX ;
+      double d = (double) (sample_hi - sample_lo) * 100.0 * gain ;
+      p->results[4].i_value = (unsigned long) d / (2<<24);
 
       /* if optional gain is set, process it now */
 
@@ -3648,9 +3652,12 @@ void ft_i2sout (S_thread_entry *p)
         long long ll = total / MYI2S_DMA_SAMPLES ;
         sample_ref = (double) (ll) ;                    // "zero" level
 
-        /* calculate dynamic range as a percentage against a 32-bit number */
+        /*
+           calculate dynamic range as a percentage against an unsigned 24-bit
+           number (despite physical storage being 32-bit).
+        */
 
-        p->results[4].i_value = (sample_hi - sample_lo) * 100 / ULONG_MAX ;
+        p->results[4].i_value = (sample_hi - sample_lo) * 100 / (2<<24) ;
 
         p->results[0].i_value++ ;       // recv() returned expected amount
         written = 0 ;
