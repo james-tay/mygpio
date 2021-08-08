@@ -1872,7 +1872,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
   if (G_debug)
     Serial.println ("DEBUG: f_handleWebMetrics()") ;
 
-  char line[BUF_MEDIUM] ;
+  char line[BUF_MEDIUM] ; // <<-- also used to print our current stack addr
   sprintf (G_reply_buf,
            "ec_uptime_secs %ld\n"
            "ec_serial_in_bytes %ld\n"
@@ -1885,7 +1885,8 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            "ec_mqtt_subs %ld\n"
            "ec_mqtt_oversize %ld\n"
            "ec_mqtt_pub_waits %ld\n"
-           "ec_last_stack_addr %d\n",
+           "ec_last_stack_addr %d\n"
+           "ec_wifi_rssi %d\n",
            millis() / 1000,
            G_Metrics->serialInBytes,
            G_Metrics->serialCmds,
@@ -1897,7 +1898,8 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            G_Metrics->mqttSubs,
            G_Metrics->mqttOversize,
            G_Metrics->mqttPubWaits,
-           line) ;
+           line,
+           WiFi.RSSI()) ;
 
   /* esp32 specific metrics */
 
