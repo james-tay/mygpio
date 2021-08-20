@@ -1228,8 +1228,9 @@ void f_wifi (char **tokens)
     {
       char ssid[MAX_SSID_LEN+1] ;
       WiFi.SSID(i).toCharArray (ssid, MAX_SSID_LEN) ;
-      sprintf (line, "%2d. ch %d, %d dBm [%s]\r\n",
-               i+1, WiFi.channel(i), WiFi.RSSI(i), ssid) ;
+      sprintf (line, "%2d. ch %d, %d dBm [%s] %s\r\n",
+               i+1, WiFi.channel(i), WiFi.RSSI(i), ssid,
+               WiFi.BSSIDstr(i).c_str()) ;
       if (strlen(G_reply_buf) + strlen(line) < REPLY_SIZE)
         strcat (G_reply_buf, line) ;
     }
@@ -1278,6 +1279,8 @@ void f_wifi (char **tokens)
     snprintf (line, BUF_SIZE, "wifi_ip: %s/%s\r\n",
              WiFi.localIP().toString().c_str(),
              WiFi.subnetMask().toString().c_str()) ;
+    strcat (G_reply_buf, line) ;
+    snprintf (line, BUF_SIZE, "bssid: %s\r\n", WiFi.BSSIDstr().c_str()) ;
     strcat (G_reply_buf, line) ;
 
     strcat (G_reply_buf, "mqtt_state: ") ;
