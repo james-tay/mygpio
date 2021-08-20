@@ -319,7 +319,7 @@
 #define MYI2S_BITS_PER_SAMPLE 32      // update i2s_config.bits_per_sample too
 #define MYI2S_DMA_IN_BUFS 2           // number of DMA buffers sampling audio
 #define MYI2S_DMA_OUT_BUFS 32         // number of DMA buffers outputing audio
-#define MYI2S_DMA_SAMPLES 256         // samples per DMA buffer
+#define MYI2S_DMA_SAMPLES 320         // samples per DMA buffer
 #define MYI2S_DMA_WAITTICKS 100       // max ticks i2s_read() will wait
 #define MYI2S_INPUT_PORT I2S_NUM_0    // audio input always uses port 0
 #define MYI2S_OUTPUT_PORT I2S_NUM_1   // audio output always uses port 1
