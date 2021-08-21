@@ -531,6 +531,62 @@ int f_i2c_readUShort (int device, unsigned char addr, unsigned short *result)
 }
 
 /*
+   For some reason, the ESP32 does not always connect to the AP that is
+   nearest (ie, strongest signal). This function performs a wifi scan and
+   notes down the channel and BSSID of the nearest AP and then connects to
+   it. On success, it returns 1, otherwise 0. It scan activity is written
+   into "msg" as a 1-line string.
+*/
+
+int f_wifiConnect (char *ssid, char *pw, char *msg)
+{
+  int scan_chan=0, scan_rssi, scan_idx ;
+  uint8_t *scan_bssid ;
+  char scan_ssid[MAX_SSID_LEN+1] ;
+  char line[BUF_SIZE] ;
+
+  int n = WiFi.scanNetworks () ;
+  for (int i=0 ; i < n ; i++)
+  {
+    WiFi.SSID(i).toCharArray(scan_ssid, MAX_SSID_LEN) ;
+    if (strcmp(ssid, scan_ssid) == 0)
+    {
+      sprintf (line, "(%s ch:%d %ddBm) ",
+               WiFi.BSSIDstr(i).c_str(), WiFi.channel(i), WiFi.RSSI(i)) ;
+      strcat (msg, line) ;
+
+      if (scan_chan == 0) /* this is our first matching AP, note it down */
+      {
+        scan_idx = i ;
+        scan_rssi = WiFi.RSSI (i) ;
+        scan_chan = WiFi.channel (i) ;
+        scan_bssid = WiFi.BSSID (i) ;
+      }
+      else
+      {
+        if (WiFi.RSSI (i) > scan_rssi) /* check if this AP is nearer */
+        {
+          scan_idx = i ;
+          scan_rssi = WiFi.RSSI (i) ;
+          scan_chan = WiFi.channel (i) ;
+          scan_bssid = WiFi.BSSID (i) ;
+        }
+      }
+    }
+  }
+
+  if (scan_chan == 0) /* opsie, did not find requested AP */
+  {
+    strcpy (msg, "SSID not found") ;
+    return (0) ;
+  }
+
+  sprintf (line, "[%s]", WiFi.BSSIDstr(scan_idx).c_str()) ;
+  strcat (msg, line) ;
+  WiFi.begin (ssid, pw, scan_chan, scan_bssid, true) ;
+}
+
+/*
    Sets the specified GPIO pin high. If an additional parameter is specified,
    then the pin stays high for that number of microseconds. Note that for 
    of "dur_usec" more than MAX_USEC, we'll use delay() instead. See :
@@ -4335,7 +4391,7 @@ void setup ()
   G_hostname[0] = 0 ;
   G_mqtt_pub[0] = 0 ;
 
-  char line[BUF_SIZE] ;
+  char line[BUF_MEDIUM] ;
   if (SPIFFS.begin())
   {
     int amt ;
@@ -4347,33 +4403,33 @@ void setup ()
 
     f_cfg = SPIFFS.open (MQTT_PUB_FILE, "r") ;
     f_cfg.seek (0) ;
-    amt = f_cfg.readBytes (G_mqtt_pub, BUF_SIZE) ;
+    amt = f_cfg.readBytes (G_mqtt_pub, BUF_MEDIUM) ;
     if (amt < 1)
     {
-      snprintf (line, BUF_SIZE, "WARNING: %s read returned %d - %s",
+      snprintf (line, BUF_MEDIUM, "WARNING: %s read returned %d - %s",
                 MQTT_PUB_FILE, amt, strerror(errno)) ;
       Serial.println (line) ;
     }
     else
     {
       G_mqtt_pub[amt] = 0 ;
-      snprintf (line, BUF_SIZE, "NOTICE: publish prefix '%s'.", G_mqtt_pub) ;
+      snprintf (line, BUF_MEDIUM, "NOTICE: publish prefix '%s'.", G_mqtt_pub) ;
       Serial.println (line) ;
     }
     f_cfg.close () ;
 
     f_cfg = SPIFFS.open (HOSTNAME_FILE, "r") ;
-    amt = f_cfg.readBytes (G_hostname, BUF_SIZE) ;
+    amt = f_cfg.readBytes (G_hostname, BUF_MEDIUM) ;
     if (amt < 1)
     {
-      snprintf (line, BUF_SIZE, "WARNING: %s read returned %d - %s",
+      snprintf (line, BUF_MEDIUM, "WARNING: %s read returned %d - %s",
                 HOSTNAME_FILE, amt, strerror(errno)) ;
       Serial.println (line) ;
     }
     else
     {
       G_hostname[amt] = 0 ;
-      snprintf (line, BUF_SIZE, "NOTICE: hostname is '%s'.", G_hostname) ;
+      snprintf (line, BUF_MEDIUM, "NOTICE: hostname is '%s'.", G_hostname) ;
       Serial.println (line) ;
     }
     f_cfg.close () ;
@@ -4397,7 +4453,9 @@ void setup ()
       {
         sprintf (line, "NOTICE: Wifi config loaded for %s.", cfg_wifi_ssid) ;
         Serial.println (line) ;
-        WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
+        strcpy (line, "NOTICE: ") ;
+        f_wifiConnect (cfg_wifi_ssid, cfg_wifi_pw, line) ;
+        Serial.println (line) ;
 
         /* fire up our web server socket */
 
