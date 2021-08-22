@@ -1273,7 +1273,7 @@ void f_fs (char **tokens)
 
 void f_wifi (char **tokens)
 {
-  char line[BUF_SIZE] ;
+  char line[BUF_MEDIUM] ;
 
   if (strcmp(tokens[1], "scan") == 0)                           // scan
   {
@@ -1294,7 +1294,7 @@ void f_wifi (char **tokens)
   else
   if (strcmp(tokens[1], "status") == 0)                         // status
   {
-    snprintf (line, BUF_SIZE, "cfg_wifi_ssid: %s\r\n", cfg_wifi_ssid) ;
+    snprintf (line, BUF_MEDIUM, "cfg_wifi_ssid: %s\r\n", cfg_wifi_ssid) ;
     strcat (G_reply_buf, line) ;
     if (strlen(cfg_wifi_pw) > 0)
       strcat (G_reply_buf, "cfg_wifi_pw: (set)\r\n") ;
@@ -1324,19 +1324,19 @@ void f_wifi (char **tokens)
       default:
         strcat (G_reply_buf, "UNKNOWN\r\n") ; break ;
     }
-    snprintf (line, BUF_SIZE, "rssi: %d dBm\r\n", WiFi.RSSI()) ;
+    snprintf (line, BUF_MEDIUM, "rssi: %d dBm\r\n", WiFi.RSSI()) ;
     strcat (G_reply_buf, line) ;
 
     unsigned char mac[6] ;
     WiFi.macAddress(mac) ;
-    snprintf (line, BUF_SIZE, "wifi_mac: %x:%x:%x:%x:%x:%x\r\n",
+    snprintf (line, BUF_MEDIUM, "wifi_mac: %x:%x:%x:%x:%x:%x\r\n",
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
     strcat (G_reply_buf, line) ;
-    snprintf (line, BUF_SIZE, "wifi_ip: %s/%s\r\n",
+    snprintf (line, BUF_MEDIUM, "wifi_ip: %s/%s\r\n",
              WiFi.localIP().toString().c_str(),
              WiFi.subnetMask().toString().c_str()) ;
     strcat (G_reply_buf, line) ;
-    snprintf (line, BUF_SIZE, "bssid: %s\r\n", WiFi.BSSIDstr().c_str()) ;
+    snprintf (line, BUF_MEDIUM, "bssid: %s\r\n", WiFi.BSSIDstr().c_str()) ;
     strcat (G_reply_buf, line) ;
 
     strcat (G_reply_buf, "mqtt_state: ") ;
@@ -1365,17 +1365,17 @@ void f_wifi (char **tokens)
     }
     if (strlen(G_hostname) > 0)
     {
-      snprintf (line, BUF_SIZE, "hostname: %s\r\n", G_hostname) ;
+      snprintf (line, BUF_MEDIUM, "hostname: %s\r\n", G_hostname) ;
       strcat (G_reply_buf, line) ;
     }
     if (strlen(G_mqtt_stopic) > 0)
     {
-      snprintf (line, BUF_SIZE, "subscribed_topic: %s\r\n", G_mqtt_stopic) ;
+      snprintf (line, BUF_MEDIUM, "subscribed_topic: %s\r\n", G_mqtt_stopic) ;
       strcat (G_reply_buf, line) ;
     }
     if (strlen(G_mqtt_rtopic) > 0)
     {
-      snprintf (line, BUF_SIZE, "cmd_response_topic: %s\r\n", G_mqtt_rtopic) ;
+      snprintf (line, BUF_MEDIUM, "cmd_response_topic: %s\r\n", G_mqtt_rtopic) ;
       strcat (G_reply_buf, line) ;
     }
   }
@@ -1401,7 +1401,10 @@ void f_wifi (char **tokens)
   else
   if (strcmp(tokens[1], "connect") == 0)                        // connect
   {
-    WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
+    f_wifiConnect (cfg_wifi_ssid, cfg_wifi_pw, line) ;
+    strcat (G_reply_buf, line) ;
+    strcat (G_reply_buf, " ") ;
+
     for (int retry=0 ; retry < MAX_WIFI_TIMEOUT ; retry++)
     {
       int status = WiFi.status() ;
