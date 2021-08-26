@@ -3392,9 +3392,14 @@ void ft_i2sin (S_thread_entry *p)
     p->results[4].num_tags = 1 ;
     p->results[4].meta[0] = "signal" ;
     p->results[4].data[0] = "\"dynrange\"" ;
-    p->results[4].i_value = 0 ;                // dynamic range (after gain)
+    p->results[4].i_value = 0 ;                // dynamic range (before gain)
 
-    p->num_int_results = 5 ;
+    p->results[5].num_tags = 1 ;
+    p->results[5].meta[0] = "signal" ;
+    p->results[5].data[0] = "\"clipped\"" ;
+    p->results[5].i_value = 0 ;                // sample sets clipped
+
+    p->num_int_results = 6 ;
 
     /* prepare a UDP socket which we use to stream audio data */
 
@@ -3465,21 +3470,30 @@ void ft_i2sin (S_thread_entry *p)
       sample_ref = (double) (ll) ;                    // signal's "zero" level
 
       /*
-         calculate dynamic range as a percentage against an unsigned 24-bit
-         number (despite physical storage being 32-bit).
+         calculate dynamic range as a percentage against an unsigned 32-bit
+         number (ie, save it as an integer result between 0 to 100)
       */
 
-      double d = (double) (sample_hi - sample_lo) * 100.0 * gain ;
-      p->results[4].i_value = (unsigned long) d / (2<<24);
+      long long drange = sample_hi - sample_lo ;
+      p->results[4].i_value = (int) (drange >> 1) ;
 
       /* if optional gain is set, process it now */
 
       if (gain != 1.0)
       {
+        /* figure out max gain without clipping */
+
+        double apply_gain = gain ;
+        double max_gain = (double) UINT_MAX / drange ;
+        if (gain > max_gain)
+        {
+          apply_gain = max_gain ;               // limit the gain we'll apply
+          p->results[5].i_value++ ;             // high gain clip
+        }
         for (idx=0 ; idx < MYI2S_DMA_SAMPLES ; idx++) // apply software gain
         {
           double f = (double) dma_buf[idx] ;
-          f = ((f - sample_ref) * gain) + sample_ref ;
+          f = ((f - sample_ref) * apply_gain) + sample_ref ;
           dma_buf[idx] = (unsigned long) f ;
         }
       }
@@ -3717,11 +3731,11 @@ void ft_i2sout (S_thread_entry *p)
         sample_ref = (double) (ll) ;                    // "zero" level
 
         /*
-           calculate dynamic range as a percentage against an unsigned 24-bit
-           number (despite physical storage being 32-bit).
+           dynamic range is an unsigned 32-bit number, but "i_value" is "int",
+           so right shift bits by 1.
         */
 
-        p->results[4].i_value = (sample_hi - sample_lo) * 100 / (2<<24) ;
+        p->results[4].i_value = (int) ((sample_hi - sample_lo) >> 1) ;
 
         p->results[0].i_value++ ;       // recv() returned expected amount
         written = 0 ;
