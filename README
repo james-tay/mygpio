@@ -1,12 +1,14 @@
+The "mygpio.ino" is firmware designed to run on the Espressif ESP32. 
+
+  - provides a web interface (via REST) to controlling your ESP32.
+  - configuration is stored as files in the ESP32's SPIFFS filesystem.
+  - provides a "/metrics" endpoint for prometheus scrapes.
+  - publishees and subscripbes to MQTT (optional).
+  - schedules user defined threads.
+
 Most of the detailed documentation (and examples) are in mygpio.ino.
 
   mygpio.ino - this is the source code for the program in the ESP32
   mygpio.py  - this tool communicates to the arduino via (virtual) serial
 
-Note that compiling "mygpio.ino" requires the following files to be present in the current working directory :
-
-  LiquidCrystal_I2C.h
-  LiquidCrystal_I2C.cpp
-
-obtained from https://github.com/johnrickman/LiquidCrystal_I2C
 
