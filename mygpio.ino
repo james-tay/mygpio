@@ -85,6 +85,7 @@
      - All filenames must begin with '/'.
      - LCD row/columns should be configurable.
      - REST blocks during firmware OTA upgrades.
+     - I2S DMA buffer size should be dynamic.
 
    Threads
 
@@ -827,13 +828,18 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
 }
 
 /*
-   Polls a DS18B20 on the specified 1-wire pin. Writes the current temperature
-   in the supplied float buffer and the device address in "addr" which must be
-   8+1 bytes long. Returns 1 on success, otherwise 0.
+   Polls DS18B20 devices on the specified 1-wire pin. Writes the current
+   temperature in the supplied float buffer array and the device addresses in
+   "addr" which must be (MAX_THREAD_RESULT_VALUES * 8) bytes long. Returns
+   the number of DS18B20 devices successfully polled (ie, written into the
+   supplied arrays)
 */
 
 int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
 {
+  #define DS18B20_RESOLUTION_BITS 12
+
+  int i ;
   OneWire bus (dataPin) ;
   DallasTemperature sensor (&bus) ;
 
@@ -845,34 +851,19 @@ int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
     return (0) ;
   }
 
-  if (G_debug)
-  {
-    int i ;
-    char msg[BUF_SIZE] ;
-    unsigned char cur_addr[9] ;
+  int addr_offset = 0 ; // where in "addr" we're currently writing to
+  unsigned char cur_addr[8] ;
 
-    for (i=0 ; i < devices ; i++)
-    {
-      if (sensor.getAddress (cur_addr, i))
-      {
-        cur_addr[8] = 0 ;
-        snprintf (msg, BUF_SIZE, "DEBUG: device:%d address:0x%x", i, cur_addr) ;
-      }
-      else
-        snprintf (msg, BUF_SIZE, "DEBUG: cannot get device:%d address", i) ;
-      Serial.println (msg) ;
-    }
-  }
-
-  if (! sensor.getAddress (addr, 0))
-  {
-    strcat (G_reply_buf, "FAULT: cannot get device address.\r\n") ;
-    return (0) ;
-  }
-  addr[8] = 0 ;
+  sensor.setResolution (DS18B20_RESOLUTION_BITS) ;
   sensor.requestTemperatures() ;
-  *temperature = sensor.getTempCByIndex (0) ;
-  return (1) ;
+  for (i=0 ; i < devices ; i++)
+  {
+    sensor.getAddress (cur_addr, i) ;
+    temperature[i] = sensor.getTempCByIndex (i) ;
+    memcpy (addr+addr_offset, cur_addr, 8) ;
+    addr_offset = addr_offset + 8 ;
+  }
+  return (devices) ;
 }
 
 /*
@@ -2992,13 +2983,14 @@ void ft_ds18b20 (S_thread_entry *p)
 
   int retries = DS18B20_RETRIES ;
   int status = 0 ;
-  float t ;
-  unsigned char addr[9] ;
+  int addr_size = (MAX_THREAD_RESULT_VALUES * 8) + 1 ;
+  float t[MAX_THREAD_RESULT_VALUES] ;
+  unsigned char addr[addr_size] ;
 
   while (retries > 0)
   {
-    memset (addr, 0, 9) ;
-    status = f_ds18b20 (dataPin, addr, &t) ;
+    memset (addr, 0, addr_size) ;
+    status = f_ds18b20 (dataPin, addr, t) ;
     if (status == 0)
     {
       retries-- ;
@@ -3013,7 +3005,7 @@ void ft_ds18b20 (S_thread_entry *p)
     {
       sprintf (buf, "\"0x%x\"", addr) ;   /* device may have changed */
       p->results[0].data[1] = buf ;
-      p->results[0].f_value = t ;
+      p->results[0].f_value = t[0] ;
       break ;
     }
   }
@@ -4225,13 +4217,21 @@ void f_action (char **tokens)
   else
   if ((strcmp(tokens[0], "ds18b20") == 0) && (tokens[1] != NULL))
   {
-    float t=0.0 ;
-    unsigned char addr[9] ;
-    if (f_ds18b20 (atoi(tokens[1]), addr, &t))
+    float t[MAX_THREAD_RESULT_VALUES] ;
+    unsigned char addr[(MAX_THREAD_RESULT_VALUES * 8) + 1] ;
+    memset (addr, 0, (MAX_THREAD_RESULT_VALUES * 8) + 1) ;
+
+    int results = f_ds18b20 (atoi(tokens[1]), addr, t) ;
+    int offset = 0 ;
+    for (int i=0 ; i < results ; i++)
     {
-      sprintf (line, "ds18b20 - address:0x%x temperature:%d.%02d\r\n",
-               addr, int(t), abs((int)(t*100)%100)) ;
+      sprintf (line, "ds18b20 - addr:%02x%02x%02x%02x%02x%02x%02x%02x "
+               "temperature:%d.%02d\r\n",
+               addr[offset], addr[offset+1], addr[offset+2], addr[offset+3],
+               addr[offset+4], addr[offset+5], addr[offset+6], addr[offset+7],
+               int(t[i]), abs((int)(t[i]*100)%100)) ;
       strcat (G_reply_buf, line) ;
+      offset = offset + 8 ;
     }
   }
   else

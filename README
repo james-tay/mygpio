@@ -11,4 +11,8 @@ Most of the detailed documentation (and examples) are in mygpio.ino.
   mygpio.ino - this is the source code for the program in the ESP32
   mygpio.py  - this tool communicates to the arduino via (virtual) serial
 
+References
+
+  - DS18B20 is based on,
+    https://github.com/milesburton/Arduino-Temperature-Control-Library/blob/master/DallasTemperature.h
 
