@@ -839,7 +839,6 @@ int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
 {
   #define DS18B20_RESOLUTION_BITS 12
 
-  int i ;
   OneWire bus (dataPin) ;
   DallasTemperature sensor (&bus) ;
 
@@ -851,19 +850,23 @@ int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
     return (0) ;
   }
 
-  int addr_offset = 0 ; // where in "addr" we're currently writing to
+  int addr_offset = 0 ; // where in "addr" we're currently writing into
+  int results = 0 ;     // number of successful addresses actually read
   unsigned char cur_addr[8] ;
 
   sensor.setResolution (DS18B20_RESOLUTION_BITS) ;
   sensor.requestTemperatures() ;
-  for (i=0 ; i < devices ; i++)
+  for (int i=0 ; i < devices ; i++)
   {
-    sensor.getAddress (cur_addr, i) ;
-    temperature[i] = sensor.getTempCByIndex (i) ;
-    memcpy (addr+addr_offset, cur_addr, 8) ;
-    addr_offset = addr_offset + 8 ;
+    if (sensor.getAddress (cur_addr, i))
+    {
+      temperature[results] = sensor.getTempCByIndex (i) ; // this can't fail ?
+      memcpy (addr+addr_offset, cur_addr, 8) ;
+      addr_offset = addr_offset + 8 ;
+      results++ ;
+    }
   }
-  return (devices) ;
+  return (results) ;
 }
 
 /*
