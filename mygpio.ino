@@ -311,6 +311,8 @@
 #define MAX_THREAD_MSG_BUF 80         // length of thread's "msg"
 #define MAX_THREAD_TAGS 8             // tag pairs in "/tags-<name>"
 
+#define MAX_DS18B20_DEVICES 4         // maximum DS18B20 on a single pin
+
 #define MAX_HTTP_REQUEST 1024
 #define MAX_HTTP_CLIENTS 4            // esp32 supports 8x file descriptors
 #define MAX_HTTP_RTIME 20             // seconds to receive an http request
@@ -849,6 +851,8 @@ int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
     strcat (G_reply_buf, "FAULT: no devices found.\r\n") ;
     return (0) ;
   }
+  if (devices > MAX_DS18B20_DEVICES)
+    devices = MAX_DS18B20_DEVICES ;
 
   int addr_offset = 0 ; // where in "addr" we're currently writing into
   int results = 0 ;     // number of successful addresses actually read
@@ -2348,8 +2352,7 @@ void f_ota (char *url)
     }
   }
 
-  if ((content_length == 0) || (content_type == NULL) ||
-      (strlen(content_type) < 1))
+  if ((content_length == 0) || (content_type == NULL))
   {
     strcat (G_reply_buf, "WARNING: Invalid HTTP response.\r\n") ;
     client.stop () ;
@@ -2367,9 +2370,9 @@ void f_ota (char *url)
 
   /* Print message to the serial console, just in case an operator is there */
 
-  sprintf (request, "NOTICE: Firmware download %s -> %s (%d bytes)",
-           url, content_type, content_length) ;
-  Serial.println (request) ;
+  sprintf (line, "NOTICE: Firmware download %s -> %s (%d bytes)",
+           url, CONTENT_TYPE, content_length) ;
+  Serial.println (line) ;
 
   /* Now we perform the actual firmware upgrade, no turning back ! */
 
@@ -2963,16 +2966,29 @@ void ft_ds18b20 (S_thread_entry *p)
   int delay_ms = atoi (p->in_args[0]) ;
   int dataPin = atoi (p->in_args[1]) ;
   int pwrPin = atoi (p->in_args[2]) ;
-
-  static thread_local char buf[16] ;
   unsigned long start_time = millis () ;
+
+  /*
+     Since this function calls f_ds18b20(), which returns multiple device
+     addresses, we need a single static thread_local buffer which holds all
+     null terminated strings of the device addresses in hex. To help us
+     prepare this hex string, we use a temporary buffer "hex_buf" for this.
+     Recall that a DS18B20's address is 8-bytes = 16+3 char string buffer,
+     including double quotes required by prometheus's scrapes. To summarize :
+       addr[] (binary) -> hex_buf -> addr_buf[] (text)
+  */
+
+  int results = 0 ;
+  int retries = DS18B20_RETRIES ;
+  int addr_size = (MAX_DS18B20_DEVICES * 8) + 1 ;
+  float t[MAX_DS18B20_DEVICES] ;
+  char hex_buf[16 + 3] ;
+  unsigned char addr[addr_size] ;
+  static thread_local char addr_buf[MAX_DS18B20_DEVICES * (16 + 3)] ;
 
   if (p->loops == 0)
   {
-    p->results[0].num_tags = 2 ;
-    p->results[0].meta[0] = "measurement" ;
-    p->results[0].data[0] = "\"temperature\"" ;
-    p->results[0].meta[1] = "address" ;
+    memset (addr_buf, 0, MAX_DS18B20_DEVICES * (16 + 3)) ;
 
     /*
        turn on the power pin and leave it on in case we have other DS18B20s
@@ -2984,18 +3000,13 @@ void ft_ds18b20 (S_thread_entry *p)
     delay (DS18B20_POWER_ON_DELAY_MS) ;
   }
 
-  int retries = DS18B20_RETRIES ;
-  int status = 0 ;
-  int addr_size = (MAX_THREAD_RESULT_VALUES * 8) + 1 ;
-  float t[MAX_THREAD_RESULT_VALUES] ;
-  unsigned char addr[addr_size] ;
-
   while (retries > 0)
   {
     memset (addr, 0, addr_size) ;
-    status = f_ds18b20 (dataPin, addr, t) ;
-    if (status == 0)
+    results = f_ds18b20 (dataPin, addr, t) ;
+    if (results < 1)
     {
+      p->num_float_results = 0 ;
       retries-- ;
       sprintf (p->msg, "Read failed, retries %d.", retries) ;
       pinMode (pwrPin, OUTPUT) ;
@@ -3006,15 +3017,39 @@ void ft_ds18b20 (S_thread_entry *p)
     }
     else
     {
-      sprintf (buf, "\"0x%x\"", addr) ;   /* device may have changed */
-      p->results[0].data[1] = buf ;
-      p->results[0].f_value = t[0] ;
+      /*
+         depending on the number of "results" we received, this will determine
+         our "p->num_float_results", where each result's "data[0]" is the
+         hardcoded string "temperature", but "data[1]" is the device's address.
+      */
+
+      int r_offset=0 ; // our current read offset in "addr"
+      int w_offset=0 ; // our current write offset in "addr_buf"
+
+      for (int idx=0 ; idx < results ; idx++)
+      {
+        sprintf (hex_buf, "\"%02x%02x%02x%02x%02x%02x%02x%02x\"",
+                 addr[r_offset], addr[r_offset+1],
+                 addr[r_offset+2], addr[r_offset+3],
+                 addr[r_offset+4], addr[r_offset+5],
+                 addr[r_offset+6], addr[r_offset+7]) ;
+        memcpy (addr_buf+w_offset, hex_buf, 16 + 2) ;
+
+        p->results[idx].num_tags = 2 ;
+        p->results[idx].meta[0] = "measurement" ;
+        p->results[idx].data[0] = "\"temperature\"" ;
+        p->results[idx].meta[1] = "address" ;
+        p->results[idx].data[1] = addr_buf + w_offset ;
+        p->results[idx].f_value = t[idx] ;
+
+        r_offset = r_offset + 8 ;       // move to next device address
+        w_offset = w_offset + 16 + 3 ;  // move to next string
+      }
+      p->num_float_results = results ;
       break ;
     }
   }
-  if (status)
-    p->num_float_results = 1 ;
-  else
+  if (retries == 0)
     p->num_float_results = 0 ;
 
   /* now figure out how long to nap for */
@@ -3022,7 +3057,7 @@ void ft_ds18b20 (S_thread_entry *p)
   unsigned long end_time = millis () ;
   int duration_ms = end_time - start_time ;
   if (p->num_float_results)
-    sprintf (p->msg, "polled 0x%x in %dms", addr, duration_ms) ;
+    sprintf (p->msg, "polled %d in %dms", results, duration_ms) ;
   int nap = delay_ms - duration_ms ;
   if (nap > 0)
     delay (nap) ;
@@ -4220,9 +4255,9 @@ void f_action (char **tokens)
   else
   if ((strcmp(tokens[0], "ds18b20") == 0) && (tokens[1] != NULL))
   {
-    float t[MAX_THREAD_RESULT_VALUES] ;
-    unsigned char addr[(MAX_THREAD_RESULT_VALUES * 8) + 1] ;
-    memset (addr, 0, (MAX_THREAD_RESULT_VALUES * 8) + 1) ;
+    float t[MAX_DS18B20_DEVICES] ;
+    unsigned char addr[(MAX_DS18B20_DEVICES * 8) + 1] ;
+    memset (addr, 0, (MAX_DS18B20_DEVICES * 8) + 1) ;
 
     int results = f_ds18b20 (atoi(tokens[1]), addr, t) ;
     int offset = 0 ;
