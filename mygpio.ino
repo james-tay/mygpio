@@ -296,7 +296,7 @@
 #define AUTOEXEC_FILE "/autoexec.cfg"
 #define HOSTNAME_FILE "/hostname"
 
-#define LED_BUILTIN 2
+#define LED_BUILTIN 2                 // applies to KeeYees ESP32
 #define BLINK_ON HIGH
 #define BLINK_OFF LOW
 
@@ -4179,6 +4179,7 @@ void f_action (char **tokens)
             "/hostname   <hostname>\r\n"
             "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
             "/mqtt.pub   <sensor topic pub prefix>,<cmd topic pub prefix>\r\n"
+            "/mqtt.sub   <cmd topic prefix>\r\n"
             "/mqtt.tags  <meta=\"value\",...>\r\n"
             "/wifi.ssid  <ssid>\r\n"
             "/wifi.pw    <pw>\r\n") ;
