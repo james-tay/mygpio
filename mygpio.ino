@@ -840,6 +840,8 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
 int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
 {
   #define DS18B20_RESOLUTION_BITS 12
+  #define DS18B20_MAX_TEMP 85.0         // a reading this high is not normal
+  #define DS18B20_MIN_TEMP -127.0       // a reading this low is not normal
 
   OneWire bus (dataPin) ;
   DallasTemperature sensor (&bus) ;
@@ -862,9 +864,11 @@ int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
   sensor.requestTemperatures() ;
   for (int i=0 ; i < devices ; i++)
   {
-    if (sensor.getAddress (cur_addr, i))
+    if ((sensor.getAddress (cur_addr, i)) &&
+        (sensor.getTempCByIndex (i) < DS18B20_MAX_TEMP) &&
+        (sensor.getTempCByIndex (i) > DS18B20_MIN_TEMP))
     {
-      temperature[results] = sensor.getTempCByIndex (i) ; // this can't fail ?
+      temperature[results] = sensor.getTempCByIndex (i) ;
       memcpy (addr+addr_offset, cur_addr, 8) ;
       addr_offset = addr_offset + 8 ;
       results++ ;
