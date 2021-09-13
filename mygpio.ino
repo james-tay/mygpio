@@ -864,14 +864,16 @@ int f_ds18b20 (int dataPin, unsigned char *addr, float *temperature)
   sensor.requestTemperatures() ;
   for (int i=0 ; i < devices ; i++)
   {
-    if ((sensor.getAddress (cur_addr, i)) &&
-        (sensor.getTempCByIndex (i) < DS18B20_MAX_TEMP) &&
-        (sensor.getTempCByIndex (i) > DS18B20_MIN_TEMP))
+    if (sensor.getAddress (cur_addr, i))
     {
-      temperature[results] = sensor.getTempCByIndex (i) ;
-      memcpy (addr+addr_offset, cur_addr, 8) ;
-      addr_offset = addr_offset + 8 ;
-      results++ ;
+      float f = sensor.getTempCByIndex (i) ;
+      if ((f < DS18B20_MAX_TEMP) && (f > DS18B20_MIN_TEMP)) // sanity check
+      {
+        temperature[results] = f ;
+        memcpy (addr+addr_offset, cur_addr, 8) ;
+        addr_offset = addr_offset + 8 ;
+        results++ ;
+      }
     }
   }
   return (results) ;
