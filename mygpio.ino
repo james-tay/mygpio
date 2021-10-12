@@ -233,6 +233,26 @@
      - note that this "<tag>" only applies to MQTT commands and CANNOT be used
        in the REST interface.
 
+   Wifi Connectivity
+
+     - if we're connected to a particular wifi AP, and that wifi AP's radio
+       goes down, our wifi status is immediately reported as :
+
+         cfg_wifi_ssid: Cloud-A
+         cfg_wifi_pw: (set)
+         status: WL_CONNECTED
+         rssi: 0 dBm
+         wifi_mac: 24:62:ab:fc:3f:9c
+         wifi_ip: 0.0.0.0/0.0.0.0
+         bssid:
+         mqtt_state: MQTT_CONNECTION_LOST
+         hostname: esp32-1
+         subscribed_topic: lawrence/ec/commands/esp32-1
+         cmd_response_topic: lawrence/ec/response/esp32-1
+
+       Note how the wifi status remains WL_CONNECTED. After about 100 secs,
+       wifi automatically connects to the next AP with the same SSID.
+
    Notes
 
      - pin numbering goes by GPIO number, thus "hi 5" means GPIO pin 5, not
@@ -248,7 +268,7 @@
      - PubSubClient reference
        https://pubsubclient.knolleary.net/
 
-     - ArduinoOTA reference
+     - Arduino OTA reference
        https://github.com/jandrassy/ArduinoOTA
        https://github.com/espressif/arduino-esp32/tree/master/libraries/Update/examples/AWS_S3_OTA_Update
 
@@ -286,6 +306,7 @@
 #define MAX_SD_BACKLOG 4              // TCP listening socket backlog
 #define WEB_PORT 80                   // web server listens on this port
 #define CRON_INTERVAL 60              // how often we run f_cron()
+#define RSSI_LOW_THRES -72            // less than this is consider low signal
 
 #define WIFI_SSID_FILE "/wifi.ssid"
 #define WIFI_PW_FILE "/wifi.pw"
@@ -453,6 +474,7 @@ struct internal_metrics
   unsigned long mqttSubs ;
   unsigned long mqttOversize ;
   unsigned long mqttPubWaits ;
+  unsigned long wifiReconnects ;
 } ;
 typedef struct internal_metrics S_Metrics ;
 
@@ -1951,6 +1973,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            "ec_mqtt_subs %ld\n"
            "ec_mqtt_oversize %ld\n"
            "ec_mqtt_pub_waits %ld\n"
+           "ec_wifi_reconnects %ld\n"
            "ec_last_stack_addr %d\n"
            "ec_wifi_rssi %d\n",
            millis() / 1000,
@@ -1964,6 +1987,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            G_Metrics->mqttSubs,
            G_Metrics->mqttOversize,
            G_Metrics->mqttPubWaits,
+           G_Metrics->wifiReconnects,
            line,
            WiFi.RSSI()) ;
 
@@ -2413,9 +2437,32 @@ void f_cron ()
   if (G_debug)
     Serial.println ("DEBUG: f_cron()") ;
 
+  /*
+     Under certain circumstances, we want to try auto-reconnecting our wifi,
+     even though our wifi state is WL_CONNECTED. In particular,
+       a) if our rssi is 0 dBm (ie, not connected)
+       b) our rssi is poorer than RSSI_LOW_THRES (eg, -72dBm)
+       b) our mqtt state is MQTT_CONNECTION_LOST
+  */
+
+  int wifi_reconnect = 0 ;
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    if ((WiFi.RSSI() == 0) || (WiFi.RSSI() < RSSI_LOW_THRES))
+      wifi_reconnect = 1 ;
+    if (G_psClient.state() == MQTT_CONNECTION_LOST)
+      wifi_reconnect = 1 ;
+  }
+
+  /* If wifi isn't connected, yet we have SSID & credentials, try reconnect */
+
   if ((WiFi.status() != WL_CONNECTED) &&
       (strlen(cfg_wifi_pw) > 0) &&
       (strlen(cfg_wifi_ssid) > 0))
+    wifi_reconnect = 1 ;
+
+  if (wifi_reconnect)
   {
     if (G_debug)
       Serial.println ("DEBUG: f_cron() calling f_wifi(connect)") ;
@@ -2425,6 +2472,7 @@ void f_cron ()
     args[1] = "connect" ;
     args[2] = NULL ;
     f_wifi (args) ;
+    G_Metrics->wifiReconnects++ ;
   }
   if (G_psClient.connected() == false)
   {
