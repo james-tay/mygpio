@@ -2474,7 +2474,11 @@ void f_cron ()
     f_wifi (args) ;
     G_Metrics->wifiReconnects++ ;
   }
-  if (G_psClient.connected() == false)
+
+  /* If MQTT is not connected, try reconnect */
+
+  if ((G_psClient.connected() == false) ||
+      (G_psClient.state() != MQTT_CONNECTED))
   {
     if (G_debug)
       Serial.println ("DEBUG: f_cron() calling f_mqtt_connect()") ;
