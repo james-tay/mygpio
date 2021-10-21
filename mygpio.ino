@@ -2762,15 +2762,18 @@ void ft_adxl335 (S_thread_entry *p)
 
 void ft_dread (S_thread_entry *p)
 {
-  if (p->num_args != 3)
+  if ((p->num_args != 3) && (p->num_args != 4))
   {
-    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
+    strcpy (p->msg, "FATAL! Expecting 3x or 4x arguments") ;
     p->state = THREAD_STOPPED ;
     return ;
   }
-  int delay_ms = atoi (p->in_args[0]) ;
-  int pin = atoi (p->in_args[1]) ;
-  int mode = atoi (p->in_args[2]) ;
+  int delay_ms = atoi (p->in_args[0]) ;         // how often we poll the pin
+  int pin = atoi (p->in_args[1]) ;              // the pin we poll
+  int mode = atoi (p->in_args[2]) ;             // whether to pull up to 3.3v
+  int trig_ms = 0 ;                             // minimum pin high duration
+  if (p->num_args == 4)
+    trig_ms = atoi (p->in_args[3]) ;
 
   /* if "loops" is 0, this is our first call, initialize stuff */
 
@@ -2788,19 +2791,79 @@ void ft_dread (S_thread_entry *p)
       return ;
     }
 
-    p->num_int_results = 1 ;
-    p->results[0].num_tags = 0 ;
+    p->results[0].meta[0] = "type" ;
+    p->results[0].data[0] = "\"state\"" ;
+    p->results[0].num_tags = 1 ;
+
+    p->results[1].meta[0] = "type" ;
+    p->results[1].data[0] = "\"short_triggers\"" ;
+    p->results[1].num_tags = 1 ;
+
+    p->num_int_results = 2 ;
     strcpy (p->msg, "ok") ;
+
+    p->results[0].i_value = digitalRead (pin) ; // one time initialization
   }
 
-  int cur_value = digitalRead (pin) ;
-  if ((p->loops > 1) && (cur_value != p->results[0].i_value))
+  /*
+     if "trig_ms" is zero, then report pin change immediately. Otherwise,
+     wait for pin to go high, make sure it stays high long enough, then
+     emit an event and wait for the pin to go low before we return.
+  */
+
+  if (trig_ms == 0)
   {
+    int cur_value = digitalRead (pin) ;
+    if ((p->loops > 1) && (cur_value != p->results[0].i_value))
+    {
+      p->results[0].i_value = cur_value ;
+      f_delivery (p, &p->results[0]) ;
+    }
     p->results[0].i_value = cur_value ;
-    f_delivery (p, &p->results[0]) ;
+    delay (delay_ms) ;
+    return ;
   }
-  p->results[0].i_value = cur_value ;
-  delay (delay_ms) ;
+  else
+  {
+    int cur_value = digitalRead (pin) ;
+
+    /* if we just went from high to low, announce it and return. */
+
+    if ((p->results[0].i_value == 1) && (cur_value == 0))
+    {
+      p->results[0].i_value = 0 ;
+      f_delivery (p, &p->results[0]) ;
+      delay (delay_ms) ;
+      return ;
+    }
+
+    /* if we're still low, do nothing and return */
+
+    if ((p->results[0].i_value == 0) && (cur_value == 0))
+    {
+      delay (delay_ms) ;
+      return ;
+    }
+
+    /* if we just went from low to high, monitor for "trig_ms" */
+
+    if ((p->results[0].i_value == 0) && (cur_value == 1))
+    {
+      unsigned long now = millis () ;
+      while (millis() < now + trig_ms)
+      {
+        delay (delay_ms) ;
+        if (digitalRead (pin) == 0)     // pin did not stay high long enough
+        {
+          p->results[1].i_value++ ;
+          return ;
+        }
+      }
+      p->results[0].i_value = 1 ;
+      f_delivery (p, &p->results[0]) ;  // announce that pin went high
+      return ;
+    }
+  }
 }
 
 void ft_hcsr04 (S_thread_entry *p)
@@ -4116,7 +4179,7 @@ void f_esp32 (char **tokens)
       "ft_aread,<delay>,<inPin>,[pwrPin],[loThres],[hiThres]\r\n"
       "ft_dht22,<delay>,<dataPin>,<pwrPin>\r\n"
       "ft_ds18b20,<delay>,<dataPin>,<pwrPin>\r\n"
-      "ft_dread,<delay>,<pin>,<0=norm,1=pullup>\r\n"
+      "ft_dread,<delay>,<pin>,<0=norm,1=pullup>[,<trig_ms>]\r\n"
       "ft_tread,<delay>,<pin>,<loThres>,<hiThres>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
