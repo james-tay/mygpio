@@ -204,7 +204,6 @@
        don't exceed MAX_THREAD_RESULT_TAGS. If the "/tags-<name>" file is
        absent, "<name>" will be used in place of "<metric>".
 
-
    Publishing/Subscribing events over MQTT
 
      - The global "G_psClient" object handles all MQTT work.
@@ -253,6 +252,31 @@
        Note how the wifi status remains WL_CONNECTED. After about 100 secs,
        wifi automatically connects to the next AP with the same SSID.
 
+   Hardware Serial
+
+     - There are 3x hardware UARTs on an ESP32, but the first one cannot be
+       used. Since the serial ports are not file descriptors, we cannot use
+       select() or any other kind of multiplexing mechanism. We will be using
+       Serial2() to interact with the 3rd hardware UART.
+
+     - IO with the serial port will be implemented via 2x threads. Whichever
+       thread starts first sets up the listen socket and accepts an incoming
+       TCP client. ft_serial2tcp() reads from the serial port and writes to a
+       connected TCP client. ft_tcp2serial() reads from the TCP client and
+       writes bytes into the serial port.
+
+     - In order to coordinate with each other, all uart IO threads access a
+       common data structure "G_hw_uart", which tracks usage of the serial
+       port. The first thread to access the serial port MUST initialize the
+       port (ie, set baud, etc) and set "G_hw_uart->initialized".
+
+     - Any thread that interacts with "G_hw_uart" (even reads) must first
+       acquire G_hw_uart->lock, and also release it when no longer needed.
+
+     - The "Serial2.begin()" function can only be called ONCE. Attempts to
+       call it again results in a hard lock up. Thus changes to serial port
+       configuration must be followed by a system "reload".
+
    Notes
 
      - pin numbering goes by GPIO number, thus "hi 5" means GPIO pin 5, not
@@ -292,6 +316,7 @@
 #include <SPIFFS.h>
 #include <Update.h>
 #include <PubSubClient.h>
+#include <HardwareSerial.h>
 #include <soc/i2s_reg.h>
 #include <driver/i2s.h>
 
@@ -488,12 +513,24 @@ struct pin_flag
 } ;
 typedef struct pin_flag S_pin_flag ;
 
+/* data structure to track a hardware UART */
+
+struct hw_uart
+{
+  int listen_sd ;               // set to -1 to indicate not-in-use
+  int client_sd ;               // set to -1 to indicate not-in-use
+  int initialized ;             // track if "Serial2.begin()" has been called
+  SemaphoreHandle_t lock ;      // lock before any access to this structure
+} ;
+typedef struct hw_uart S_hw_uart ;
+
 S_pin_flag *G_pin_flags ;            // array of structs for each GPIO pin
 SemaphoreHandle_t G_pinflags_lock ;  // lock before ANY access to "G_pin_flags"
 
 S_Metrics *G_Metrics ;
 S_thread_entry *G_thread_entry ;
 S_WebClient *G_WebClient ;
+S_hw_uart *G_hw_uart ;
 LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
 WiFiClient G_wClient ; // this is needed to instanciate "G_psClient"
@@ -3906,6 +3943,121 @@ void ft_i2sout (S_thread_entry *p)
   strcpy (p->msg, "resources released") ; // indicate successful exit
 }
 
+/*
+   This function does not return until its "p->state" is set to THREAD_WRAPUP.
+   Its job is to bind to a TCP socket (if not already present), initialize a
+   hardware uart (if needed) and await bytes, sending it into the TCP session.
+   Note that only 1x TCP session may be present.
+*/
+
+void ft_serial2tcp (S_thread_entry *p)
+{
+  if (p->num_args != 4)
+  {
+    strcpy (p->msg, "FATAL! Expecting 4x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  int listen_sd = -1 ;
+  int client_sd = -1 ;
+  int port = atoi (p->in_args[0]) ;
+  int baud = atoi (p->in_args[1]) ;
+  int rx_pin = atoi (p->in_args[2]) ;
+  int tx_pin = atoi (p->in_args[3]) ;
+
+  /*
+     check if we're the first thread to handle the hardware UART. If so,
+     then setup listening socket and (optionally) initialize the UART.
+  */
+
+  xSemaphoreTake (G_hw_uart->lock, portMAX_DELAY) ;
+  if (G_hw_uart->listen_sd < 0)
+  {
+    /* create a TCP socket, bind to port and listen */
+
+    listen_sd = socket (AF_INET, SOCK_STREAM, IPPROTO_IP) ;
+    if (listen_sd < 0)
+    {
+      strcpy (p->msg, "FATAL! socket() failed") ;
+      p->state = THREAD_STOPPED ;
+      xSemaphoreGive (G_hw_uart->lock) ;
+      return ;
+    }
+
+    struct sockaddr_in addr ;
+    memset (&addr, 0, sizeof(addr)) ;
+    addr.sin_family = AF_INET ;
+    addr.sin_addr.s_addr = INADDR_ANY ;
+    addr.sin_port = htons (port) ;
+    if (bind (listen_sd, (const struct sockaddr*) &addr, sizeof(addr)) < 0)
+    {
+      close (listen_sd) ;
+      strcpy (p->msg, "FATAL! bind() failed") ;
+      p->state = THREAD_STOPPED ;
+      xSemaphoreGive (G_hw_uart->lock) ;
+      return ;
+    }
+    if (listen (listen_sd, MAX_SD_BACKLOG) != 0)
+    {
+      close (listen_sd) ;
+      strcpy (p->msg, "FATAL! listen() failed") ;
+      p->state = THREAD_STOPPED ;
+      xSemaphoreGive (G_hw_uart->lock) ;
+      return ;
+    }
+
+    if (G_hw_uart->initialized == 0)
+    {
+      Serial2.begin (baud, SERIAL_8N1, rx_pin, tx_pin) ;
+      G_hw_uart->initialized = 1 ;
+    }
+    G_hw_uart->listen_sd = listen_sd ;
+  }
+  xSemaphoreGive (G_hw_uart->lock) ;
+
+  /* thread's main loop ... manage TCP sockets if in charge, read UART data */
+
+  char buf[BUF_SIZE] ;
+  sprintf (p->msg, "rx_pin:%d->port:%d", rx_pin, port) ;
+
+  while (p->state == THREAD_RUNNING)
+  {
+    /*
+       If we have no connected TCP client, check if "listen_sd" has a new
+       client for us.
+    */
+
+
+
+
+
+    /*
+       now check if data is available on the serial port, for some reason,
+       "Serial2.read()" does not block.
+    */
+
+    int amt = Serial2.read(buf, BUF_SIZE) ;
+    if (amt > 0)
+      Serial.write(buf, BUF_SIZE) ;
+
+
+
+  }
+
+  /* if we're in charge, shutdown listening socket (and any clients) */
+
+  xSemaphoreTake (G_hw_uart->lock, portMAX_DELAY) ;
+  if (listen_sd > 0)
+  {
+    close (listen_sd) ;
+    G_hw_uart->listen_sd = -1 ;
+  }
+  xSemaphoreGive (G_hw_uart->lock) ;
+
+  p->state = THREAD_STOPPED ;
+}
+
 /* =========================== */
 /* thread management functions */
 /* =========================== */
@@ -4087,6 +4239,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_i2sin ;
   if (strcmp (ft_taskname, "ft_i2sout") == 0)
     G_thread_entry[idx].ft_addr = ft_i2sout ;
+  if (strcmp (ft_taskname, "ft_serial2tcp") == 0)
+    G_thread_entry[idx].ft_addr = ft_serial2tcp ;
 
   if (G_thread_entry[idx].ft_addr == NULL)
   {
@@ -4186,6 +4340,7 @@ void f_esp32 (char **tokens)
       "ft_i2sin,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<ip:port>[,<gain>]\r\n"
       "ft_i2sout,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<UDPport>\r\n"
       "ft_relay,<pin>,<dur(secs)>\r\n"
+      "ft_serial2tcp,<port>,<baud>,<RXpin>,<TXpin>\r\n"
       "\r\n"
       "[Notes]\r\n"
       "<delay> - interval between sampling (millisecs)\r\n"
@@ -4667,6 +4822,12 @@ void setup ()
 
   G_Metrics = (S_Metrics*) malloc (sizeof(S_Metrics)) ;
   memset (G_Metrics, 0, sizeof(S_Metrics)) ;
+  G_hw_uart = (S_hw_uart*) malloc (sizeof(S_hw_uart)) ;
+  memset (G_hw_uart, 0, sizeof(S_hw_uart)) ;
+  G_hw_uart->listen_sd = -1 ;
+  G_hw_uart->client_sd = -1 ;
+  G_hw_uart->lock = xSemaphoreCreateMutex () ;
+
   G_mqtt_sub = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_mqtt_stopic = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_mqtt_rtopic = (char*) malloc (MAX_MQTT_LEN + 1) ;
