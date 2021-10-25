@@ -3966,6 +3966,26 @@ void ft_serial2tcp (S_thread_entry *p)
   int rx_pin = atoi (p->in_args[2]) ;
   int tx_pin = atoi (p->in_args[3]) ;
 
+  /* configure metrics that we will expose */
+
+  p->results[0].num_tags = 1 ;
+  p->results[0].meta[0] = "client" ;
+  p->results[0].data[0] = "\"connects\"" ;
+
+  p->results[1].num_tags = 1 ;
+  p->results[1].meta[0] = "client" ;
+  p->results[1].data[0] = "\"connected\"" ;
+
+  p->results[2].num_tags = 1 ;
+  p->results[2].meta[0] = "uart_bytes" ;
+  p->results[2].data[0] = "\"read\"" ;
+
+  p->results[3].num_tags = 1 ;
+  p->results[3].meta[0] = "uart_bytes" ;
+  p->results[3].data[0] = "\"written\"" ;
+
+  p->num_int_results = 4 ;
+
   /* create a TCP socket, bind to port and listen */
 
   listen_sd = socket (AF_INET, SOCK_STREAM, IPPROTO_IP) ;
@@ -4018,7 +4038,7 @@ void ft_serial2tcp (S_thread_entry *p)
   while (p->state == THREAD_RUNNING)
   {
     /*
-       If we have no connected TCP client, check if "listen_sd" has a new 
+       If we have no connected TCP client, check if "listen_sd" has a new
        client for us. Also, don't check for new clients if we already have
        a connected TCP client.
     */
@@ -4041,7 +4061,11 @@ void ft_serial2tcp (S_thread_entry *p)
     if (result == 1)
     {
       if (FD_ISSET (listen_sd, &rfds))                  // new tcp client !!
+      {
         client_sd = accept (listen_sd, NULL, NULL) ;
+        p->results[0].i_value++ ;
+        p->results[1].i_value = 1 ;
+      }
 
       if (FD_ISSET (client_sd, &rfds))
       {
@@ -4050,10 +4074,14 @@ void ft_serial2tcp (S_thread_entry *p)
         {
           close (client_sd) ;
           client_sd = -1 ;
+          p->results[1].i_value = 0 ;
         }
         else                                            // send data to uart
         {
           Serial2.write (buf, amt) ;
+          p->results[3].i_value = p->results[3].i_value + amt ;
+          if (p->results[3].i_value < 0)
+            p->results[3].i_value = 0 ; // fix rollover
         }
       }
     }
@@ -4064,8 +4092,14 @@ void ft_serial2tcp (S_thread_entry *p)
     */
 
     amt = Serial2.read (buf, BUF_SIZE) ;
-    if ((amt > 0) && (client_sd > 0))
-      write (client_sd, buf, amt) ;
+    if (amt > 0)
+    {
+      p->results[2].i_value = p->results[2].i_value + amt ;
+      if (p->results[2].i_value < 0)
+        p->results[2].i_value = 0 ; // fix rollover
+      if (client_sd > 0)
+        write (client_sd, buf, amt) ;
+    }
   }
 
   /*
