@@ -4118,6 +4118,144 @@ void ft_serial2tcp (S_thread_entry *p)
   p->state = THREAD_STOPPED ;
 }
 
+/*
+   The role of this thread is to read messages from a hardware uart, parse
+   them and extract data, publishing it as in the "p->results[]" array. The
+   main loop only exits if "p->state" is set to THREAD_WRAPUP. Since our
+   primary data is latitude/longitude/altitude, all results exposed by this
+   thread are float.
+*/
+
+void ft_gps (S_thread_entry *p)
+{
+  #define READ_BUF 32   // max bytes we read from the uart at a time
+  #define GPS_BUF 128   // max length of a single GPS message
+
+  if (p->num_args != 3)
+  {
+    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  int baud = atoi (p->in_args[0]) ;
+  int rx_pin = atoi (p->in_args[1]) ;
+  int tx_pin = atoi (p->in_args[2]) ;
+
+  /* configure metrics that we will expose */
+
+  p->results[0].num_tags = 1 ;
+  p->results[0].meta[0] = "msg" ;
+  p->results[0].data[0] = "\"cksumOk\"" ;
+
+  p->results[1].num_tags = 1 ;
+  p->results[1].meta[0] = "msg" ;
+  p->results[1].data[0] = "\"cksumBad\"" ;
+
+  p->results[2].num_tags = 1 ;
+  p->results[2].meta[0] = "msg" ;
+  p->results[2].data[0] = "\"overrun\"" ;
+
+  p->num_float_results = 3 ;
+
+  /* if we're the first thread to access the hardware UART, initialize it */
+
+  xSemaphoreTake (G_hw_uart->lock, portMAX_DELAY) ;
+  G_hw_uart->in_use++ ;
+  if (G_hw_uart->initialized == 0)
+  {
+    Serial2.begin (baud, SERIAL_8N1, rx_pin, tx_pin) ;
+    G_hw_uart->initialized = 1 ;
+  }
+  xSemaphoreGive (G_hw_uart->lock) ;
+
+  int idx, amt ;
+  int msg_len = 0 ;             // length of current msg in "gps_buf"
+  char read_buf[READ_BUF] ;     // buffer to read from uart
+  char gps_buf[GPS_BUF] ;       // buffer to hold a complete GPS msg
+
+  while (p->state == THREAD_RUNNING)
+  {
+    /*
+       keep reading bytes from UART until we have a complete message from
+       the GPS beginning with '$' and ending with CR/NL.
+    */
+
+    amt = Serial2.read (read_buf, READ_BUF) ;
+    if (amt > 0)
+    {
+      /*
+         if "msg_len" == 0, that means we're hunting for the start of a msg.
+         if "msg_len" > 0, that keep copying bytes until we see the msg end.
+      */
+
+      for (idx=0 ; idx < amt ; idx++)
+      {
+        if (read_buf[idx] == '$')       // found start of message
+        {
+          gps_buf[0] = read_buf[idx] ;
+          msg_len = 1 ;
+        }
+        else
+        if (read_buf[idx] == '\r')      // found end of message
+        {
+          gps_buf[msg_len] = 0 ;
+          if (msg_len > 8)              // minimum msg_len for a sane msg
+          {
+            char checksum = 0 ;
+            for (int i=1 ; i < msg_len ; i++)
+            {
+              if (gps_buf[i] == '*')
+                break ;
+              else
+                checksum = checksum ^ gps_buf[i] ;
+            }
+            char verify[4] ;
+            sprintf (verify, "*%X", checksum) ;
+            if (strcmp(gps_buf+msg_len-3, verify) == 0)         // checksum OK
+            {
+              p->results[0].f_value = p->results[0].f_value + 1 ;
+
+
+
+
+
+            }
+            else                                                // checksum BAD
+            {
+              p->results[1].f_value = p->results[1].f_value + 1 ;
+              if (G_debug)
+              {
+                char line[GPS_BUF+BUF_SIZE] ;
+                snprintf (line, GPS_BUF+BUF_SIZE,
+                          "DEBUG: ft_gps() gps_buf<%s>[%X] Bad checksum",
+                          gps_buf, checksum) ;
+                Serial.println (line) ;
+              }
+            }
+          }
+          msg_len = 0 ;                 // "reset" gps_buf.
+        }
+        else
+        if (msg_len > 0)                // in the middle of a message
+        {
+          gps_buf[msg_len] = read_buf[idx] ;
+          msg_len++ ;
+          if (msg_len == GPS_BUF)       // buffer overrun :(
+          {
+            msg_len = 0 ;
+            p->results[2].f_value = p->results[2].f_value + 1 ;
+          }
+        }
+      }
+    }
+  }
+
+  xSemaphoreTake (G_hw_uart->lock, portMAX_DELAY) ;
+  G_hw_uart->in_use-- ;
+  xSemaphoreGive (G_hw_uart->lock) ;
+}
+
 /* =========================== */
 /* thread management functions */
 /* =========================== */
@@ -4289,6 +4427,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_ds18b20 ;
   if (strcmp (ft_taskname, "ft_dread") == 0)
     G_thread_entry[idx].ft_addr = ft_dread ;
+  if (strcmp (ft_taskname, "ft_gps") == 0)
+    G_thread_entry[idx].ft_addr = ft_gps ;
   if (strcmp (ft_taskname, "ft_hcsr04") == 0)
     G_thread_entry[idx].ft_addr = ft_hcsr04 ;
   if (strcmp (ft_taskname, "ft_tread") == 0)
@@ -4382,7 +4522,7 @@ void f_esp32 (char **tokens)
   else
   if (strcmp(tokens[1], "thread_help") == 0)                    // thread_help
   {
-    strcat (G_reply_buf,
+    strncat (G_reply_buf,
       "[Thread Config Files]\r\n"
       "/autoexec.cfg  - <name>[,<nameN>...]\r\n"
       "/thread-<name> - (see below)\r\n"
@@ -4396,6 +4536,7 @@ void f_esp32 (char **tokens)
       "ft_dread,<delay>,<pin>,<0=norm,1=pullup>[,<trig_ms>]\r\n"
       "ft_tread,<delay>,<pin>,<loThres>,<hiThres>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
+      "ft_gps,<baud>,<RXpin>,<TXpin>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
       "ft_i2sin,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<ip:port>[,<gain>]\r\n"
       "ft_i2sout,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<UDPport>\r\n"
@@ -4404,7 +4545,8 @@ void f_esp32 (char **tokens)
       "\r\n"
       "[Notes]\r\n"
       "<delay> - interval between sampling (millisecs)\r\n"
-      "<aggr>  - interval between aggregating results (millisecs)\r\n") ;
+      "<aggr>  - interval between aggregating results (millisecs)\r\n",
+      REPLY_SIZE) ;
   }
   else
   if (strcmp(tokens[1], "thread_list") == 0)                    // thread_list
