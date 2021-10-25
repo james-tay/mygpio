@@ -259,23 +259,24 @@
        select() or any other kind of multiplexing mechanism. We will be using
        Serial2() to interact with the 3rd hardware UART.
 
-     - IO with the serial port will be implemented via 2x threads. Whichever
-       thread starts first sets up the listen socket and accepts an incoming
-       TCP client. ft_serial2tcp() reads from the serial port and writes to a
-       connected TCP client. ft_tcp2serial() reads from the TCP client and
-       writes bytes into the serial port.
+     - IO with the serial port is implemented by a dedicated thread. It
+       creates a listening TCP socket but accepts a SINGLE client at any
+       time. Data from the TCP client is sent to the UART and data from the
+       UART is sent to the TCP client.
 
      - In order to coordinate with each other, all uart IO threads access a
        common data structure "G_hw_uart", which tracks usage of the serial
-       port. The first thread to access the serial port MUST initialize the
-       port (ie, set baud, etc) and set "G_hw_uart->initialized".
+       port. This prevents multiple threads from unintentionally accessing
+       the uart. The first thread to access the serial port MUST initialize
+       the port (ie, set baud, pins, etc) and set "G_hw_uart->initialized".
 
      - Any thread that interacts with "G_hw_uart" (even reads) must first
        acquire G_hw_uart->lock, and also release it when no longer needed.
 
      - The "Serial2.begin()" function can only be called ONCE. Attempts to
-       call it again results in a hard lock up. Thus changes to serial port
-       configuration must be followed by a system "reload".
+       call it again results in a hard lock up. Thus any changes to serial
+       port configuration (eg, pin changes, etc) must be followed by a system
+       "reload".
 
    Notes
 
@@ -517,8 +518,7 @@ typedef struct pin_flag S_pin_flag ;
 
 struct hw_uart
 {
-  int listen_sd ;               // set to -1 to indicate not-in-use
-  int client_sd ;               // set to -1 to indicate not-in-use
+  int in_use ;                  // number of threads accessing UART
   int initialized ;             // track if "Serial2.begin()" has been called
   SemaphoreHandle_t lock ;      // lock before any access to this structure
 } ;
@@ -3945,9 +3945,9 @@ void ft_i2sout (S_thread_entry *p)
 
 /*
    This function does not return until its "p->state" is set to THREAD_WRAPUP.
-   Its job is to bind to a TCP socket (if not already present), initialize a
-   hardware uart (if needed) and await bytes, sending it into the TCP session.
-   Note that only 1x TCP session may be present.
+   Its job is to create and bind a TCP listening socket, initialize a hardware
+   uart (if needed) and await bytes from either the TCP client or the uart.
+   Note that only 1x connected TCP client may be serviced at a time.
 */
 
 void ft_serial2tcp (S_thread_entry *p)
@@ -3966,94 +3966,120 @@ void ft_serial2tcp (S_thread_entry *p)
   int rx_pin = atoi (p->in_args[2]) ;
   int tx_pin = atoi (p->in_args[3]) ;
 
-  /*
-     check if we're the first thread to handle the hardware UART. If so,
-     then setup listening socket and (optionally) initialize the UART.
-  */
+  /* create a TCP socket, bind to port and listen */
+
+  listen_sd = socket (AF_INET, SOCK_STREAM, IPPROTO_IP) ;
+  if (listen_sd < 0)
+  {
+    strcpy (p->msg, "FATAL! socket() failed") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  struct sockaddr_in addr ;
+  memset (&addr, 0, sizeof(addr)) ;
+  addr.sin_family = AF_INET ;
+  addr.sin_addr.s_addr = INADDR_ANY ;
+  addr.sin_port = htons (port) ;
+  if (bind (listen_sd, (const struct sockaddr*) &addr, sizeof(addr)) < 0)
+  {
+    close (listen_sd) ;
+    strcpy (p->msg, "FATAL! bind() failed") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+  if (listen (listen_sd, 1) != 0)
+  {
+    close (listen_sd) ;
+    strcpy (p->msg, "FATAL! listen() failed") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  /* if we're the first thread to access the hardware UART, initialize it */
 
   xSemaphoreTake (G_hw_uart->lock, portMAX_DELAY) ;
-  if (G_hw_uart->listen_sd < 0)
+  G_hw_uart->in_use++ ;
+  if (G_hw_uart->initialized == 0)
   {
-    /* create a TCP socket, bind to port and listen */
-
-    listen_sd = socket (AF_INET, SOCK_STREAM, IPPROTO_IP) ;
-    if (listen_sd < 0)
-    {
-      strcpy (p->msg, "FATAL! socket() failed") ;
-      p->state = THREAD_STOPPED ;
-      xSemaphoreGive (G_hw_uart->lock) ;
-      return ;
-    }
-
-    struct sockaddr_in addr ;
-    memset (&addr, 0, sizeof(addr)) ;
-    addr.sin_family = AF_INET ;
-    addr.sin_addr.s_addr = INADDR_ANY ;
-    addr.sin_port = htons (port) ;
-    if (bind (listen_sd, (const struct sockaddr*) &addr, sizeof(addr)) < 0)
-    {
-      close (listen_sd) ;
-      strcpy (p->msg, "FATAL! bind() failed") ;
-      p->state = THREAD_STOPPED ;
-      xSemaphoreGive (G_hw_uart->lock) ;
-      return ;
-    }
-    if (listen (listen_sd, MAX_SD_BACKLOG) != 0)
-    {
-      close (listen_sd) ;
-      strcpy (p->msg, "FATAL! listen() failed") ;
-      p->state = THREAD_STOPPED ;
-      xSemaphoreGive (G_hw_uart->lock) ;
-      return ;
-    }
-
-    if (G_hw_uart->initialized == 0)
-    {
-      Serial2.begin (baud, SERIAL_8N1, rx_pin, tx_pin) ;
-      G_hw_uart->initialized = 1 ;
-    }
-    G_hw_uart->listen_sd = listen_sd ;
+    Serial2.begin (baud, SERIAL_8N1, rx_pin, tx_pin) ;
+    G_hw_uart->initialized = 1 ;
   }
   xSemaphoreGive (G_hw_uart->lock) ;
 
-  /* thread's main loop ... manage TCP sockets if in charge, read UART data */
+  /* thread's main loop and variables to manage TCP sockets and UART data */
 
+  int result, num_fds, amt ;
   char buf[BUF_SIZE] ;
-  sprintf (p->msg, "rx_pin:%d->port:%d", rx_pin, port) ;
+  fd_set rfds ;
+  struct timeval tv ;
+  sprintf (p->msg, "rx:%d,tx:%d,port:%d", rx_pin, tx_pin, port) ;
 
   while (p->state == THREAD_RUNNING)
   {
     /*
-       If we have no connected TCP client, check if "listen_sd" has a new
-       client for us.
+       If we have no connected TCP client, check if "listen_sd" has a new 
+       client for us. Also, don't check for new clients if we already have
+       a connected TCP client.
     */
 
+    tv.tv_sec = 0 ;
+    tv.tv_usec = 20 ;                   // stall select() for a short time
+    FD_ZERO (&rfds) ;
+    if (client_sd > 0)                  // check client for data
+    {
+      FD_SET (client_sd, &rfds) ;
+      num_fds = client_sd + 1 ;
+    }
+    else                                // check for new client
+    {
+      FD_SET (listen_sd, &rfds) ;
+      num_fds = listen_sd + 1 ;
+    }
+    result = select (num_fds, &rfds, NULL, NULL, &tv) ;
 
+    if (result == 1)
+    {
+      if (FD_ISSET (listen_sd, &rfds))                  // new tcp client !!
+        client_sd = accept (listen_sd, NULL, NULL) ;
 
-
+      if (FD_ISSET (client_sd, &rfds))
+      {
+        amt = read (client_sd, buf, BUF_SIZE) ;
+        if (amt < 1)                                    // client closed
+        {
+          close (client_sd) ;
+          client_sd = -1 ;
+        }
+        else                                            // send data to uart
+        {
+          Serial2.write (buf, amt) ;
+        }
+      }
+    }
 
     /*
-       now check if data is available on the serial port, for some reason,
+       check if data is available on the serial port, for some reason,
        "Serial2.read()" does not block.
     */
 
-    int amt = Serial2.read(buf, BUF_SIZE) ;
-    if (amt > 0)
-      Serial.write(buf, BUF_SIZE) ;
-
-
-
+    amt = Serial2.read (buf, BUF_SIZE) ;
+    if ((amt > 0) && (client_sd > 0))
+      write (client_sd, buf, amt) ;
   }
 
-  /* if we're in charge, shutdown listening socket (and any clients) */
+  /*
+     if we're here, indicate we're not using the uart anymore and close TCP
+     sockets in use.
+  */
 
   xSemaphoreTake (G_hw_uart->lock, portMAX_DELAY) ;
-  if (listen_sd > 0)
-  {
-    close (listen_sd) ;
-    G_hw_uart->listen_sd = -1 ;
-  }
+  G_hw_uart->in_use-- ;
   xSemaphoreGive (G_hw_uart->lock) ;
+
+  close (listen_sd) ;
+  if (client_sd > 0)
+    close (client_sd) ;
 
   p->state = THREAD_STOPPED ;
 }
@@ -4824,8 +4850,6 @@ void setup ()
   memset (G_Metrics, 0, sizeof(S_Metrics)) ;
   G_hw_uart = (S_hw_uart*) malloc (sizeof(S_hw_uart)) ;
   memset (G_hw_uart, 0, sizeof(S_hw_uart)) ;
-  G_hw_uart->listen_sd = -1 ;
-  G_hw_uart->client_sd = -1 ;
   G_hw_uart->lock = xSemaphoreCreateMutex () ;
 
   G_mqtt_sub = (char*) malloc (MAX_MQTT_LEN + 1) ;
