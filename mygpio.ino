@@ -4130,6 +4130,7 @@ void ft_gps (S_thread_entry *p)
 {
   #define READ_BUF 32   // max bytes we read from the uart at a time
   #define GPS_BUF 128   // max length of a single GPS message
+  #define GPS_FIELDS 32 // max comma separated fields in a GPS message
 
   if (p->num_args != 3)
   {
@@ -4170,9 +4171,10 @@ void ft_gps (S_thread_entry *p)
   xSemaphoreGive (G_hw_uart->lock) ;
 
   int idx, amt ;
-  int msg_len = 0 ;             // length of current msg in "gps_buf"
-  char read_buf[READ_BUF] ;     // buffer to read from uart
-  char gps_buf[GPS_BUF] ;       // buffer to hold a complete GPS msg
+  int msg_len = 0 ;                     // length of current msg in "gps_buf"
+  char read_buf[READ_BUF] ;             // buffer to read from uart
+  char gps_buf[GPS_BUF] ;               // buffer to hold a complete GPS msg
+  char *msg_tokens[GPS_FIELDS] ;        // pointers pointing into "gps_buf"
 
   while (p->state == THREAD_RUNNING)
   {
@@ -4215,8 +4217,54 @@ void ft_gps (S_thread_entry *p)
             if (strcmp(gps_buf+msg_len-3, verify) == 0)         // checksum OK
             {
               p->results[0].f_value = p->results[0].f_value + 1 ;
+              msg_len = msg_len - 3 ;
+              gps_buf[msg_len] = 0 ; // remove checksum, dont' need it anymore
 
+              /*
+                 tokenize "gps_buf" to "num_tokens" of "msg_tokens" pointers.
+                 We can't use strtok() here because some fields may be zero
+                 length and strtok() doesn't handle it correctly. This code
+                 ensures zero length tokens at least point to an empty string.
+              */
 
+              int num_tokens = 0 ;
+              int tok_start = 1 ;
+
+              for (int tok_end=1 ; tok_end < msg_len ; tok_end++)
+                if ((gps_buf[tok_end] == ',') || (tok_end == msg_len - 1))
+                {
+                  if (tok_end < msg_len - 1)
+                    gps_buf[tok_end] = 0 ;
+                  if (tok_end - tok_start > 0)
+                    msg_tokens[num_tokens] = gps_buf + tok_start ;
+                  else
+                    msg_tokens[num_tokens] = "" ;
+                  num_tokens++ ;
+                  tok_start = tok_end + 1 ;
+                }
+
+              if (G_debug)
+              {
+                char line[BUF_SIZE] ;
+                sprintf (line, "DEBUG: ft_gps() %s num_tokens:%d",
+                         msg_tokens[0], num_tokens) ;
+                Serial.println (line) ;
+              }
+
+              if (strcmp (msg_tokens[0], "GNRMC") == 0)
+              {
+                if (G_debug)
+                {
+                  char line[BUF_SIZE] ;
+                  Serial.println ("DEBUG: ft_gps()") ;
+                  for (int i=0 ; i < num_tokens ; i++)
+                  {
+                    sprintf (line, "  %d:(%s)", i, msg_tokens[i]) ;
+                    Serial.println (line) ;
+                  }
+                }
+
+              }
 
 
 
