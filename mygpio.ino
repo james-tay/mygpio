@@ -384,6 +384,7 @@
 
 /* ====== ALL OTHER GENERAL STUFF ====== */
 
+#define FLOAT_DECIMAL_PLACES 6  // when printing float metrics
 #define DEF_BAUD 9600           // USB serial port baud rate
 #define SERIAL_TIMEOUT 1000     // serial timeout in milliseconds
 #define BLINK_FREQ 5000         // blink to indicate we're alive (ms)
@@ -2064,7 +2065,8 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
       {
         f_buildMetric (&G_thread_entry[idx],
                        &G_thread_entry[idx].results[r], 0, metric) ;
-        String v = String (G_thread_entry[idx].results[r].f_value) ;
+        String v = String (G_thread_entry[idx].results[r].f_value,
+                           FLOAT_DECIMAL_PLACES) ;
         sprintf (line, "%s %s\n", metric, v.c_str()) ;
         strcat (G_reply_buf, line) ;
       }
@@ -4157,7 +4159,47 @@ void ft_gps (S_thread_entry *p)
   p->results[2].meta[0] = "msg" ;
   p->results[2].data[0] = "\"overrun\"" ;
 
-  p->num_float_results = 3 ;
+  p->results[3].num_tags = 1 ;
+  p->results[3].meta[0] = "position" ;
+  p->results[3].data[0] = "\"latitude\"" ;
+
+  p->results[4].num_tags = 1 ;
+  p->results[4].meta[0] = "position" ;
+  p->results[4].data[0] = "\"longitude\"" ;
+
+  p->results[5].num_tags = 1 ;
+  p->results[5].meta[0] = "num" ;
+  p->results[5].data[0] = "\"satellites\"" ;
+
+  p->results[6].num_tags = 1 ;
+  p->results[6].meta[0] = "elevation" ;
+  p->results[6].data[0] = "\"sealevel\"" ;
+
+  p->results[7].num_tags = 1 ;
+  p->results[7].meta[0] = "elevation" ;
+  p->results[7].data[0] = "\"geoid\"" ;
+
+  p->results[8].num_tags = 1 ;
+  p->results[8].meta[0] = "nav" ;
+  p->results[8].data[0] = "\"mode\"" ; // 1=none, 2=2D fix, 3=3D fix
+
+  p->results[9].num_tags = 1 ;
+  p->results[9].meta[0] = "dilution" ;
+  p->results[9].data[0] = "\"position\"" ;
+
+  p->results[10].num_tags = 1 ;
+  p->results[10].meta[0] = "dilution" ;
+  p->results[10].data[0] = "\"horizontal\"" ;
+
+  p->results[11].num_tags = 1 ;
+  p->results[11].meta[0] = "dilution" ;
+  p->results[11].data[0] = "\"vertical\"" ;
+
+  p->results[12].num_tags = 1 ;
+  p->results[12].meta[0] = "speed" ;
+  p->results[12].data[0] = "\"kmh\"" ;
+
+  p->num_float_results = 13 ;
 
   /* if we're the first thread to access the hardware UART, initialize it */
 
@@ -4246,28 +4288,59 @@ void ft_gps (S_thread_entry *p)
               if (G_debug)
               {
                 char line[BUF_SIZE] ;
-                sprintf (line, "DEBUG: ft_gps() %s num_tokens:%d",
-                         msg_tokens[0], num_tokens) ;
-                Serial.println (line) ;
-              }
-
-              if (strcmp (msg_tokens[0], "GNRMC") == 0)
-              {
-                if (G_debug)
+                Serial.println ("DEBUG: ft_gps() msg_tokens[]") ;
+                for (int i=0 ; i < num_tokens ; i++)
                 {
-                  char line[BUF_SIZE] ;
-                  Serial.println ("DEBUG: ft_gps()") ;
-                  for (int i=0 ; i < num_tokens ; i++)
-                  {
-                    sprintf (line, "  %d:(%s)", i, msg_tokens[i]) ;
-                    Serial.println (line) ;
-                  }
+                  sprintf (line, "  %d:(%s)", i, msg_tokens[i]) ;
+                  Serial.println (line) ;
                 }
-
               }
 
+              /* extract information from various GPS messages */
 
+              if ((strcmp (msg_tokens[0], "GNRMC") == 0) && (num_tokens == 13))
+              {
+                double cur_deg, cur_mins ;
+                sscanf (msg_tokens[3], "%2lf%lf", &cur_deg, &cur_mins) ;
+                double latitude = cur_deg + (cur_mins / 60.0) ;
+                if (msg_tokens[4][0] == 'S')
+                  latitude = latitude * -1 ;
+                sscanf (msg_tokens[5], "%3lf%lf", &cur_deg, &cur_mins) ;
+                double longitude = cur_deg + (cur_mins / 60.0) ;
+                if (msg_tokens[6][0] == 'W')
+                  longitude = longitude * -1 ;
 
+                p->results[3].f_value = latitude ;
+                p->results[4].f_value = longitude ;
+              }
+
+              if (strcmp (msg_tokens[0], "GNGGA") == 0)
+              {
+                double satellites = atof (msg_tokens[7]) ; // satellites used
+                double altitude = atof (msg_tokens[9]) ; // "m" above sea level
+                double geoid = atof (msg_tokens[11]) ;  // geoid and sea level
+                p->results[5].f_value = satellites ;
+                p->results[6].f_value = altitude ;
+                p->results[7].f_value = geoid ;
+              }
+
+              if ((strcmp (msg_tokens[0], "GNGSA") == 0) && (num_tokens == 18))
+              {
+                double mode = atof (msg_tokens[2]) ;
+                double dilution_pos = atof(msg_tokens[15]) ;
+                double dilution_hori = atof(msg_tokens[16]) ;
+                double dilution_vert = atof(msg_tokens[17]) ;
+                p->results[8].f_value = mode ;
+                p->results[9].f_value = dilution_pos ;
+                p->results[10].f_value = dilution_hori ;
+                p->results[11].f_value = dilution_vert ;
+              }
+
+              if ((strcmp (msg_tokens[0], "GNVTG") == 0) && (num_tokens == 10))
+              {
+                double speed = atof (msg_tokens[7]) ;
+                p->results[12].f_value = speed ;
+              }
             }
             else                                                // checksum BAD
             {
