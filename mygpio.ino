@@ -4254,23 +4254,23 @@ void ft_gps (S_thread_entry *p)
               else
                 checksum = checksum ^ gps_buf[i] ;
             }
-            char verify[4] ;
+            char verify[4] ; // just enough to store "*XX"
             sprintf (verify, "*%X", checksum) ;
             if (strcmp(gps_buf+msg_len-3, verify) == 0)         // checksum OK
             {
               p->results[0].f_value = p->results[0].f_value + 1 ;
               msg_len = msg_len - 3 ;
-              gps_buf[msg_len] = 0 ; // remove checksum, dont' need it anymore
+              gps_buf[msg_len] = 0 ; // remove checksum, don't need it anymore
 
               /*
                  tokenize "gps_buf" to "num_tokens" of "msg_tokens" pointers.
                  We can't use strtok() here because some fields may be zero
                  length and strtok() doesn't handle it correctly. This code
-                 ensures zero length tokens at least point to an empty string.
+                 ensures zero length tokens point to a 0-length string.
               */
 
               int num_tokens = 0 ;
-              int tok_start = 1 ;
+              int tok_start = 1 ; // move past the '$' character
 
               for (int tok_end=1 ; tok_end < msg_len ; tok_end++)
                 if ((gps_buf[tok_end] == ',') || (tok_end == msg_len - 1))
@@ -4280,7 +4280,7 @@ void ft_gps (S_thread_entry *p)
                   if (tok_end - tok_start > 0)
                     msg_tokens[num_tokens] = gps_buf + tok_start ;
                   else
-                    msg_tokens[num_tokens] = "" ;
+                    msg_tokens[num_tokens] = "" ; // provide an 0-length string
                   num_tokens++ ;
                   tok_start = tok_end + 1 ;
                 }
