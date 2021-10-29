@@ -1335,6 +1335,146 @@ void f_fs (char **tokens)
   }
 }
 
+void f_file (char **tokens)
+{
+  #define CLIENT_IO_TIMEOUT 10 // max idle(secs) for connect or data transfer
+
+  if (((strcmp(tokens[1], "recv") != 0) && (strcmp(tokens[1], "send") != 0)) ||
+      (tokens[2] == NULL) || (tokens[3] == NULL))
+  {
+    strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
+    return ;
+  }
+
+  /* setup a listening TCP socket and expect a client to connect to it */
+
+  int port = atoi (tokens[2]) ;
+  char *path = tokens[3] ;
+  int listen_sd = socket (AF_INET, SOCK_STREAM, IPPROTO_IP) ;
+  if (listen_sd < 0)
+  {
+    strcat (G_reply_buf, "FATAL! socket() failed.\r\n") ;
+    return ;
+  }
+
+  int reuse = 1 ; // allow quick re-bind()'ing of this port
+  setsockopt (listen_sd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(int)) ;
+
+  struct sockaddr_in addr ;
+  memset (&addr, 0, sizeof(addr)) ;
+  addr.sin_family = AF_INET ;
+  addr.sin_addr.s_addr = INADDR_ANY ;
+  addr.sin_port = htons (port) ;
+  if (bind (listen_sd, (const struct sockaddr*) &addr, sizeof(addr)) < 0)
+  {
+    close (listen_sd) ;
+    strcat (G_reply_buf, "FATAL! bind() failed.\r\n") ;
+    return ;
+  }
+  if (listen (listen_sd, 1) != 0)
+  {
+    close (listen_sd) ;
+    strcat (G_reply_buf, "FATAL! listen() failed.\r\n") ;
+    return ;
+  }
+
+  struct timeval tv ;
+  fd_set rfds ;
+  tv.tv_sec = CLIENT_IO_TIMEOUT ;
+  tv.tv_usec = 0 ;
+  FD_ZERO (&rfds) ;
+  FD_SET (listen_sd, &rfds) ;
+  int result = select (listen_sd + 1, &rfds, NULL, NULL, &tv) ;
+  if (result < 1)
+  {
+    close (listen_sd) ;
+    strcat (G_reply_buf, "FATAL! No client connected.\r\n") ;
+    return ;
+  }
+  int client_sd = accept (listen_sd, NULL, NULL) ;
+  if (client_sd < 0)
+  {
+    close (listen_sd) ;
+    strcat (G_reply_buf, "FATAL! accept() failed.\r\n") ;
+    return ;
+  }
+
+  /*
+     at this point, "client_sd" is connected, decide whether to send/recv,
+     but *some* IO must occur within CLIENT_IO_TIMEOUT, or we'll close and
+     abort the transfer.
+  */
+
+  int amt, total=0 ;
+  char buf[BUF_MEDIUM] ;
+  long start_time = millis () ;
+
+  if (strcmp (tokens[1], "recv") == 0)                          // recv a file
+  {
+    File f = SPIFFS.open (path, "w") ;
+    if (!f)
+      strcat (G_reply_buf, "FATAL! Cannot write to file.\r\n") ;
+
+    while (f)
+    {
+      tv.tv_sec = CLIENT_IO_TIMEOUT ;
+      tv.tv_usec = 0 ;
+      FD_ZERO (&rfds) ;
+      FD_SET (client_sd, &rfds) ;
+      result = select (client_sd + 1, &rfds, NULL, NULL, &tv) ;
+      if (result < 1)
+      {
+        sprintf (buf, "FATAL! client timeout after %d bytes.\r\n", total) ;
+        strcat (G_reply_buf, buf) ;
+        break ;
+      }
+      amt = read (client_sd, buf, BUF_MEDIUM-1) ;
+      if (amt < 1)
+      {
+        long duration_ms = millis() - start_time ;
+        sprintf (buf, "Received %d bytes from client in %d ms.\r\n",
+                total, duration_ms) ;
+        strcat (G_reply_buf, buf) ;
+        break ;
+      }
+      buf[amt] = 0 ;
+      f.print (buf) ;
+      total = total + amt ;
+    }
+    if (f)
+      f.close () ;
+  }
+
+  if (strcmp (tokens[1], "send") == 0)                          // send file
+  {
+    File f = SPIFFS.open (path, "r") ;
+    if (f)
+    {
+      while (total < f.size())
+      {
+        amt = f.readBytes (buf, BUF_SIZE) ; // this blocks if we past EOF !!
+        if (amt > 0)
+        {
+          write (client_sd, buf, amt) ;
+          total = total + amt ;
+        }
+        else
+          break ;
+      }
+      long duration_ms = millis () - start_time ;
+      sprintf (buf, "Sent %d bytes to client in %d ms.\r\n",
+               total, duration_ms) ;
+      strcat (G_reply_buf, buf) ;
+      f.close () ;
+    }
+    else
+      strcat (G_reply_buf, "FATAL! Cannot read from file.\r\n") ;
+  }
+
+  close (listen_sd) ;
+  close (client_sd) ;
+}
+
 void f_wifi (char **tokens)
 {
   char line[BUF_MEDIUM] ;
@@ -4745,6 +4885,8 @@ void f_action (char **tokens)
             "\r\n"
             "[System]\r\n"
             "debug <num>\r\n"
+            "file recv <port> <filename>\r\n"
+            "file send <port> <filename>\r\n"
             "fs format\r\n"
             "fs info\r\n"
             "fs ls\r\n"
@@ -4942,6 +5084,11 @@ void f_action (char **tokens)
   if ((strcmp(tokens[0], "fs") == 0) && (tokens[1] != NULL))
   {
     f_fs (tokens) ;
+  }
+  else
+  if ((strcmp(tokens[0], "file") == 0) && (tokens[1] != NULL))
+  {
+    f_file (tokens) ;
   }
   else
   if ((strcmp(tokens[0], "wifi") == 0) && (tokens[1] != NULL))
