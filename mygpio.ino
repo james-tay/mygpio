@@ -4308,38 +4308,42 @@ void ft_gps (S_thread_entry *p)
   p->results[4].data[0] = "\"longitude\"" ;
 
   p->results[5].num_tags = 1 ;
-  p->results[5].meta[0] = "num" ;
-  p->results[5].data[0] = "\"satellites\"" ;
+  p->results[5].meta[0] = "time" ;
+  p->results[5].data[0] = "\"utc\"" ;
 
   p->results[6].num_tags = 1 ;
-  p->results[6].meta[0] = "elevation" ;
-  p->results[6].data[0] = "\"sealevel\"" ;
+  p->results[6].meta[0] = "satellites" ;
+  p->results[6].data[0] = "\"used\"" ;
 
   p->results[7].num_tags = 1 ;
   p->results[7].meta[0] = "elevation" ;
-  p->results[7].data[0] = "\"geoid\"" ;
+  p->results[7].data[0] = "\"sealevel\"" ;
 
   p->results[8].num_tags = 1 ;
-  p->results[8].meta[0] = "nav" ;
-  p->results[8].data[0] = "\"mode\"" ; // 1=none, 2=2D fix, 3=3D fix
+  p->results[8].meta[0] = "elevation" ;
+  p->results[8].data[0] = "\"geoid\"" ;
 
   p->results[9].num_tags = 1 ;
-  p->results[9].meta[0] = "dilution" ;
-  p->results[9].data[0] = "\"position\"" ;
+  p->results[9].meta[0] = "nav" ;
+  p->results[9].data[0] = "\"mode\"" ; // 1=none, 2=2D fix, 3=3D fix
 
   p->results[10].num_tags = 1 ;
   p->results[10].meta[0] = "dilution" ;
-  p->results[10].data[0] = "\"horizontal\"" ;
+  p->results[10].data[0] = "\"position\"" ;
 
   p->results[11].num_tags = 1 ;
   p->results[11].meta[0] = "dilution" ;
-  p->results[11].data[0] = "\"vertical\"" ;
+  p->results[11].data[0] = "\"horizontal\"" ;
 
   p->results[12].num_tags = 1 ;
-  p->results[12].meta[0] = "speed" ;
-  p->results[12].data[0] = "\"kmh\"" ;
+  p->results[12].meta[0] = "dilution" ;
+  p->results[12].data[0] = "\"vertical\"" ;
 
-  p->num_float_results = 13 ;
+  p->results[13].num_tags = 1 ;
+  p->results[13].meta[0] = "speed" ;
+  p->results[13].data[0] = "\"kmh\"" ;
+
+  p->num_float_results = 14 ;
 
   /* if we're the first thread to access the hardware UART, initialize it */
 
@@ -4351,6 +4355,7 @@ void ft_gps (S_thread_entry *p)
     G_hw_uart->initialized = 1 ;
   }
   xSemaphoreGive (G_hw_uart->lock) ;
+  strcpy (p->msg, "ok") ;
 
   int idx, amt ;
   int msg_len = 0 ;                     // length of current msg in "gps_buf"
@@ -4425,7 +4430,7 @@ void ft_gps (S_thread_entry *p)
                   tok_start = tok_end + 1 ;
                 }
 
-              if (G_debug)
+              if (G_debug > 1)
               {
                 char line[BUF_SIZE] ;
                 Serial.println ("DEBUG: ft_gps() msg_tokens[]") ;
@@ -4452,6 +4457,24 @@ void ft_gps (S_thread_entry *p)
 
                 p->results[3].f_value = latitude ;
                 p->results[4].f_value = longitude ;
+
+                /* parse the time and date */
+
+                int hour, minute, seconds, day, month, year ;
+                struct tm utc ;
+
+                sscanf (msg_tokens[1], "%2d%2d%2d", &hour, &minute, &seconds) ;
+                sscanf (msg_tokens[9], "%2d%2d%2d", &day, &month, &year) ;
+                memset (&utc, 0, sizeof(utc)) ;
+                utc.tm_sec = seconds ;
+                utc.tm_min = minute ;
+                utc.tm_hour = hour ;
+                utc.tm_mday = day ;
+                utc.tm_mon = month - 1 ; /* this needs to be 0 to 11 */
+                utc.tm_year = year + 100 ; /* years since 1900 */
+                time_t now = mktime (&utc) ;
+
+                p->results[5].f_value = now ;
               }
 
               if (strcmp (msg_tokens[0], "GNGGA") == 0)
@@ -4459,9 +4482,9 @@ void ft_gps (S_thread_entry *p)
                 double satellites = atof (msg_tokens[7]) ; // satellites used
                 double altitude = atof (msg_tokens[9]) ; // "m" above sea level
                 double geoid = atof (msg_tokens[11]) ;  // geoid and sea level
-                p->results[5].f_value = satellites ;
-                p->results[6].f_value = altitude ;
-                p->results[7].f_value = geoid ;
+                p->results[6].f_value = satellites ;
+                p->results[7].f_value = altitude ;
+                p->results[8].f_value = geoid ;
               }
 
               if ((strcmp (msg_tokens[0], "GNGSA") == 0) && (num_tokens == 18))
@@ -4470,16 +4493,16 @@ void ft_gps (S_thread_entry *p)
                 double dilution_pos = atof(msg_tokens[15]) ;
                 double dilution_hori = atof(msg_tokens[16]) ;
                 double dilution_vert = atof(msg_tokens[17]) ;
-                p->results[8].f_value = mode ;
-                p->results[9].f_value = dilution_pos ;
-                p->results[10].f_value = dilution_hori ;
-                p->results[11].f_value = dilution_vert ;
+                p->results[9].f_value = mode ;
+                p->results[10].f_value = dilution_pos ;
+                p->results[11].f_value = dilution_hori ;
+                p->results[12].f_value = dilution_vert ;
               }
 
               if ((strcmp (msg_tokens[0], "GNVTG") == 0) && (num_tokens == 10))
               {
                 double speed = atof (msg_tokens[7]) ;
-                p->results[12].f_value = speed ;
+                p->results[13].f_value = speed ;
               }
             }
             else                                                // checksum BAD
