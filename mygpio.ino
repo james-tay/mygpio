@@ -4558,9 +4558,9 @@ void ft_gpsmon (S_thread_entry *p)
    This thread uses the following configuration determine that the GPS has
    achieved a reliable lock (pay attention to the various data types).
 
-     cfg_gpsMode    - The GPS mode number which indicates 3D fix (def: 3)
-     cfg_minSatUsed - Minimum satellites used (def: 4)
-     cfg_maxPosDil  - Maximum allowed horizontal dilution (def: 3.5)
+     cfg_gpsMode     - The GPS mode number which indicates 3D fix (def: 3)
+     cfg_minSatsUsed - Minimum satellites used (def: 4)
+     cfg_maxPosDil   - Maximum allowed position dilution (def: 3.5)
 
    Position data is written into a ring buffer which is flushed to a file as
    a CSV, with the first line containing the heading, followed by one or more
@@ -4583,7 +4583,7 @@ void ft_gpslog (S_thread_entry *p)
   #define PI 3.14159265359
 
   static thread_local int cfg_gpsMode = 3 ;
-  static thread_local int cfg_minSatUsed = 4 ;
+  static thread_local int cfg_minSatsUsed = 4 ;
   static thread_local double cfg_maxPosDil = 3.5 ;
 
   static thread_local char cfg_gpsThread[MAX_THREAD_NAME] ; // initialize later
@@ -4591,6 +4591,13 @@ void ft_gpslog (S_thread_entry *p)
   static thread_local int cfg_normLogSecs = 10 ;
   static thread_local int cfg_maxLogSecs = 60 ;
   static thread_local int cfg_fileFlushSecs = 60 ;
+
+  static thread_local double cur_ele = 0.0 ;
+  static thread_local double cur_lat = 0.0 ;
+  static thread_local double cur_long = 0.0 ;
+  static thread_local double cur_epoch = 0.0 ;
+
+  long now = millis () ;
 
   if (p->num_args != 1)
   {
@@ -4628,8 +4635,8 @@ void ft_gpslog (S_thread_entry *p)
               }
               if (strcmp (key, "cfg_gpsMode") == 0)
                 cfg_gpsMode = atoi (value) ;
-              if (strcmp (key, "cfg_minSatUsed") == 0)
-                cfg_minSatUsed = atoi (value) ;
+              if (strcmp (key, "cfg_minSatsUsed") == 0)
+                cfg_minSatsUsed = atoi (value) ;
               if (strcmp (key, "cfg_maxPosDil") == 0)
                 cfg_maxPosDil = atof (value) ;
 
@@ -4674,13 +4681,67 @@ void ft_gpslog (S_thread_entry *p)
 
   /* attempt to identify the "cfg_gpsThread", make sure it's running */
 
+  int gps_tid ;
+  for (gps_tid=0 ; gps_tid < MAX_THREADS ; gps_tid++)
+    if ((G_thread_entry[gps_tid].state == THREAD_RUNNING) &&
+        (G_thread_entry[gps_tid].ft_addr == ft_gpsmon) &&
+        (strcmp(G_thread_entry[gps_tid].name, cfg_gpsThread) == 0))
+      break ;
+  if (gps_tid == MAX_THREADS) /* can't locate "cfg_gpsThread", retry */
+  {
+    strcpy (p->msg, "WARNING: Cannot find cfg_gpsThread") ;
+    delay (cfg_normLogSecs * 1000) ;
+    return ;
+  }
+
+  /* check if GPS has a good lock */
+
+  #define IDX_GPS_MODE 9
+  #define IDX_SATS_USED 6
+  #define IDX_POS_DIL 10
+
+  S_thread_result *r_ptr = G_thread_entry[gps_tid].results ;
+  if ((cfg_gpsMode != (int) r_ptr[IDX_GPS_MODE].f_value) ||
+      (cfg_minSatsUsed > (int) r_ptr[IDX_SATS_USED].f_value) ||
+      (cfg_maxPosDil < r_ptr[IDX_POS_DIL].f_value))
+  {
+    snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
+              "WARNING: No lock, mode:%d sats:%d dil:%s",
+              (int) r_ptr[IDX_GPS_MODE].f_value,
+              (int) r_ptr[IDX_SATS_USED].f_value,
+              String (r_ptr[IDX_POS_DIL].f_value, FLOAT_DECIMAL_PLACES)) ;
+    delay (cfg_normLogSecs * 1000) ;
+    return ;
+  }
+
+  /* if this is the first time initializing our position, don't proceed */
+
+  #define IDX_ELE 7
+  #define IDX_UTC 5
+  #define IDX_LAT 3
+  #define IDX_LONG 4
+
+  if ((cur_ele == 0.0) && (cur_lat == 0.0) && (cur_long == 0.0))
+  {
+    cur_ele = r_ptr[IDX_ELE].f_value ;
+    cur_lat = r_ptr[IDX_LAT].f_value ;
+    cur_long = r_ptr[IDX_LONG].f_value ;
+    cur_epoch = r_ptr[IDX_UTC].f_value ;
+    return ;
+  }
 
 
 
 
+  /* figure out how long to sleep */
 
-
-
+  long duration = now + (cfg_normLogSecs * 1000) - millis () ;
+  if (duration > 0)
+  {
+    snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
+              "GPS ok, sleeping %ldms", duration) ;
+    delay (duration) ;
+  }
 }
 
 /* =========================== */
