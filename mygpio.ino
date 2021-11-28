@@ -4556,21 +4556,21 @@ void ft_gpsmon (S_thread_entry *p)
      GPS elevation - GPS geoid + Ave Earth Radius
 
    This thread uses the following configuration determine that the GPS has
-   achieved a reliable lock.
+   achieved a reliable lock (pay attention to the various data types).
 
      cfg_gpsMode    - The GPS mode number which indicates 3D fix (def: 3)
      cfg_minSatUsed - Minimum satellites used (def: 4)
      cfg_maxPosDil  - Maximum allowed horizontal dilution (def: 3.5)
 
-   Position data is written into a CSV, with the first line containing the
-   heading, followed by one or more data rows. The following configuration
-   determines the data logging behavior.
+   Position data is written into a ring buffer which is flushed to a file as
+   a CSV, with the first line containing the heading, followed by one or more
+   data rows. The following configuration determines the data logging behavior.
 
      cfg_gpsThread     - the name of the ft_gpsmon() thread
-     cfg_minDistMeters - the minimum meters moved to trigger logging (def: 4)
+     cfg_minDistMeters - the minimum meters moved to trigger logging (def: 4.0)
      cfg_normLogSecs   - normal interval between log entries (def: 10)
      cfg_maxLogSecs    - max log interval when stationary (def: 60)
-     cfg_fileFlushSecs - interval between flushng dirty buffers (def: 30)
+     cfg_fileFlushSecs - interval between flushng dirty buffers (def: 60)
 
    Thus, this thread takes 1 argument on invocation, the path to its config
    file. Each line of the config file is expected to be in the format,
@@ -4582,6 +4582,16 @@ void ft_gpslog (S_thread_entry *p)
   #define AVE_EARTH_RADIUS 6371001      // meters
   #define PI 3.14159265359
 
+  static thread_local int cfg_gpsMode = 3 ;
+  static thread_local int cfg_minSatUsed = 4 ;
+  static thread_local double cfg_maxPosDil = 3.5 ;
+
+  static thread_local char cfg_gpsThread[MAX_THREAD_NAME] ; // initialize later
+  static thread_local double cfg_minDistMeters = 4.0 ;
+  static thread_local int cfg_normLogSecs = 10 ;
+  static thread_local int cfg_maxLogSecs = 60 ;
+  static thread_local int cfg_fileFlushSecs = 60 ;
+
   if (p->num_args != 1)
   {
     strcpy (p->msg, "FATAL! Expecting 1x argument") ;
@@ -4591,6 +4601,7 @@ void ft_gpslog (S_thread_entry *p)
 
   if (p->loops == 0) /* parse our config file, load into thread_local vars */
   {
+    strcpy (cfg_gpsThread, "") ;
     File f = SPIFFS.open (p->in_args[0], "r") ;
     if (f)
     {
@@ -4615,11 +4626,24 @@ void ft_gpslog (S_thread_entry *p)
                           key, value) ;
                 Serial.println (buf) ;
               }
+              if (strcmp (key, "cfg_gpsMode") == 0)
+                cfg_gpsMode = atoi (value) ;
+              if (strcmp (key, "cfg_minSatUsed") == 0)
+                cfg_minSatUsed = atoi (value) ;
+              if (strcmp (key, "cfg_maxPosDil") == 0)
+                cfg_maxPosDil = atof (value) ;
 
-
-
-
-
+              if ((strcmp (key, "cfg_gpsThread") == 0) &&
+                  (strlen (cfg_gpsThread) < MAX_THREAD_NAME))
+                strncpy (cfg_gpsThread, value, MAX_THREAD_NAME) ;
+              if (strcmp (key, "cfg_minDistMeters") == 0)
+                cfg_minDistMeters = atof (value) ;
+              if (strcmp (key, "cfg_normLogSecs") == 0)
+                cfg_normLogSecs = atoi (value) ;
+              if (strcmp (key, "cfg_maxLogSecs") == 0)
+                cfg_maxLogSecs = atoi (value) ;
+              if (strcmp (key, "cfg_fileFlushSecs") == 0)
+                cfg_fileFlushSecs = atoi (value) ;
             }
             else
             {
@@ -4647,6 +4671,8 @@ void ft_gpslog (S_thread_entry *p)
       return ;
     }
   }
+
+  /* attempt to identify the "cfg_gpsThread", make sure it's running */
 
 
 
