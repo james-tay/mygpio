@@ -4268,7 +4268,7 @@ void ft_serial2tcp (S_thread_entry *p)
    thread are float.
 */
 
-void ft_gps (S_thread_entry *p)
+void ft_gpsmon (S_thread_entry *p)
 {
   #define READ_BUF 32   // max bytes we read from the uart at a time
   #define GPS_BUF 128   // max length of a single GPS message
@@ -4433,7 +4433,7 @@ void ft_gps (S_thread_entry *p)
               if (G_debug > 1)
               {
                 char line[BUF_SIZE] ;
-                Serial.println ("DEBUG: ft_gps() msg_tokens[]") ;
+                Serial.println ("DEBUG: ft_gpsmon() msg_tokens[]") ;
                 for (int i=0 ; i < num_tokens ; i++)
                 {
                   sprintf (line, "  %d:(%s)", i, msg_tokens[i]) ;
@@ -4512,7 +4512,7 @@ void ft_gps (S_thread_entry *p)
               {
                 char line[GPS_BUF+BUF_SIZE] ;
                 snprintf (line, GPS_BUF+BUF_SIZE,
-                          "DEBUG: ft_gps() gps_buf<%s>[%X] Bad checksum",
+                          "DEBUG: ft_gpsmon() gps_buf<%s>[%X] Bad checksum",
                           gps_buf, checksum) ;
                 Serial.println (line) ;
               }
@@ -4538,6 +4538,123 @@ void ft_gps (S_thread_entry *p)
   xSemaphoreTake (G_hw_uart->lock, portMAX_DELAY) ;
   G_hw_uart->in_use-- ;
   xSemaphoreGive (G_hw_uart->lock) ;
+}
+
+/*
+   This thread depends on metrics from ft_gpsmon(). Our job is to determine
+   if we've moved and log our new location to a ring buffer. When the ring
+   buffer fills up, flush it to a file. We must have moved a minimum distance
+   in order to log an entry. If our minimum movement threahold is 2m, then
+
+     arctan(2/6371001) = .0000003139 radians
+                       = .0000003139 * 180 / PI
+                       = .0000179864 degrees
+
+   In actual fact, we add our elevation to the average earth radius for the
+   best accuracy. Thus, we compute
+
+     GPS elevation - GPS geoid + Ave Earth Radius
+
+   This thread uses the following configuration determine that the GPS has
+   achieved a reliable lock.
+
+     cfg_gpsMode    - The GPS mode number which indicates 3D fix (def: 3)
+     cfg_minSatUsed - Minimum satellites used (def: 4)
+     cfg_maxPosDil  - Maximum allowed horizontal dilution (def: 3.5)
+
+   Position data is written into a CSV, with the first line containing the
+   heading, followed by one or more data rows. The following configuration
+   determines the data logging behavior.
+
+     cfg_gpsThread     - the name of the ft_gpsmon() thread
+     cfg_minDistMeters - the minimum meters moved to trigger logging (def: 4)
+     cfg_normLogSecs   - normal interval between log entries (def: 10)
+     cfg_maxLogSecs    - max log interval when stationary (def: 60)
+     cfg_fileFlushSecs - interval between flushng dirty buffers (def: 30)
+
+   Thus, this thread takes 1 argument on invocation, the path to its config
+   file. Each line of the config file is expected to be in the format,
+     <key> <value>
+*/
+
+void ft_gpslog (S_thread_entry *p)
+{
+  #define AVE_EARTH_RADIUS 6371001      // meters
+  #define PI 3.14159265359
+
+  if (p->num_args != 1)
+  {
+    strcpy (p->msg, "FATAL! Expecting 1x argument") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  if (p->loops == 0) /* parse our config file, load into thread_local vars */
+  {
+    File f = SPIFFS.open (p->in_args[0], "r") ;
+    if (f)
+    {
+      char line[BUF_SIZE], buf[BUF_SIZE] ;
+      while (1)
+      {
+        int amt = f.readBytesUntil ('\n', line, BUF_SIZE-1) ;
+        if (amt > 0)
+        {
+          line[amt] = 0 ;
+          char *idx=NULL, *key=NULL, *value=NULL ;
+
+          key = strtok_r (line, " ", &idx) ;
+          if (key != NULL)
+          {
+            value = strtok_r (NULL, " ", &idx) ;
+            if (value != NULL)
+            {
+              if (G_debug)
+              {
+                snprintf (buf, BUF_SIZE, "DEBUG: ft_gpslog() (%s)(%s)",
+                          key, value) ;
+                Serial.println (buf) ;
+              }
+
+
+
+
+
+            }
+            else
+            {
+              strcpy (p->msg, "FATAL! Missing value in config") ;
+              p->state = THREAD_STOPPED ;
+              return ;
+            }
+          }
+          else
+          {
+            strcpy (p->msg, "FATAL! Invalid line in config") ;
+            p->state = THREAD_STOPPED ;
+            return ;
+          }
+        }
+        else
+          break ;
+      }
+      f.close () ;
+    }
+    else
+    {
+      strcpy (p->msg, "FATAL! Cannot read configuration") ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+  }
+
+
+
+
+
+
+
+
 }
 
 /* =========================== */
@@ -4711,8 +4828,10 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_ds18b20 ;
   if (strcmp (ft_taskname, "ft_dread") == 0)
     G_thread_entry[idx].ft_addr = ft_dread ;
-  if (strcmp (ft_taskname, "ft_gps") == 0)
-    G_thread_entry[idx].ft_addr = ft_gps ;
+  if (strcmp (ft_taskname, "ft_gpsmon") == 0)
+    G_thread_entry[idx].ft_addr = ft_gpsmon ;
+  if (strcmp (ft_taskname, "ft_gpslog") == 0)
+    G_thread_entry[idx].ft_addr = ft_gpslog ;
   if (strcmp (ft_taskname, "ft_hcsr04") == 0)
     G_thread_entry[idx].ft_addr = ft_hcsr04 ;
   if (strcmp (ft_taskname, "ft_tread") == 0)
@@ -4820,7 +4939,8 @@ void f_esp32 (char **tokens)
       "ft_dread,<delay>,<pin>,<0=norm,1=pullup>[,<trig_ms>]\r\n"
       "ft_tread,<delay>,<pin>,<loThres>,<hiThres>\r\n"
       "ft_counter,<delay>,<start_value>\r\n"
-      "ft_gps,<baud>,<RXpin>,<TXpin>\r\n"
+      "ft_gpsmon,<baud>,<RXpin>,<TXpin>\r\n"
+      "ft_gpslog,<config file>\r\n"
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
       "ft_i2sin,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<ip:port>[,<gain>]\r\n"
       "ft_i2sout,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<UDPport>\r\n"
