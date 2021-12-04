@@ -357,6 +357,7 @@
 #define MAX_THREAD_TAGS_BUF 80        // length of thread's tags
 #define MAX_THREAD_MSG_BUF 80         // length of thread's "msg"
 #define MAX_THREAD_TAGS 8             // tag pairs in "/tags-<name>"
+#define THREAD_SHUTDOWN_PERIOD 1000   // shutdown grace period (millisecs)
 
 #define MAX_DS18B20_DEVICES 4         // maximum DS18B20 on a single pin
 
@@ -4571,6 +4572,7 @@ void ft_gpsmon (S_thread_entry *p)
      cfg_normLogSecs   - normal interval between log entries (def: 10)
      cfg_maxLogSecs    - max log interval when stationary (def: 60)
      cfg_fileFlushSecs - interval between flushng dirty buffers (def: 60)
+     cfg_fileName      - the CSV file we write to (def: "gps.csv")
 
    Thus, this thread takes 1 argument on invocation, the path to its config
    file. Each line of the config file is expected to be in the format,
@@ -4579,9 +4581,6 @@ void ft_gpsmon (S_thread_entry *p)
 
 void ft_gpslog (S_thread_entry *p)
 {
-  #define AVE_EARTH_RADIUS 6371001      // meters
-  #define PI 3.14159265359
-
   static thread_local int cfg_gpsMode = 3 ;
   static thread_local int cfg_minSatsUsed = 4 ;
   static thread_local double cfg_maxPosDil = 3.5 ;
@@ -4591,13 +4590,54 @@ void ft_gpslog (S_thread_entry *p)
   static thread_local int cfg_normLogSecs = 10 ;
   static thread_local int cfg_maxLogSecs = 60 ;
   static thread_local int cfg_fileFlushSecs = 60 ;
+  static thread_local char cfg_fileName[BUF_SIZE] ;
 
   static thread_local double cur_ele = 0.0 ;
   static thread_local double cur_lat = 0.0 ;
   static thread_local double cur_long = 0.0 ;
   static thread_local double cur_epoch = 0.0 ;
 
-  long now = millis () ;
+  static thread_local int ring_pos = 0 ;     // next empty entry
+  static thread_local int ring_entries = 0 ; // dynamically calculated
+  static thread_local long last_run = 0 ;    // time this function last ran
+  static thread_local long last_update = 0 ; // time of last ring buffer update
+
+  /* our ringer buffer */
+
+  struct ring_entry_t
+  {
+    time_t epoch ;
+    double latitude ;
+    double longitude ;
+    double elevation ;
+    double pos_dilution ;
+  } ;
+  typedef struct ring_entry_t S_RingEntry ;
+  static thread_local S_RingEntry *ring_buffer = NULL ; // the ring buffer
+
+  /* a macro to check if we're told to terminate, make sure we free(). */
+
+  #define GPSLOG_CHECK_CLEANUP ({                 \
+      if (p->state != THREAD_RUNNING)             \
+      {                                           \
+        if (ring_buffer != NULL)                  \
+        {                                         \
+          free (ring_buffer) ;                    \
+          ring_buffer = NULL ;                    \
+        }                                         \
+        strcpy (p->msg, "ring_buffer released") ; \
+        return ; \
+      } \
+    })
+
+  long now = millis () ; // note down this function's wall clock time
+
+  /*
+     before we return() for whatever reason, check if we're being shutdown,
+     and if "ring_buffer" is malloc()'ed, better free() it now.
+  */
+
+  GPSLOG_CHECK_CLEANUP ;
 
   if (p->num_args != 1)
   {
@@ -4609,6 +4649,8 @@ void ft_gpslog (S_thread_entry *p)
   if (p->loops == 0) /* parse our config file, load into thread_local vars */
   {
     strcpy (cfg_gpsThread, "") ;
+    strcpy (cfg_fileName, "gps.csv") ;
+
     File f = SPIFFS.open (p->in_args[0], "r") ;
     if (f)
     {
@@ -4651,6 +4693,8 @@ void ft_gpslog (S_thread_entry *p)
                 cfg_maxLogSecs = atoi (value) ;
               if (strcmp (key, "cfg_fileFlushSecs") == 0)
                 cfg_fileFlushSecs = atoi (value) ;
+              if (strcmp (key, "cfg_fileName") == 0)
+                strncpy (cfg_fileName, value, BUF_SIZE) ;
             }
             else
             {
@@ -4677,9 +4721,27 @@ void ft_gpslog (S_thread_entry *p)
       p->state = THREAD_STOPPED ;
       return ;
     }
+
+    /* calculate the size of our ring buffer and allocate memory */
+
+    ring_entries = (cfg_fileFlushSecs / cfg_normLogSecs) + 1 ;
+    size_t sz = ring_entries * sizeof(S_RingEntry) ;
+    ring_buffer = (S_RingEntry*) malloc (sz) ;
+    if (ring_buffer == NULL)
+    {
+      snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
+                "FATAL! ring_buffer malloc(%d) failed", sz) ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+
+    last_run = now ;
   }
 
-  /* attempt to identify the "cfg_gpsThread", make sure it's running */
+  /*
+     attempt to identify the "cfg_gpsThread", make sure it's running. If not
+     found, sleep and try again (but check if we're told to terminate).
+  */
 
   int gps_tid ;
   for (gps_tid=0 ; gps_tid < MAX_THREADS ; gps_tid++)
@@ -4690,11 +4752,19 @@ void ft_gpslog (S_thread_entry *p)
   if (gps_tid == MAX_THREADS) /* can't locate "cfg_gpsThread", retry */
   {
     strcpy (p->msg, "WARNING: Cannot find cfg_gpsThread") ;
-    delay (cfg_normLogSecs * 1000) ;
+    last_run = last_run + (cfg_normLogSecs * 1000) ;
+    while (millis() < last_run)
+    {
+      delay (THREAD_SHUTDOWN_PERIOD / 20) ;
+      GPSLOG_CHECK_CLEANUP ;
+    }
     return ;
   }
 
-  /* check if GPS has a good lock */
+  /*
+     check if GPS has a good lock. If not, sleep and try again (but check if
+     we're told to terminate).
+  */
 
   #define IDX_GPS_MODE 9
   #define IDX_SATS_USED 6
@@ -4710,11 +4780,20 @@ void ft_gpslog (S_thread_entry *p)
               (int) r_ptr[IDX_GPS_MODE].f_value,
               (int) r_ptr[IDX_SATS_USED].f_value,
               String (r_ptr[IDX_POS_DIL].f_value, FLOAT_DECIMAL_PLACES)) ;
-    delay (cfg_normLogSecs * 1000) ;
+
+    last_run = last_run + (cfg_normLogSecs * 1000) ;
+    while (millis() < last_run)
+    {
+      delay (THREAD_SHUTDOWN_PERIOD / 20) ;
+      GPSLOG_CHECK_CLEANUP ;
+    }
     return ;
   }
 
-  /* if this is the first time initializing our position, don't proceed */
+  /*
+     if this is the first time initializing our position, don't proceed.
+     Just sleep and run again (but check if we're told to terminate).
+  */
 
   #define IDX_ELE 7
   #define IDX_UTC 5
@@ -4723,24 +4802,85 @@ void ft_gpslog (S_thread_entry *p)
 
   if ((cur_ele == 0.0) && (cur_lat == 0.0) && (cur_long == 0.0))
   {
+    strcpy (p->msg, "INFO: initialized") ;
     cur_ele = r_ptr[IDX_ELE].f_value ;
     cur_lat = r_ptr[IDX_LAT].f_value ;
     cur_long = r_ptr[IDX_LONG].f_value ;
     cur_epoch = r_ptr[IDX_UTC].f_value ;
+    last_update = now ;
+
+    last_run = last_run + (cfg_normLogSecs * 1000) ;
+    while (millis() < last_run)
+    {
+      delay (THREAD_SHUTDOWN_PERIOD / 20) ;
+      GPSLOG_CHECK_CLEANUP ;
+    }
     return ;
   }
 
+  /*
+     if we've moved, or if we've not added any entry in a long time, add our
+     current position to our ring buffer.
+  */
+
+  #define AVE_EARTH_RADIUS 6371008.8 // meters
+
+  double earthRadius = AVE_EARTH_RADIUS + r_ptr[IDX_ELE].f_value ;
+  double minDegrees = atan (cfg_minDistMeters / earthRadius) * 180.0 / M_PI ;
+
+  int we_moved = 0 ;
+  if ((abs(r_ptr[IDX_LAT].f_value - cur_lat) > minDegrees) ||
+      (abs(r_ptr[IDX_LONG].f_value - cur_long) > minDegrees))
+    we_moved = 1 ;
+
+  if (((we_moved) || (now - last_update > cfg_maxLogSecs * 1000)) &&
+      (ring_pos < ring_entries - 1)) // make sure there's space available
+  {
+    ring_buffer[ring_pos].epoch = int(r_ptr[IDX_UTC].f_value) ;
+    ring_buffer[ring_pos].latitude = r_ptr[IDX_LAT].f_value ;
+    ring_buffer[ring_pos].longitude = r_ptr[IDX_LONG].f_value ;
+    ring_buffer[ring_pos].elevation = r_ptr[IDX_ELE].f_value ;
+    ring_buffer[ring_pos].pos_dilution = r_ptr[IDX_POS_DIL].f_value ;
+    ring_pos++ ;
+    last_update = now ;
+  }
+
+  /*
+     if our ring buffer is full, or if we've not flushed it in a long time,
+     write it to storage
+  */
+
+  if (ring_pos == ring_entries - 1)
+  {
+    File f = SPIFFS.open (cfg_fileName, "a+") ;
+    if (f.size() == 0)
+      f.print ("time,latitude,longitude,elevation,pos_dilution") ;
 
 
 
-  /* figure out how long to sleep */
+
+
+
+    f.close () ;
+    ring_pos = 0 ;
+  }
+
+  /*
+     figure out how long to sleep, but take short naps and check if we're
+     being asked to shutdown.
+  */
 
   long duration = now + (cfg_normLogSecs * 1000) - millis () ;
   if (duration > 0)
   {
     snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
-              "GPS ok, sleeping %ldms", duration) ;
-    delay (duration) ;
+              "ok, ring:%d/%d sleep:%ldms", ring_pos, ring_entries, duration) ;
+    last_run = last_run + (cfg_normLogSecs * 1000) ;
+    while (millis() < last_run)
+    {
+      delay (THREAD_SHUTDOWN_PERIOD / 20) ;
+      GPSLOG_CHECK_CLEANUP ;
+    }
   }
 }
 
@@ -4970,7 +5110,7 @@ void f_thread_stop (char *name)
         (strcmp(G_thread_entry[idx].name, name) == 0))
     {
       G_thread_entry[idx].state = THREAD_WRAPUP ; // give it a chance to finish
-      delay (1000) ;
+      delay (THREAD_SHUTDOWN_PERIOD) ;
       vTaskDelete (G_thread_entry[idx].tid) ;
       G_thread_entry[idx].state = THREAD_STOPPED ;
       sprintf (line, "tid:%d '%s' stopped.\r\n",
