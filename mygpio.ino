@@ -4572,7 +4572,7 @@ void ft_gpsmon (S_thread_entry *p)
      cfg_normLogSecs   - normal interval between log entries (def: 10)
      cfg_maxLogSecs    - max log interval when stationary (def: 60)
      cfg_fileFlushSecs - interval between flushng dirty buffers (def: 60)
-     cfg_fileName      - the CSV file we write to (def: "gps.csv")
+     cfg_fileName      - the CSV file we write to (def: "/gps.csv")
 
    Thus, this thread takes 1 argument on invocation, the path to its config
    file. Each line of the config file is expected to be in the format,
@@ -4610,7 +4610,7 @@ void ft_gpslog (S_thread_entry *p)
     double latitude ;
     double longitude ;
     double elevation ;
-    double pos_dilution ;
+    double dilution ;
   } ;
   typedef struct ring_entry_t S_RingEntry ;
   static thread_local S_RingEntry *ring_buffer = NULL ; // the ring buffer
@@ -4646,10 +4646,28 @@ void ft_gpslog (S_thread_entry *p)
     return ;
   }
 
-  if (p->loops == 0) /* parse our config file, load into thread_local vars */
+  if (p->loops == 0)
   {
+    /* configure results (ie, internal metrics) we want to expose */
+
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = "ringbuffer" ;
+    p->results[0].data[0] = "\"size\"" ;
+
+    p->results[1].num_tags = 1 ;
+    p->results[1].meta[0] = "entries" ;
+    p->results[1].data[0] = "\"written\"" ;
+
+    p->results[2].num_tags = 1 ;
+    p->results[2].meta[0] = "entries" ;
+    p->results[2].data[0] = "\"moving\"" ;
+
+    p->num_int_results = 3 ;
+
+    /* parse our config file, load configuration into thread_local vars */
+
     strcpy (cfg_gpsThread, "") ;
-    strcpy (cfg_fileName, "gps.csv") ;
+    strcpy (cfg_fileName, "/gps.csv") ;
 
     File f = SPIFFS.open (p->in_args[0], "r") ;
     if (f)
@@ -4735,7 +4753,9 @@ void ft_gpslog (S_thread_entry *p)
       return ;
     }
 
+    p->results[0].i_value = sz ;
     last_run = now ;
+
   }
 
   /*
@@ -4831,16 +4851,19 @@ void ft_gpslog (S_thread_entry *p)
   int we_moved = 0 ;
   if ((abs(r_ptr[IDX_LAT].f_value - cur_lat) > minDegrees) ||
       (abs(r_ptr[IDX_LONG].f_value - cur_long) > minDegrees))
+  {
     we_moved = 1 ;
+    p->results[2].i_value++ ;
+  }
 
   if (((we_moved) || (now - last_update > cfg_maxLogSecs * 1000)) &&
-      (ring_pos < ring_entries - 1)) // make sure there's space available
+      (ring_pos < ring_entries)) // make sure there's space available
   {
     ring_buffer[ring_pos].epoch = int(r_ptr[IDX_UTC].f_value) ;
     ring_buffer[ring_pos].latitude = r_ptr[IDX_LAT].f_value ;
     ring_buffer[ring_pos].longitude = r_ptr[IDX_LONG].f_value ;
     ring_buffer[ring_pos].elevation = r_ptr[IDX_ELE].f_value ;
-    ring_buffer[ring_pos].pos_dilution = r_ptr[IDX_POS_DIL].f_value ;
+    ring_buffer[ring_pos].dilution = r_ptr[IDX_POS_DIL].f_value ;
     ring_pos++ ;
     last_update = now ;
   }
@@ -4850,16 +4873,46 @@ void ft_gpslog (S_thread_entry *p)
      write it to storage
   */
 
-  if (ring_pos == ring_entries - 1)
+  if (ring_pos == ring_entries)
   {
-    File f = SPIFFS.open (cfg_fileName, "a+") ;
-    if (f.size() == 0)
-      f.print ("time,latitude,longitude,elevation,pos_dilution") ;
+    File f = SPIFFS.open (cfg_fileName, "a") ;
+    if (!f)
+    {
+      snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
+                "FATAL! Cannot open %s for writing", cfg_fileName) ;
+      free (ring_buffer) ;
+      ring_buffer = NULL ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+    if ((f.size() < 1) &&
+        (f.print ("time,latitude,longitude,elevation,dilution\n") < 1))
+    {
+      snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
+                "FATAL! Cannot write to %s", cfg_fileName) ;
+      free (ring_buffer) ;
+      ring_buffer = NULL ;
+      f.close () ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
 
-
-
-
-
+    char line[BUF_SIZE] ;
+    for (int i=0 ; i < ring_entries ; i++)
+    {
+      String s_lat = String(ring_buffer[i].latitude, FLOAT_DECIMAL_PLACES) ;
+      String s_long = String(ring_buffer[i].longitude, FLOAT_DECIMAL_PLACES) ;
+      String s_elev = String(ring_buffer[i].elevation, FLOAT_DECIMAL_PLACES) ;
+      String s_dilu = String(ring_buffer[i].dilution, FLOAT_DECIMAL_PLACES) ;
+      snprintf (line, BUF_SIZE-1, "%ld,%s,%s,%s,%s\n",
+                ring_buffer[i].epoch,
+                s_lat.c_str(),
+                s_long.c_str(),
+                s_elev.c_str(),
+                s_dilu.c_str()) ;
+      f.print (line) ;
+      p->results[1].i_value++ ;
+    }
 
     f.close () ;
     ring_pos = 0 ;
