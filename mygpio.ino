@@ -4568,14 +4568,27 @@ void ft_gpsmon (S_thread_entry *p)
    data rows. The following configuration determines the data logging behavior.
 
      cfg_gpsThread     - the name of the ft_gpsmon() thread
-     cfg_minDistMeters - the minimum meters moved to trigger logging (def: 4.0)
+     cfg_minDistMeters - minimum meters moved to trigger logging (def: 12.0)
      cfg_normLogSecs   - normal interval between log entries (def: 10)
      cfg_maxLogSecs    - max log interval when stationary (def: 60)
      cfg_fileFlushSecs - interval between flushng dirty buffers (def: 60)
      cfg_fileName      - the CSV file we write to (def: "/gps.csv")
+     cfg_fileMaxSize   - rotated if file exceeds this (def: 262144 bytes)
 
-   Thus, this thread takes 1 argument on invocation, the path to its config
-   file. Each line of the config file is expected to be in the format,
+   Each entry written to "cfg_fileName" looks like,
+
+     1638745487,43.723317,-79.409851,175.500000,2.480000
+
+   Thus, at 52 bytes per line, a 256k file contains,
+
+     262144 / 52 = 5041 entries
+                 = 50410 seconds of entries (assuming cfg_normLogSecs = 10)
+                 = 14 hours of position data (or more)
+
+   Since there are many tunable parameters, this thread takes 1 argument on
+   invocation, the path to its config file. Each line of the config file is
+   expected to be in the format,
+
      <key> <value>
 */
 
@@ -4586,10 +4599,11 @@ void ft_gpslog (S_thread_entry *p)
   static thread_local double cfg_maxPosDil = 3.5 ;
 
   static thread_local char cfg_gpsThread[MAX_THREAD_NAME] ; // initialize later
-  static thread_local double cfg_minDistMeters = 4.0 ;
+  static thread_local double cfg_minDistMeters = 12.0 ;
   static thread_local int cfg_normLogSecs = 10 ;
   static thread_local int cfg_maxLogSecs = 60 ;
   static thread_local int cfg_fileFlushSecs = 60 ;
+  static thread_local int cfg_fileMaxSize = 262144 ;
   static thread_local char cfg_fileName[BUF_SIZE] ;
 
   static thread_local double cur_ele = 0.0 ;
@@ -4662,7 +4676,11 @@ void ft_gpslog (S_thread_entry *p)
     p->results[2].meta[0] = "entries" ;
     p->results[2].data[0] = "\"moving\"" ;
 
-    p->num_int_results = 3 ;
+    p->results[3].num_tags = 1 ;
+    p->results[3].meta[0] = "files" ;
+    p->results[3].data[0] = "\"rotated\"" ;
+
+    p->num_int_results = 4 ;
 
     /* parse our config file, load configuration into thread_local vars */
 
@@ -4711,6 +4729,8 @@ void ft_gpslog (S_thread_entry *p)
                 cfg_maxLogSecs = atoi (value) ;
               if (strcmp (key, "cfg_fileFlushSecs") == 0)
                 cfg_fileFlushSecs = atoi (value) ;
+              if (strcmp (key, "cfg_fileMaxSize") == 0)
+                cfg_fileMaxSize = atoi (value) ;
               if (strcmp (key, "cfg_fileName") == 0)
                 strncpy (cfg_fileName, value, BUF_SIZE) ;
             }
@@ -4898,7 +4918,7 @@ void ft_gpslog (S_thread_entry *p)
     }
 
     char line[BUF_SIZE] ;
-    for (int i=0 ; i < ring_entries ; i++)
+    for (int i=0 ; i < ring_pos ; i++)
     {
       String s_lat = String(ring_buffer[i].latitude, FLOAT_DECIMAL_PLACES) ;
       String s_long = String(ring_buffer[i].longitude, FLOAT_DECIMAL_PLACES) ;
@@ -4913,9 +4933,28 @@ void ft_gpslog (S_thread_entry *p)
       f.print (line) ;
       p->results[1].i_value++ ;
     }
+    ring_pos = 0 ; // reset ring buffer since it got flushed
 
+    /* check if it's time to rotate cfg_fileName */
+
+    int rotate = 0 ;
+    if (f.size() > cfg_fileMaxSize)
+      rotate = 1 ;
     f.close () ;
-    ring_pos = 0 ;
+
+    if (rotate) // ... delete old file if present
+    {
+      char dst_name[BUF_SIZE] ;
+      snprintf (dst_name, BUF_SIZE-1, "%s.old", cfg_fileName) ;
+      File f = SPIFFS.open (dst_name) ;
+      if (f)
+      {
+        f.close () ;
+        SPIFFS.remove (dst_name) ;
+      }
+      SPIFFS.rename (cfg_fileName, dst_name) ;
+      p->results[3].i_value++ ;
+    }
   }
 
   /*
