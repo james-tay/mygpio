@@ -4571,7 +4571,6 @@ void ft_gpsmon (S_thread_entry *p)
      cfg_minDistMeters - minimum meters moved to trigger logging (def: 12.0)
      cfg_normLogSecs   - normal interval between log entries (def: 10)
      cfg_maxLogSecs    - max log interval when stationary (def: 60)
-     cfg_fileFlushSecs - interval between flushng dirty buffers (def: 60)
      cfg_fileName      - the CSV file we write to (def: "/gps.csv")
      cfg_fileMaxSize   - rotated if file exceeds this (def: 262144 bytes)
 
@@ -4602,7 +4601,6 @@ void ft_gpslog (S_thread_entry *p)
   static thread_local double cfg_minDistMeters = 12.0 ;
   static thread_local int cfg_normLogSecs = 10 ;
   static thread_local int cfg_maxLogSecs = 60 ;
-  static thread_local int cfg_fileFlushSecs = 60 ;
   static thread_local int cfg_fileMaxSize = 262144 ;
   static thread_local char cfg_fileName[BUF_SIZE] ;
 
@@ -4628,6 +4626,8 @@ void ft_gpslog (S_thread_entry *p)
   } ;
   typedef struct ring_entry_t S_RingEntry ;
   static thread_local S_RingEntry *ring_buffer = NULL ; // the ring buffer
+
+  #define MAX_RING_BUFFER_ELEMENTS 200 // protect against crazy big malloc()
 
   /* a macro to check if we're told to terminate, make sure we free(). */
 
@@ -4656,8 +4656,7 @@ void ft_gpslog (S_thread_entry *p)
   if (p->num_args != 1)
   {
     strcpy (p->msg, "FATAL! Expecting 1x argument") ;
-    p->state = THREAD_STOPPED ;
-    return ;
+    p->state = THREAD_STOPPED ; return ;
   }
 
   if (p->loops == 0)
@@ -4677,10 +4676,14 @@ void ft_gpslog (S_thread_entry *p)
     p->results[2].data[0] = "\"moving\"" ;
 
     p->results[3].num_tags = 1 ;
-    p->results[3].meta[0] = "files" ;
-    p->results[3].data[0] = "\"rotated\"" ;
+    p->results[3].meta[0] = "entries" ;
+    p->results[3].data[0] = "\"stationary\"" ;
 
-    p->num_int_results = 4 ;
+    p->results[4].num_tags = 1 ;
+    p->results[4].meta[0] = "files" ;
+    p->results[4].data[0] = "\"rotated\"" ;
+
+    p->num_int_results = 5 ;
 
     /* parse our config file, load configuration into thread_local vars */
 
@@ -4727,8 +4730,6 @@ void ft_gpslog (S_thread_entry *p)
                 cfg_normLogSecs = atoi (value) ;
               if (strcmp (key, "cfg_maxLogSecs") == 0)
                 cfg_maxLogSecs = atoi (value) ;
-              if (strcmp (key, "cfg_fileFlushSecs") == 0)
-                cfg_fileFlushSecs = atoi (value) ;
               if (strcmp (key, "cfg_fileMaxSize") == 0)
                 cfg_fileMaxSize = atoi (value) ;
               if (strcmp (key, "cfg_fileName") == 0)
@@ -4737,45 +4738,67 @@ void ft_gpslog (S_thread_entry *p)
             else
             {
               strcpy (p->msg, "FATAL! Missing value in config") ;
-              p->state = THREAD_STOPPED ;
-              return ;
+              p->state = THREAD_STOPPED ; return ;
             }
           }
           else
           {
             strcpy (p->msg, "FATAL! Invalid line in config") ;
-            p->state = THREAD_STOPPED ;
-            return ;
+            p->state = THREAD_STOPPED ; return ;
           }
         }
         else
           break ;
       }
       f.close () ;
+
+      /* do some sanity check on our configuration to spot obvious mistakes */
+
+      char *fault = NULL ;
+      if (cfg_minSatsUsed < 1)
+        fault = "cfg_minSatsUsed cannot be less than 1" ;
+      if (strlen(cfg_gpsThread) < 1)
+        fault = "cfg_gpsThread cannot be empty" ;
+      if (cfg_normLogSecs < 1)
+        fault = "cfg_normLogSecs cannot be less than 1" ;
+      if (cfg_maxLogSecs < cfg_normLogSecs)
+        fault = "cfg_maxLogSecs cannot be less than cfg_normLogSecs" ;
+      if (strlen(cfg_fileName) < 1)
+        fault = "cfg_fileName cannot be empty" ;
+
+      if (fault)
+      {
+        strcpy (p->msg, fault) ;
+        p->state = THREAD_STOPPED ; return ;
+      }
     }
     else
     {
       strcpy (p->msg, "FATAL! Cannot read configuration") ;
-      p->state = THREAD_STOPPED ;
-      return ;
+      p->state = THREAD_STOPPED ; return ;
     }
 
     /* calculate the size of our ring buffer and allocate memory */
 
-    ring_entries = (cfg_fileFlushSecs / cfg_normLogSecs) + 1 ;
+    ring_entries = (cfg_maxLogSecs / cfg_normLogSecs) + 1 ;
     size_t sz = ring_entries * sizeof(S_RingEntry) ;
+    if (sz > MAX_RING_BUFFER_ELEMENTS)
+    {
+      snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
+                "FATAL! ring_buffer sz %d exceeds %d",
+                 sz, MAX_RING_BUFFER_ELEMENTS) ;
+      p->state = THREAD_STOPPED ; return ;
+    }
     ring_buffer = (S_RingEntry*) malloc (sz) ;
     if (ring_buffer == NULL)
     {
       snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
                 "FATAL! ring_buffer malloc(%d) failed", sz) ;
-      p->state = THREAD_STOPPED ;
-      return ;
+      p->state = THREAD_STOPPED ; return ;
     }
 
     p->results[0].i_value = sz ;
     last_run = now ;
-
   }
 
   /*
@@ -4886,6 +4909,9 @@ void ft_gpslog (S_thread_entry *p)
     ring_buffer[ring_pos].dilution = r_ptr[IDX_POS_DIL].f_value ;
     ring_pos++ ;
     last_update = now ;
+
+    if (we_moved == 0)
+      p->results[3].i_value++ ;
   }
 
   /*
@@ -4902,8 +4928,7 @@ void ft_gpslog (S_thread_entry *p)
                 "FATAL! Cannot open %s for writing", cfg_fileName) ;
       free (ring_buffer) ;
       ring_buffer = NULL ;
-      p->state = THREAD_STOPPED ;
-      return ;
+      p->state = THREAD_STOPPED ; return ;
     }
     if ((f.size() < 1) &&
         (f.print ("time,latitude,longitude,elevation,dilution\n") < 1))
@@ -4913,8 +4938,7 @@ void ft_gpslog (S_thread_entry *p)
       free (ring_buffer) ;
       ring_buffer = NULL ;
       f.close () ;
-      p->state = THREAD_STOPPED ;
-      return ;
+      p->state = THREAD_STOPPED ; return ;
     }
 
     char line[BUF_SIZE] ;
@@ -4953,7 +4977,7 @@ void ft_gpslog (S_thread_entry *p)
         SPIFFS.remove (dst_name) ;
       }
       SPIFFS.rename (cfg_fileName, dst_name) ;
-      p->results[3].i_value++ ;
+      p->results[4].i_value++ ;
     }
   }
 
