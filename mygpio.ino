@@ -4781,14 +4781,14 @@ void ft_gpslog (S_thread_entry *p)
     /* calculate the size of our ring buffer and allocate memory */
 
     ring_entries = (cfg_maxLogSecs / cfg_normLogSecs) + 1 ;
-    size_t sz = ring_entries * sizeof(S_RingEntry) ;
-    if (sz > MAX_RING_BUFFER_ELEMENTS)
+    if (ring_entries > MAX_RING_BUFFER_ELEMENTS)
     {
       snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
                 "FATAL! ring_buffer sz %d exceeds %d",
-                 sz, MAX_RING_BUFFER_ELEMENTS) ;
+                 ring_entries, MAX_RING_BUFFER_ELEMENTS) ;
       p->state = THREAD_STOPPED ; return ;
     }
+    size_t sz = ring_entries * sizeof(S_RingEntry) ;
     ring_buffer = (S_RingEntry*) malloc (sz) ;
     if (ring_buffer == NULL)
     {
