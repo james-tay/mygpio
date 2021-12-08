@@ -3165,6 +3165,16 @@ void ft_dht22 (S_thread_entry *p)
   #define DHT22_POWER_ON_DELAY_MS 800
   #define DHT22_RETRY_DELAY_MS 50
 
+  /*
+     keep track of previous temperature & humidity. If readings change too
+     drastically, re-read to confirm them.
+  */
+
+  static thread_local float prev_t=0.0, prev_h=0.0 ;
+
+  #define DHT22_MAX_TEMPERATURE_DELTA 5.0
+  #define DHT22_MAX_HUMIDITY_DELTA 20.0
+
   /* determine our parameters from "in_args" */
 
   if (p->num_args != 3)
@@ -3181,6 +3191,9 @@ void ft_dht22 (S_thread_entry *p)
     p->results[1].num_tags = 1 ;
     p->results[1].meta[0] = "measurement" ;
     p->results[1].data[0] = "\"humidity\"" ;
+    p->results[2].num_tags = 1 ;
+    p->results[2].meta[0] = "readings" ;
+    p->results[2].data[0] = "\"abnormal\"" ;
   }
 
   int delay_ms = atoi (p->in_args[0]) ;
@@ -3215,9 +3228,32 @@ void ft_dht22 (S_thread_entry *p)
 
     if (result)
     {
-      sprintf (p->msg, "polled in %dms", millis()-start_time) ;
-      success = 1 ;
-      break ;
+      if (p->loops == 0)
+      {
+        prev_t = temperature ;
+        prev_h = humidity ;
+        sprintf (p->msg, "polled in %dms", millis()-start_time) ;
+        success = 1 ;
+        break ;
+      }
+      else
+      {
+        /* check if readings are within an acceptable delta */
+
+        if ((fabsf(temperature - prev_t) < DHT22_MAX_TEMPERATURE_DELTA) ||
+            (fabsf(humidity - prev_h) < DHT22_MAX_HUMIDITY_DELTA))
+          success = 1 ;
+        else
+          p->results[2].f_value = p->results[2].f_value + 1 ;
+
+        prev_t = temperature ;
+        prev_h = humidity ;
+        if (success)
+        {
+          sprintf (p->msg, "polled in %dms", millis()-start_time) ;
+          break ;
+        }
+      }
     }
     delay (DHT22_RETRY_DELAY_MS) ;
   }
@@ -3235,7 +3271,7 @@ void ft_dht22 (S_thread_entry *p)
   {
     p->results[0].f_value = temperature ;
     p->results[1].f_value = humidity ;
-    p->num_float_results = 2 ;
+    p->num_float_results = 3 ;
   }
   else
   {
