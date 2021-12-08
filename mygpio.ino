@@ -4567,11 +4567,11 @@ void ft_gpsmon (S_thread_entry *p)
    a CSV, with the first line containing the heading, followed by one or more
    data rows. The following configuration determines the data logging behavior.
 
-     cfg_gpsThread     - the name of the ft_gpsmon() thread
+     cfg_gpsThread     - the name of the ft_gpsmon() thread (MANDATORY)
      cfg_minDistMeters - minimum meters moved to trigger logging (def: 12.0)
      cfg_normLogSecs   - normal interval between log entries (def: 10)
      cfg_maxLogSecs    - max log interval when stationary (def: 60)
-     cfg_fileName      - the CSV file we write to (def: "/gps.csv")
+     cfg_fileName      - the CSV file we write to (def: "/gpslog.csv")
      cfg_fileMaxSize   - rotated if file exceeds this (def: 262144 bytes)
 
    Each entry written to "cfg_fileName" looks like,
@@ -4688,7 +4688,7 @@ void ft_gpslog (S_thread_entry *p)
     /* parse our config file, load configuration into thread_local vars */
 
     strcpy (cfg_gpsThread, "") ;
-    strcpy (cfg_fileName, "/gps.csv") ;
+    strcpy (cfg_fileName, "/gpslog.csv") ;
 
     File f = SPIFFS.open (p->in_args[0], "r") ;
     if (f)
