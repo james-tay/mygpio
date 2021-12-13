@@ -3164,6 +3164,8 @@ void ft_dht22 (S_thread_entry *p)
 {
   #define DHT22_POWER_ON_DELAY_MS 800
   #define DHT22_RETRY_DELAY_MS 50
+  #define DHT22_MAX_TEMPERATURE 140.0     // reject readings above this
+  #define DHT22_MIN_TEMPERATURE -48.0     // reject readings under this
 
   /*
      keep track of previous temperature & humidity. If readings change too
@@ -3238,10 +3240,15 @@ void ft_dht22 (S_thread_entry *p)
       }
       else
       {
-        /* check if readings are within an acceptable delta */
+        /*
+           check if readings are within an acceptable delta and are not
+           unreasonably high/low.
+        */
 
-        if ((fabsf(temperature - prev_t) < DHT22_MAX_TEMPERATURE_DELTA) ||
-            (fabsf(humidity - prev_h) < DHT22_MAX_HUMIDITY_DELTA))
+        if (((fabsf(temperature - prev_t) < DHT22_MAX_TEMPERATURE_DELTA) ||
+             (fabsf(humidity - prev_h) < DHT22_MAX_HUMIDITY_DELTA)) &&
+           (temperature < DHT22_MAX_TEMPERATURE) &&
+           (temperature > DHT22_MIN_TEMPERATURE))
           success = 1 ;
         else
           p->results[2].f_value = p->results[2].f_value + 1 ;
