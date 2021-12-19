@@ -102,3 +102,37 @@ for example,
 % curl http://esp32.example.com/v1?cmd=wifi+status
 ```
 
+## MQTT Setup (optional)
+
+While much of normal operation can occur over the REST interface, "mygpio" can
+also interact over MQTT. This is especially useful to capture short and
+transient events, like button presses or analog values crossing a threshold.
+Like any MQTT client, we need to specify some configuration for this to work.
+Before configuring MQTT, prepare the following information :
+
+| Filename | Description |
+| --- | --- |
+| /hostname | The name of our ESP32 (short name, not FQDN) |
+| /mqtt.cfg | MQTT server hostname, port, username and password |
+| /mqtt.sub | Listen for commands on this topic |
+| /mqtt.pub | Topic to publish sensor events, and topic for command response |
+
+The hostname of our ESP32 is always appended at the end of topics configured
+for publish and subscribe. For example, let's say our MQTT setup is as follows,
+
+- our ESP32's FQDN is "porch.example.com", thus its shortname is "porch"
+- we have an MQTT server called "mqtt.example.com", listening on port 1883
+- to connect to the MQTT server, our username is "bob", password is "alice"
+- we send commands to our ESP32 by publishing to "myhome/command/porch"
+- the ESP32 publishes its responses to the topic "myhome/response/porch"
+- sensor events on our ESP32 are published to the topic "myhome/sensor/porch"
+
+The following commands create the config files for the above setup.
+
+```
+curl http://porch.example.com/v1?cmd=fs+write+/hostname+porch
+curl http://porch.example.com/v1?cmd=fs+write+/mqtt.cfg+mqtt.example.com,1883,bob,alice
+curl http://porch.example.com/v1?cmd=fs+write+/mqtt.sub+myhome/command
+curl http://porch.example.com/v1?cmd=fs+write+/mqtt.pub+myhome/sensors,myhome/response
+```
+
