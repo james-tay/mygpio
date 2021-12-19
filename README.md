@@ -145,11 +145,11 @@ curl http://porch.example.com/v1?cmd=reload
 ## Boot up sequence
 
 After a reboot, "mygpio" will attempt to load basic configuration into memory.
-If present, they includes,
+If present, this includes,
 
-- our hostname
-- MQTT configuration
-- wifi SSID and password
+- our hostname (ie, ``/hostname``)
+- MQTT configuration (ie, ``/mqtt.cfg``, ``/mqtt.pub`` and ``/mqtt.sub``)
+- wifi SSID and password (ie, ``/wifi.ssid`` and ``/wifi.pw``)
 
 It will then scan for its wifi SSID and connect to the AP with the strongest
 signal. Note that MQTT (even if configured) will be in a disconnected state.
