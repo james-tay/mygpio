@@ -11,7 +11,7 @@ and eventually becoming an ESP32-only tool.
 The software has since evolved to doing much more than setting GPIO pins
 high and low. Here is a summary of what it can do nowadays.
 
-- read analog values
+- read analog values (from 0v to 3.3v)
 - read capacitive touch pins
 - read commonly used sensors like,
   - accelerometer (ADXL335)
@@ -39,7 +39,8 @@ Other features include,
 - publish events to an MQTT topic (eg, button press on a GPIO pin)
 - receive commands by subscribing to an MQTT topic (eg, set GPIO5 high, etc)
 - files on flash can be uploaded/downloaded over a TCP socket
-- Over-The-Air (OTA) firmware upgrades from an HTTP webserver
+- Over-The-Air (OTA) firmware upgrades off an HTTP webserver (won't affect
+  existing config files)
 - automatically (re)connects to the wifi AP with the strongest signal
 - hibernate in a low power mode for a certain duration
 
@@ -114,8 +115,8 @@ The following configuration files are used.
 | --- | --- |
 | /hostname | The name of our ESP32 (short name, not FQDN) |
 | /mqtt.cfg | MQTT server hostname, port, username and password |
-| /mqtt.sub | Listen for commands on this topic |
-| /mqtt.pub | Topic to publish sensor events, and topic for command response |
+| /mqtt.sub | Topic prefix for commands meant for us to execute |
+| /mqtt.pub | Topic prefix to publish sensor events, and topic prefix for command response |
 
 The hostname of our ESP32 is always appended at the end of topics configured
 for publish and subscribe. For example, let's say our MQTT setup is as follows,
@@ -125,7 +126,7 @@ for publish and subscribe. For example, let's say our MQTT setup is as follows,
 - to connect to the MQTT server, our username is "bob", password is "alice"
 - we send commands to our ESP32 by publishing to "myhome/command/porch"
 - the ESP32 publishes its responses to the topic "myhome/response/porch"
-- sensor events on our ESP32 are published to the topic "myhome/sensor/porch"
+- sensor events (eg, thread named "button1") on our ESP32 are published to the topic "myhome/sensors/porch/button1"
 
 The following commands create the config files for the above setup.
 
@@ -159,6 +160,10 @@ After running for 60 seconds (and every 60 seconds after that), it runs
 - if MQTT is disconnected, try to connect
 - if we're up for exactly 1 minute, check if the file ``/autoexec.cfg``
   exists, and start background threads listed in this file.
+
+ESP32s typically have a built-in user controlled LED. Every 5 seconds, a
+single blink indicates wifi is connected, while 2x blinks indicate wifi is
+disconnected.
 
 ## Setting up Threads
 
