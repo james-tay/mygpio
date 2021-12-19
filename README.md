@@ -8,6 +8,40 @@ commandline. "mygpio" started life on an ESP8266 as a similar tool to
 easily set or get GPIO pin hi/lo states, eventually moving up to the ESP32
 and eventually becoming an ESP32-only tool.
 
+The software has since evolved to doing much more than setting GPIO pins
+high and low. Here is a summary of what it can do nowadays.
+
+- read analog values
+- read capacitive touch pins
+- read commonly used sensors like,
+  - accelerometer (ADXL335)
+  - barometric pressure (BMP180)
+  - temperature (DS18B20)
+  - humidity (DHT22)
+  - ultrasonic range finger (HC-SR04)
+- generate PWM tones
+- display text on an I2C LCD
+
+In addition, "mygpio" can schedule multiple threads to run simultaneously,
+including,
+
+- read a GPS receiver (BN-220)
+- log GPS position to a file
+- read from an I2S microphone (SPH0645) and stream via UDP
+- receive raw audio via UDP and play it on an I2S audio amplifier (MAX98357)
+- activate relays for a specific number of seconds
+- connect TTL serial devices to a TCP port
+
+Other features include,
+
+- a REST interface (just use curl)
+- expose internal runtime metrics as well sensor metrics to prometheus
+- publish events to an MQTT topic (eg, button press on a GPIO pin)
+- files on flash can be uploaded/downloaded over a TCP socket
+- Over-The-Air (OTA) firmware upgrades from an HTTP webserver
+- automatically connects to the wifi AP with the strongest signal
+- power down to a low power mode for a certain duration
+
 ## Initial Setup
 
 "mygpio" listens on the serial port (ie, USB serial port), and waits for
