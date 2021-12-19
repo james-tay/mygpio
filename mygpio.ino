@@ -5446,13 +5446,14 @@ void f_action (char **tokens)
             "esp32 thread_stop <name>\r\n"
 
             "\r\n[Config Files]\r\n"
-            "/hostname   <hostname>\r\n"
-            "/mqtt.cfg   <host>,<port>,<user>,<pw>\r\n"
-            "/mqtt.pub   <sensor topic pub prefix>,<cmd topic pub prefix>\r\n"
-            "/mqtt.sub   <cmd topic prefix>\r\n"
-            "/mqtt.tags  <meta=\"value\",...>\r\n"
-            "/wifi.ssid  <ssid>\r\n"
-            "/wifi.pw    <pw>\r\n") ;
+            "/autoexec.cfg <thread1>[,<threadN>,...]\r\n"
+            "/hostname     <hostname>\r\n"
+            "/mqtt.cfg     <host>,<port>,<user>,<pw>\r\n"
+            "/mqtt.pub     <sensor topic pub prefix>,<cmd topic pub prefix>\r\n"
+            "/mqtt.sub     <cmd topic prefix>\r\n"
+            "/mqtt.tags    <meta=\"value\",...>\r\n"
+            "/wifi.ssid    <ssid>\r\n"
+            "/wifi.pw      <pw>\r\n") ;
   }
   else
   if ((strcmp(tokens[0], "debug") == 0) && (tokens[1] != NULL))

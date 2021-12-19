@@ -111,7 +111,7 @@ transient events, like button presses or analog values crossing a threshold.
 Like any MQTT client, we need to specify some configuration for this to work.
 The following configuration files are used.
 
-| Filename | Description |
+| Filename  | Description  |
 | --- | --- |
 | /hostname | The name of our ESP32 (short name, not FQDN) |
 | /mqtt.cfg | MQTT server hostname, port, username and password |
@@ -243,4 +243,15 @@ sensor_environment{location="Office",model="dht22",measurement="temperature"} 22
 sensor_environment{location="Office",model="dht22",measurement="humidity"} 47.099998
 sensor_environment{location="Office",model="dht22",readings="abnormal"} 0.000000
 ```
+
+Finally, to have this thread automatically start on boot (technically 1 minute
+after boot),
+
+```
+% curl http://porch.example.com/v1?cmd=fs+write+/autoexec.cfg+env1
+```
+
+Multiple threads can be automatically started on boot using this method.
+Simply provide the thread names as a comma separated list in the 
+``/autoexec.cfg`` file.
 
