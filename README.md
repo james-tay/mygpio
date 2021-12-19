@@ -161,6 +161,10 @@ After running for 60 seconds (and every 60 seconds after that), it runs
 - if we're up for exactly 1 minute, check if the file ``/autoexec.cfg``
   exists, and start background threads listed in this file.
 
+A bad configuration or misbehaving thread may lead to a crash. To reduce the
+effects of crash looping, we delay all thread creation for 1 minute so that
+we have a sufficient window to update or correct configuration files.
+
 ESP32s typically have a built-in user controlled LED. Every 5 seconds, a
 single blink indicates wifi is connected, while 2x blinks indicate wifi is
 disconnected.
