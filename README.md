@@ -130,16 +130,16 @@ for publish and subscribe. For example, let's say our MQTT setup is as follows,
 The following commands create the config files for the above setup.
 
 ```
-curl http://porch.example.com/v1?cmd=fs+write+/hostname+porch
-curl http://porch.example.com/v1?cmd=fs+write+/mqtt.cfg+mqtt.example.com,1883,bob,alice
-curl http://porch.example.com/v1?cmd=fs+write+/mqtt.sub+myhome/command
-curl http://porch.example.com/v1?cmd=fs+write+/mqtt.pub+myhome/sensors,myhome/response
+% curl http://porch.example.com/v1?cmd=fs+write+/hostname+porch
+% curl http://porch.example.com/v1?cmd=fs+write+/mqtt.cfg+mqtt.example.com,1883,bob,alice
+% curl http://porch.example.com/v1?cmd=fs+write+/mqtt.sub+myhome/command
+% curl http://porch.example.com/v1?cmd=fs+write+/mqtt.pub+myhome/sensors,myhome/response
 ```
 
 When the above configuration is completed, reboot the ESP32,
 
 ```
-curl http://porch.example.com/v1?cmd=reload
+% curl http://porch.example.com/v1?cmd=reload
 ```
 
 ## Boot up sequence
@@ -159,4 +159,62 @@ After running for 60 seconds (and every 60 seconds after that), it runs
 - if MQTT is disconnected, try to connect
 - if we're up for exactly 1 minute, check if the file ``/autoexec.cfg``
   exists, and start background threads listed in this file.
+
+## Setting up Threads
+
+"mygpio" can run multiple threads in the background. The most common use case
+is to monitor sensors (analog or digital), stream audio, etc. Typically, we
+want to expose sensor metrics for prometheus to scrape. Thus, a thread needs
+to be started up with some configuration and optionally metadata tags that
+are presented along with metrics for prometheus. To obtain a list of the
+various threads "mygpio" can run, together with their arguments,
+
+```
+% curl http://porch.example.com/v1?cmd=esp32+thread_help
+```
+
+Each thread we run must have a unique name. In the following example, we
+have DHT22 (temperature and humidity) sensor with its data pin connected to
+the ESP32's GPIO17, and its power supply pin connected to GPIO16. We want
+our thread to poll the sensor every 60000 milliseconds. Thus we create a
+config file in the format ``/thread-<name>``. In this example, our thread
+will be named "env1",
+
+```
+% curl http://porch.example.com/v1?cmd=fs+write+/thread-env1+ft_dht22,60000,17,16
+```
+
+Once this thread config file is created, we can start the thread manually,
+
+```
+% curl http://porch.example.com/v1?cmd=esp32+thread_start+env1
+
+```
+
+We can now check that the thread is running, eg
+
+```
+% curl http://porch.example.com/v1?cmd=esp32+thread_list
+
+```
+
+If all goes well, we can scrape our ESP32, which should include metrics from
+our DHT22,
+
+```
+% curl http://porch.example.com/metrics
+...
+env1{measurement="temperature"} 22.100000
+env1{measurement="humidity"} 49.000000
+env1{readings="abnormal"} 0.000000
+```
+
+Notice that the name of the metric is our thread name. While this is sufficient
+to expose simple time series data to prometheus, we may have a scenario where
+many sensors are connected to a single ESP32, or we may have multiple ESP32s
+with many DHT22 sensors attached. In this scenario, we want to expose all
+the sensor metrics with some addition metadata tags to help us identify what
+the sensor is reading.
+
+
 
