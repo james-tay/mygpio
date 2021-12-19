@@ -174,7 +174,7 @@ various threads "mygpio" can run, together with their arguments,
 ```
 
 Each thread we run must have a unique name. In the following example, we
-have DHT22 (temperature and humidity) sensor with its data pin connected to
+have a DHT22 (temperature and humidity) sensor with its data pin connected to
 the ESP32's GPIO17, and its power supply pin connected to GPIO16. We want
 our thread to poll the sensor every 60000 milliseconds. Thus we create a
 config file in the format ``/thread-<name>``. In this example, our thread
@@ -188,14 +188,12 @@ Once this thread config file is created, we can start the thread manually,
 
 ```
 % curl http://porch.example.com/v1?cmd=esp32+thread_start+env1
-
 ```
 
 We can now check that the thread is running, eg
 
 ```
 % curl http://porch.example.com/v1?cmd=esp32+thread_list
-
 ```
 
 If all goes well, we can scrape our ESP32, which should include metrics from
@@ -214,7 +212,30 @@ to expose simple time series data to prometheus, we may have a scenario where
 many sensors are connected to a single ESP32, or we may have multiple ESP32s
 with many DHT22 sensors attached. In this scenario, we want to expose all
 the sensor metrics with some addition metadata tags to help us identify what
-the sensor is reading.
+the sensor is reading. To do this, each thread has a tags config file in the
+format ``/tags-<name>``. In the following example, we want our DHT22's metrics
+exposed as "sensor_environment". We also tag the location and model of the
+sensor (notice that we escape the double-quotes).
 
+```
+% curl http://porch.example.com/v1?cmd=fs+write+/tags-env1+sensor_environment,location=\"Porch\",model=\"dht22\"
+```
 
+Next, restart the "env1" thread,
+
+```
+% curl http://porch.example.com/v1?cmd=esp32+thread_stop+env1
+% curl http://porch.example.com/v1?cmd=esp32+thread_start+env1
+```
+
+Now, when we try to scrape, we see the thread's metrics updated with the
+additional metadata tags we've configured,
+
+```
+% curl http://porch.example.com/metrics
+...
+sensor_environment{location="Office",model="dht22",measurement="temperature"} 22.299999
+sensor_environment{location="Office",model="dht22",measurement="humidity"} 47.099998
+sensor_environment{location="Office",model="dht22",readings="abnormal"} 0.000000
+```
 
