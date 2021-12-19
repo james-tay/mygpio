@@ -108,7 +108,7 @@ While much of normal operation can occur over the REST interface, "mygpio" can
 also interact over MQTT. This is especially useful to capture short and
 transient events, like button presses or analog values crossing a threshold.
 Like any MQTT client, we need to specify some configuration for this to work.
-Before configuring MQTT, prepare the following information :
+The following configuration files are used.
 
 | Filename | Description |
 | --- | --- |
@@ -135,4 +135,28 @@ curl http://porch.example.com/v1?cmd=fs+write+/mqtt.cfg+mqtt.example.com,1883,bo
 curl http://porch.example.com/v1?cmd=fs+write+/mqtt.sub+myhome/command
 curl http://porch.example.com/v1?cmd=fs+write+/mqtt.pub+myhome/sensors,myhome/response
 ```
+
+When the above configuration is completed, reboot the ESP32,
+
+```
+curl http://porch.example.com/v1?cmd=reload
+```
+
+## Boot up sequence
+
+After a reboot, "mygpio" will attempt to load basic configuration into memory.
+If present, they includes,
+
+- our hostname
+- MQTT configuration
+- wifi SSID and password
+
+It will then scan for its wifi SSID and connect to the AP with the strongest
+signal. Note that MQTT (even if configured) will be in a disconnected state.
+After running for 60 seconds (and every 60 seconds after that), it runs 
+
+- if wifi is disconnected, scan for APs and try to reconnect
+- if MQTT is disconnected, try to connect
+- if we're up for exactly 1 minute, check if the file ``/autoexec.cfg``
+  exists, and start background threads listed in this file.
 
