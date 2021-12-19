@@ -18,8 +18,8 @@ high and low. Here is a summary of what it can do nowadays.
   - barometric pressure (BMP180)
   - temperature (DS18B20)
   - humidity (DHT22)
-  - ultrasonic range finger (HC-SR04)
-- generate PWM tones
+  - ultrasonic range finder (HC-SR04)
+- play PWM tones on a speaker
 - display text on an I2C LCD
 
 In addition, "mygpio" can schedule multiple threads to run simultaneously,
@@ -37,10 +37,11 @@ Other features include,
 - a REST interface (just use curl)
 - expose internal runtime metrics as well sensor metrics to prometheus
 - publish events to an MQTT topic (eg, button press on a GPIO pin)
+- receive commands by subscribing to an MQTT topic (eg, set GPIO5 high, etc)
 - files on flash can be uploaded/downloaded over a TCP socket
 - Over-The-Air (OTA) firmware upgrades from an HTTP webserver
-- automatically connects to the wifi AP with the strongest signal
-- power down to a low power mode for a certain duration
+- automatically (re)connects to the wifi AP with the strongest signal
+- hibernate in a low power mode for a certain duration
 
 ## Initial Setup
 
@@ -79,5 +80,25 @@ connect to your wifi network.
 fs write /wifi.ssid sunshine
 fs write /wifi.pw moonlight
 reload
+```
+
+Once the ESP32 reboots and connects to your wifi network, you can access all
+the commands (on the serial console) over HTTP in the format,
+
+```
+% curl http://<esp32_address>/v1?cmd=<args...>
+```
+
+For example,
+
+```
+% curl http://esp32.example.com/v1?cmd=uptime
+```
+
+Some commands may have multiple arguments, separate arguments with a ``+``,
+for example,
+
+```
+% curl http://esp32.example.com/v1?cmd=wifi+status
 ```
 
