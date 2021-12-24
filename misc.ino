@@ -68,3 +68,93 @@ int f_blink (int num)
   return (duration) ;
 }
 
+/*
+   this is our cron-like function whose role is to make sure we stay connected
+   to wifi and mqtt (optional)
+*/
+
+void f_cron ()
+{
+  if (G_debug)
+    Serial.println ("DEBUG: f_cron()") ;
+
+  /*
+     Under certain circumstances, we want to try auto-reconnecting our wifi,
+     even though our wifi state is WL_CONNECTED. In particular,
+       a) if our rssi is 0 dBm (ie, not connected)
+       b) our rssi is poorer than RSSI_LOW_THRES (eg, -72dBm)
+       b) our mqtt state is MQTT_CONNECTION_LOST
+  */
+
+  int wifi_reconnect = 0 ;
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    if ((WiFi.RSSI() == 0) || (WiFi.RSSI() < RSSI_LOW_THRES))
+      wifi_reconnect = 1 ;
+    if (G_psClient.state() == MQTT_CONNECTION_LOST)
+      wifi_reconnect = 1 ;
+  }
+
+  /* If wifi isn't connected, yet we have SSID & credentials, try reconnect */
+
+  if ((WiFi.status() != WL_CONNECTED) &&
+      (strlen(cfg_wifi_pw) > 0) &&
+      (strlen(cfg_wifi_ssid) > 0))
+    wifi_reconnect = 1 ;
+
+  if (wifi_reconnect)
+  {
+    if (G_debug)
+      Serial.println ("DEBUG: f_cron() calling f_wifi(connect)") ;
+
+    char *args[3] ;
+    args[0] = "wifi" ;
+    args[1] = "connect" ;
+    args[2] = NULL ;
+    f_wifi (args) ;
+    G_Metrics->wifiReconnects++ ;
+  }
+
+  /* If MQTT is not connected, try reconnect */
+
+  if ((G_psClient.connected() == false) ||
+      (G_psClient.state() != MQTT_CONNECTED))
+  {
+    if (G_debug)
+      Serial.println ("DEBUG: f_cron() calling f_mqtt_connect()") ;
+    f_mqtt_connect () ;
+  }
+
+  /* If this is our first run, check if AUTOEXEC_FILE exists */
+
+  if (G_Metrics->cronRuns == 0)
+  {
+    File f = SPIFFS.open (AUTOEXEC_FILE, "r") ;
+    if (f != NULL)
+    {
+      char buf[BUF_SIZE], *idx=buf ;
+      int amt = f.readBytes (buf, BUF_SIZE-1) ;
+      if (amt > 0)
+      {
+        buf[amt] = 0 ;
+        char *p = strtok_r (buf, ",", &idx) ;
+        while (p != NULL)
+        {
+          G_reply_buf[0] = 0 ;
+          f_thread_create (p) ;
+          delay (50) ;
+          if (strlen(G_reply_buf) > 0)
+          {
+            Serial.print ("NOTICE: ") ;
+            Serial.print (G_reply_buf) ;
+          }
+          p = strtok_r (NULL, ",", &idx) ;
+        }
+      }
+      f.close () ;
+    }
+  }
+  G_Metrics->cronRuns++ ;
+}
+
