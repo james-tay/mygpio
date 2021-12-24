@@ -48,3 +48,23 @@ int f_i2c_readUShort (int device, unsigned char addr, unsigned short *result)
   return (1) ;
 }
 
+int f_blink (int num)
+{
+  #define BLINK_DURATION 10     // just long enough to be noticed
+  #define PAUSE_DURATION 300    // long enough for a human to count blinks
+
+  int duration = 0 ;
+  pinMode (LED_BUILTIN, OUTPUT) ;
+  for (int i=0 ; i < num ; i++)
+  {
+    digitalWrite (LED_BUILTIN, BLINK_ON) ;
+    delay (BLINK_DURATION) ;
+    duration = duration + BLINK_DURATION ;
+    digitalWrite (LED_BUILTIN, BLINK_OFF) ;
+    if (i < num-1)
+      delay (PAUSE_DURATION) ;
+    duration = duration + PAUSE_DURATION ;
+  }
+  return (duration) ;
+}
+
