@@ -44,6 +44,33 @@ Other features include,
 - automatically (re)connects to the wifi AP with the strongest signal
 - hibernate in a low power mode for a certain duration
 
+## Build and Compile
+
+Make sure you have the [arduino-cli](https://www.arduino.cc/pro/cli) installed.
+Next, we need to be able to build for the ESP32 platform, thus,
+
+```
+% URL="https://dl.espressif.com/dl/package_esp32_index.json"
+% arduino-cli core update-index --additional-urls $URL
+% arduino-cli core install esp32:esp32 --additional-urls $URL
+```
+
+Install the external libraries we depend on,
+
+```
+% arduino-cli lib install ArduinoOTA
+% arduino-cli lib install PubSubClient
+% arduino-cli lib install DallasTemperature
+% arduino-cli lib install "LiquidCrystal I2C"
+```
+
+At this point we should be ready to compile and flash an ESP32,
+
+```
+% arduino-cli compile -b esp32:esp32:esp32 .
+% arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32 .
+```
+
 ## Initial Setup
 
 "mygpio" listens on the serial port (ie, USB serial port), and waits for
