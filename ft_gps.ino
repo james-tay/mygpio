@@ -327,6 +327,32 @@ void ft_gpsmon (S_thread_entry *p)
    expected to be in the format,
 
      <key> <value>
+
+   Additional sensor data can optionally be captured together with each GPS
+   position entry. This is done by searching for <threadName> and then
+   acquiring the value of <resultIdx>. As an example, a light sensor accessed
+   by an ft_aread() thread is called "light1". This thread exposes 1x metric.
+   At the same time, we have an ft_hcsr04() thread called "range1" and we want
+   to capture its max distance metric. We specify,
+
+     cfg_extraMetrics light1:0,range1:2
+
+   Thus, we can acquire additional sensor metrics by specifying,
+
+     cfg_extraMetrics <threadName>:<resultIdx>[,<threadNameN>:<resultIdxN>...]
+
+   In order for each ring buffer element to accomodate extra metrics, the
+   struct{} features a Flexible Array Member (FAM), since this can only be
+   determined after parsing cfg_extraMetrics. Recall that thread results may
+   be either int or double, thus each FAM element is declared as a union.
+
+   Column names of extra metrics are generated in the format :
+
+     <threadName>_<resultIdx>
+
+   Thus in our above example, the column names will be written as,
+
+     light1_0,range1_2
 */
 
 void ft_gpslog (S_thread_entry *p)
@@ -341,6 +367,7 @@ void ft_gpslog (S_thread_entry *p)
   static thread_local int cfg_maxLogSecs = 60 ;
   static thread_local int cfg_fileMaxSize = 262144 ;
   static thread_local char cfg_fileName[BUF_SIZE] ;
+  static thread_local char cfg_extraMetrics[BUF_SIZE] ;
 
   static thread_local double cur_ele = 0.0 ;
   static thread_local double cur_lat = 0.0 ;
@@ -352,6 +379,21 @@ void ft_gpslog (S_thread_entry *p)
   static thread_local long last_run = 0 ;    // time this function last ran
   static thread_local long last_update = 0 ; // time of last ring buffer update
 
+  /* variables for tracking (optional) extra metrics */
+
+  #define MAX_EXTRA_METRICS 8
+  static thread_local int rt_xm_total = 0 ; // number of extra metrics
+  static thread_local int rt_xm_resultidx[MAX_EXTRA_METRICS] ;
+  static thread_local char *rt_xm_threadname[MAX_EXTRA_METRICS] ;
+
+  /* extra metrics, only used if user specifies "cfg_extraMetrics") */
+
+  union extra_metrics_u
+  {
+    int i_value ;
+    double f_value ;
+  } ;
+
   /* our ringer buffer */
 
   struct ring_entry_t
@@ -361,11 +403,13 @@ void ft_gpslog (S_thread_entry *p)
     double longitude ;
     double elevation ;
     double dilution ;
+    extra_metrics_u xmetrics[] ; // must be the last element
   } ;
   typedef struct ring_entry_t S_RingEntry ;
   static thread_local S_RingEntry *ring_buffer = NULL ; // the ring buffer
 
   #define MAX_RING_BUFFER_ELEMENTS 200 // protect against crazy big malloc()
+  static thread_local size_t rt_rbuf_element_sz = 0 ; // including xmetrics[]
 
   /* a macro to check if we're told to terminate, make sure we free(). */
 
@@ -426,6 +470,7 @@ void ft_gpslog (S_thread_entry *p)
     /* parse our config file, load configuration into thread_local vars */
 
     strcpy (cfg_gpsThread, "") ;
+    strcpy (cfg_extraMetrics, "") ;
     strcpy (cfg_fileName, "/gpslog.csv") ;
 
     File f = SPIFFS.open (p->in_args[0], "r") ;
@@ -472,6 +517,8 @@ void ft_gpslog (S_thread_entry *p)
                 cfg_fileMaxSize = atoi (value) ;
               if (strcmp (key, "cfg_fileName") == 0)
                 strncpy (cfg_fileName, value, BUF_SIZE) ;
+              if (strcmp (key, "cfg_extraMetrics") == 0)
+                strncpy (cfg_extraMetrics, value, BUF_SIZE) ;
             }
             else
             {
@@ -516,6 +563,43 @@ void ft_gpslog (S_thread_entry *p)
       p->state = THREAD_STOPPED ; return ;
     }
 
+    /* if cfg_extraMetrics is defined, parse it now */
+
+    if (strlen(cfg_extraMetrics) > 0)
+    {
+      char *idx=NULL, *key=NULL ;
+      key = strtok_r (cfg_extraMetrics, ",", &idx) ; // key is "<thr>:<i>"
+      while (key)
+      {
+        rt_xm_threadname[rt_xm_total] = key ;
+        rt_xm_resultidx[rt_xm_total] = -1 ;
+        for (int i=0 ; i < strlen(key) ; i++)
+          if (key[i] == ':')
+          {
+            key[i] = 0 ;
+            rt_xm_resultidx[rt_xm_total] = atoi(key+i+1) ;
+          }
+
+        /* sanity check thread name and result index */
+
+        if ((strlen(rt_xm_threadname[rt_xm_total]) < 1) ||
+            (strlen(rt_xm_threadname[rt_xm_total]) > MAX_THREAD_NAME))
+        {
+          strcpy (p->msg, "FATAL! Invalid thread name") ;
+          p->state = THREAD_STOPPED ; return ;
+        }
+        if ((rt_xm_resultidx[rt_xm_total] < 0) ||
+            (rt_xm_resultidx[rt_xm_total] >= MAX_THREAD_RESULT_VALUES))
+        {
+          strcpy (p->msg, "FATAL! Invalid result index") ;
+          p->state = THREAD_STOPPED ; return ;
+        }
+
+        rt_xm_total++ ;
+        key = strtok_r (NULL, ",", &idx) ; // move on to next token
+      }
+    }
+
     /* calculate the size of our ring buffer and allocate memory */
 
     ring_entries = (cfg_maxLogSecs / cfg_normLogSecs) + 1 ;
@@ -526,7 +610,9 @@ void ft_gpslog (S_thread_entry *p)
                  ring_entries, MAX_RING_BUFFER_ELEMENTS) ;
       p->state = THREAD_STOPPED ; return ;
     }
-    size_t sz = ring_entries * sizeof(S_RingEntry) ;
+    rt_rbuf_element_sz = sizeof (S_RingEntry) +
+                         (rt_xm_total * sizeof(extra_metrics_u)) ;
+    size_t sz = ring_entries * rt_rbuf_element_sz ;
     ring_buffer = (S_RingEntry*) malloc (sz) ;
     if (ring_buffer == NULL)
     {
