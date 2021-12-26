@@ -22,6 +22,7 @@
 #define MAX_MQTT_LEN 128              // maximum mqtt topic/message buffer
 #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
 #define MAX_SD_BACKLOG 4              // TCP listening socket backlog
+#define MAX_FILENAME 16               // maximum filename length
 #define WEB_PORT 80                   // web server listens on this port
 #define CRON_INTERVAL 60              // how often we run f_cron()
 #define RSSI_LOW_THRES -72            // less than this is consider low signal

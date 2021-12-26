@@ -42,7 +42,8 @@ void f_fs (char **tokens)
 
     /* force filenames to begin with '/' */
 
-    if ((filename[0] != '/') || (strlen(filename) == 1))
+    if ((filename[0] != '/') || (strlen(filename) == 1) ||
+        (strlen(filename) > MAX_FILENAME))
     {
       strcat (G_reply_buf, "FAULT: Invalid filename.\r\n") ;
       return ;
@@ -97,7 +98,8 @@ void f_fs (char **tokens)
     char *old_name = tokens[2] ;
     char *new_name = tokens[3] ;
 
-    if ((new_name[0] != '/') || (strlen(new_name) == 1))
+    if ((new_name[0] != '/') || (strlen(new_name) == 1) ||
+        (strlen(new_name) > MAX_FILENAME))
     {
       strcat (G_reply_buf, "FAULT: Invalid filename.\r\n") ;
       return ;
@@ -124,10 +126,18 @@ void f_file (char **tokens)
     return ;
   }
 
+  /* check that specified filename is acceptable */
+
+  char *path = tokens[3] ;
+  if ((strlen(path) == 1) || (strlen(path) > MAX_FILENAME) || (path[0] != '/'))
+  {
+    strcat (G_reply_buf, "FATAL! Invalid filename.\r\n") ;
+    return ;
+  }
+
   /* setup a listening TCP socket and expect a client to connect to it */
 
   int port = atoi (tokens[2]) ;
-  char *path = tokens[3] ;
   int listen_sd = socket (AF_INET, SOCK_STREAM, IPPROTO_IP) ;
   if (listen_sd < 0)
   {
