@@ -366,8 +366,8 @@ void ft_gpslog (S_thread_entry *p)
   static thread_local int cfg_normLogSecs = 10 ;
   static thread_local int cfg_maxLogSecs = 60 ;
   static thread_local int cfg_fileMaxSize = 262144 ;
-  static thread_local char cfg_fileName[BUF_SIZE] ;
-  static thread_local char cfg_extraMetrics[BUF_SIZE] ;
+  static thread_local char cfg_fileName[16] ;
+  static thread_local char cfg_extraMetrics[16] ;
 
   static thread_local double cur_ele = 0.0 ;
   static thread_local double cur_lat = 0.0 ;
@@ -381,7 +381,7 @@ void ft_gpslog (S_thread_entry *p)
 
   /* variables for tracking (optional) extra metrics */
 
-  #define MAX_EXTRA_METRICS 8
+  #define MAX_EXTRA_METRICS 2
   static thread_local int rt_xm_total = 0 ; // number of extra metrics
   static thread_local int rt_xm_resultidx[MAX_EXTRA_METRICS] ;
   static thread_local char *rt_xm_threadname[MAX_EXTRA_METRICS] ;
