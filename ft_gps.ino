@@ -518,9 +518,9 @@ void ft_gpslog (S_thread_entry *p)
               if (strcmp (key, "cfg_fileMaxSize") == 0)
                 cfg_fileMaxSize = atoi (value) ;
               if (strcmp (key, "cfg_fileName") == 0)
-                strncpy (cfg_fileName, value, MAX_PARM_LEN) ;
+                strncpy (cfg_fileName, value, MAX_FILENAME) ;
               if (strcmp (key, "cfg_extraMetrics") == 0)
-                strncpy (cfg_extraMetrics, value, BUF_SIZE) ;
+                strncpy (cfg_extraMetrics, value, MAX_PARM_LEN) ;
             }
             else
             {
@@ -816,7 +816,7 @@ void ft_gpslog (S_thread_entry *p)
   if (duration > 0)
   {
     snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
-              "ele_sz:%d %d ring:%d/%d sleep:%ldms",
+              "ele_sz:%d ring:%d/%d sleep:%ldms",
               rt_rbuf_element_sz, ring_pos, ring_entries, duration) ;
     last_run = last_run + (cfg_normLogSecs * 1000) ;
     while (millis() < last_run)
