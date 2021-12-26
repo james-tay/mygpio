@@ -814,7 +814,8 @@ void ft_gpslog (S_thread_entry *p)
   if (duration > 0)
   {
     snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
-              "ok, ring:%d/%d sleep:%ldms", ring_pos, ring_entries, duration) ;
+              "ele_sz:%d %d ring:%d/%d sleep:%ldms",
+              rt_rbuf_element_sz, ring_pos, ring_entries, duration) ;
     last_run = last_run + (cfg_normLogSecs * 1000) ;
     while (millis() < last_run)
     {
