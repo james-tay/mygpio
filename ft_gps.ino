@@ -390,11 +390,16 @@ void ft_gpslog (S_thread_entry *p)
 
   /* extra metrics, only used if user specifies "cfg_extraMetrics") */
 
-  union extra_metrics_u
+  struct extra_metrics_s
   {
-    int i_value ;
-    double f_value ;
+    int is_int ;        // a flag to determine if i_value or f_value is used
+    union
+    {
+      int i_value ;
+      double f_value ;
+    } ;
   } ;
+  typedef struct extra_metrics_s S_ExtraMetrics ;
 
   /* our ringer buffer */
 
@@ -405,7 +410,7 @@ void ft_gpslog (S_thread_entry *p)
     double longitude ;
     double elevation ;
     double dilution ;
-    extra_metrics_u xmetrics[] ; // must be the last element
+    S_ExtraMetrics xmetrics[] ; // must be the last element
   } ;
   typedef struct ring_entry_t S_RingEntry ;
   static thread_local S_RingEntry *ring_buffer = NULL ; // the ring buffer
@@ -613,7 +618,7 @@ void ft_gpslog (S_thread_entry *p)
       p->state = THREAD_STOPPED ; return ;
     }
     rt_rbuf_element_sz = sizeof (S_RingEntry) +
-                         (rt_xm_total * sizeof(extra_metrics_u)) ;
+                         (rt_xm_total * sizeof(S_ExtraMetrics)) ;
     size_t sz = ring_entries * rt_rbuf_element_sz ;
     ring_buffer = (S_RingEntry*) malloc (sz) ;
     if (ring_buffer == NULL)
@@ -623,7 +628,7 @@ void ft_gpslog (S_thread_entry *p)
       p->state = THREAD_STOPPED ; return ;
     }
 
-    p->results[0].i_value = sz ;
+    p->results[0].i_value = sz ; /* ring buffer size */
     last_run = now ;
   }
 
@@ -722,7 +727,7 @@ void ft_gpslog (S_thread_entry *p)
       (abs(r_ptr[IDX_LONG].f_value - cur_long) > minDegrees))
   {
     we_moved = 1 ;
-    p->results[2].i_value++ ;
+    p->results[2].i_value++ ; /* "moving" counter */
   }
 
   if (((we_moved) || (now - last_update > cfg_maxLogSecs * 1000)) &&
@@ -733,11 +738,53 @@ void ft_gpslog (S_thread_entry *p)
     ring_buffer[ring_pos].longitude = r_ptr[IDX_LONG].f_value ;
     ring_buffer[ring_pos].elevation = r_ptr[IDX_ELE].f_value ;
     ring_buffer[ring_pos].dilution = r_ptr[IDX_POS_DIL].f_value ;
-    ring_pos++ ;
-    last_update = now ;
+
+    /*
+       if there are extra metrics for us to add into ring_buffer, attempt
+       to do so now. If something went wrong, don't increment "ring_pos" or
+       "last_update", so that we retry.
+    */
+
+    if (rt_xm_total > 0)
+    {
+      int metrics_obtained = 0 ;
+      for (int xm_idx=0 ; xm_idx < rt_xm_total ; xm_idx++)
+        for (int t_idx=0 ; t_idx < MAX_THREADS ; t_idx++)
+          if (strcmp(rt_xm_threadname[xm_idx],
+              G_thread_entry[t_idx].name) == 0)
+          {
+            int res_idx = rt_xm_resultidx[xm_idx] ;
+
+            if (G_thread_entry[t_idx].num_int_results > res_idx)  // is int
+            {
+              ring_buffer[ring_pos].xmetrics[xm_idx].is_int = 1 ;
+              ring_buffer[ring_pos].xmetrics[xm_idx].i_value =
+                G_thread_entry[t_idx].results[res_idx].i_value ;
+              metrics_obtained++ ;
+            }
+            if (G_thread_entry[t_idx].num_float_results > res_idx) // is float
+            {
+              ring_buffer[ring_pos].xmetrics[xm_idx].is_int = 0 ;
+              ring_buffer[ring_pos].xmetrics[xm_idx].i_value =
+                G_thread_entry[t_idx].results[res_idx].f_value ;
+              metrics_obtained++ ;
+            }
+          }
+
+      if (metrics_obtained == rt_xm_total) // yay ! we got all extra metrics
+      {
+        ring_pos++ ;
+        last_update = now ;
+      }
+    }
+    else
+    {
+      ring_pos++ ;
+      last_update = now ;
+    }
 
     if (we_moved == 0)
-      p->results[3].i_value++ ;
+      p->results[3].i_value++ ; /* "stationary" counter */
   }
 
   /*
@@ -747,6 +794,8 @@ void ft_gpslog (S_thread_entry *p)
 
   if (ring_pos == ring_entries)
   {
+    char line[BUF_SIZE] ;
+
     File f = SPIFFS.open (cfg_fileName, "a") ;
     if (!f)
     {
@@ -756,18 +805,27 @@ void ft_gpslog (S_thread_entry *p)
       ring_buffer = NULL ;
       p->state = THREAD_STOPPED ; return ;
     }
-    if ((f.size() < 1) &&
-        (f.print ("time,latitude,longitude,elevation,dilution\n") < 1))
+    if (f.size() < 1)
     {
-      snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
-                "FATAL! Cannot write to %s", cfg_fileName) ;
-      free (ring_buffer) ;
-      ring_buffer = NULL ;
-      f.close () ;
-      p->state = THREAD_STOPPED ; return ;
+      strcpy (line, "time,latitude,longitude,elevation,dilution") ;
+      for (int i=0 ; i < rt_xm_total ; i++)
+      {
+        char label[MAX_THREAD_NAME+4] ;
+        sprintf (label, ",%s_%d", rt_xm_threadname[i], rt_xm_resultidx[i]) ;
+        strcat (line, label) ;
+      }
+      strcat (line, "\n") ;
+      if (f.print (line) < 1)
+      {
+        snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
+                  "FATAL! Cannot write to %s", cfg_fileName) ;
+        free (ring_buffer) ;
+        ring_buffer = NULL ;
+        f.close () ;
+        p->state = THREAD_STOPPED ; return ;
+      }
     }
 
-    char line[BUF_SIZE] ;
     for (int i=0 ; i < ring_pos ; i++)
     {
       String s_lat = String(ring_buffer[i].latitude, FLOAT_DECIMAL_PLACES) ;
@@ -781,7 +839,7 @@ void ft_gpslog (S_thread_entry *p)
                 s_elev.c_str(),
                 s_dilu.c_str()) ;
       f.print (line) ;
-      p->results[1].i_value++ ;
+      p->results[1].i_value++ ; /* entries written counter */
     }
     ring_pos = 0 ; // reset ring buffer since it got flushed
 
@@ -803,7 +861,7 @@ void ft_gpslog (S_thread_entry *p)
         SPIFFS.remove (dst_name) ;
       }
       SPIFFS.rename (cfg_fileName, dst_name) ;
-      p->results[4].i_value++ ;
+      p->results[4].i_value++ ; /* files rotated counter */
     }
   }
 
