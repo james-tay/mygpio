@@ -169,7 +169,7 @@ void ft_gpsmon (S_thread_entry *p)
                   tok_start = tok_end + 1 ;
                 }
 
-              if (G_debug > 1)
+              if (G_debug)
               {
                 char line[BUF_SIZE] ;
                 Serial.println ("DEBUG: ft_gpsmon() msg_tokens[]") ;
@@ -341,11 +341,6 @@ void ft_gpsmon (S_thread_entry *p)
 
      cfg_extraMetrics <threadName>:<resultIdx>[,<threadNameN>:<resultIdxN>...]
 
-   In order for each ring buffer element to accomodate extra metrics, the
-   struct{} features a Flexible Array Member (FAM), since this can only be
-   determined after parsing cfg_extraMetrics. Recall that thread results may
-   be either int or double, thus each FAM element is declared as a union.
-
    Column names of extra metrics are generated in the format :
 
      <threadName>_<resultIdx>
@@ -380,7 +375,7 @@ void ft_gpslog (S_thread_entry *p)
 
   /* variables for tracking (optional) extra metrics */
 
-  #define MAX_EXTRA_METRICS 2
+  #define MAX_EXTRA_METRICS 4
   #define MAX_PARM_LEN 20
   static thread_local char cfg_extraMetrics[MAX_PARM_LEN] ;
 
@@ -393,16 +388,14 @@ void ft_gpslog (S_thread_entry *p)
   struct extra_metrics_s
   {
     int is_int ;        // a flag to determine if i_value or f_value is used
-    union
-    {
-      int i_value ;
-      double f_value ;
-    } ;
+    int i_value ;
+    double f_value ;
   } ;
   typedef struct extra_metrics_s S_ExtraMetrics ;
 
   /* our ringer buffer */
 
+  #define MAX_RING_BUFFER_ELEMENTS 200 // protect against crazy big malloc()
   struct ring_entry_t
   {
     time_t epoch ;
@@ -410,13 +403,10 @@ void ft_gpslog (S_thread_entry *p)
     double longitude ;
     double elevation ;
     double dilution ;
-    S_ExtraMetrics xmetrics[] ; // must be the last element
+    S_ExtraMetrics xmetrics[MAX_EXTRA_METRICS] ;
   } ;
   typedef struct ring_entry_t S_RingEntry ;
   static thread_local S_RingEntry *ring_buffer = NULL ; // the ring buffer
-
-  #define MAX_RING_BUFFER_ELEMENTS 200 // protect against crazy big malloc()
-  static thread_local size_t rt_rbuf_element_sz = 0 ; // including xmetrics[]
 
   /* a macro to check if we're told to terminate, make sure we free(). */
 
@@ -603,6 +593,11 @@ void ft_gpslog (S_thread_entry *p)
         }
 
         rt_xm_total++ ;
+        if (rt_xm_total > MAX_EXTRA_METRICS)
+        {
+          strcpy (p->msg, "FATAL! too many extra metrics") ;
+          p->state = THREAD_STOPPED ; return ;
+        }
         key = strtok_r (NULL, ",", &idx) ; // move on to next token
       }
     }
@@ -617,9 +612,7 @@ void ft_gpslog (S_thread_entry *p)
                  ring_entries, MAX_RING_BUFFER_ELEMENTS) ;
       p->state = THREAD_STOPPED ; return ;
     }
-    rt_rbuf_element_sz = sizeof (S_RingEntry) +
-                         (rt_xm_total * sizeof(S_ExtraMetrics)) ;
-    size_t sz = ring_entries * rt_rbuf_element_sz ;
+    size_t sz = ring_entries * sizeof (S_RingEntry) ;
     ring_buffer = (S_RingEntry*) malloc (sz) ;
     if (ring_buffer == NULL)
     {
@@ -627,6 +620,7 @@ void ft_gpslog (S_thread_entry *p)
                 "FATAL! ring_buffer malloc(%d) failed", sz) ;
       p->state = THREAD_STOPPED ; return ;
     }
+    memset (ring_buffer, 0, sz) ;
 
     p->results[0].i_value = sz ; /* ring buffer size */
     last_run = now ;
@@ -750,8 +744,9 @@ void ft_gpslog (S_thread_entry *p)
       int metrics_obtained = 0 ;
       for (int xm_idx=0 ; xm_idx < rt_xm_total ; xm_idx++)
         for (int t_idx=0 ; t_idx < MAX_THREADS ; t_idx++)
-          if (strcmp(rt_xm_threadname[xm_idx],
-              G_thread_entry[t_idx].name) == 0)
+          if ((G_thread_entry[t_idx].state == THREAD_RUNNING) &&
+               (strcmp(rt_xm_threadname[xm_idx],
+                G_thread_entry[t_idx].name) == 0))
           {
             int res_idx = rt_xm_resultidx[xm_idx] ;
 
@@ -761,13 +756,44 @@ void ft_gpslog (S_thread_entry *p)
               ring_buffer[ring_pos].xmetrics[xm_idx].i_value =
                 G_thread_entry[t_idx].results[res_idx].i_value ;
               metrics_obtained++ ;
+
+              if (G_debug) // validate what went into ring_buffer
+              {
+                char buf[BUF_SIZE] ;
+                String s =
+                  String(ring_buffer[ring_pos].xmetrics[xm_idx].i_value) ;
+                snprintf (
+                  buf, BUF_SIZE,
+                  "DEBUG: ft_gpslog() ring_pos:%d %s_%d i:%d",
+                  ring_pos,
+                  rt_xm_threadname[xm_idx],
+                  rt_xm_resultidx[xm_idx],
+                  s.c_str()) ;
+                Serial.println (buf) ;
+              }
             }
             if (G_thread_entry[t_idx].num_float_results > res_idx) // is float
             {
               ring_buffer[ring_pos].xmetrics[xm_idx].is_int = 0 ;
-              ring_buffer[ring_pos].xmetrics[xm_idx].i_value =
+              ring_buffer[ring_pos].xmetrics[xm_idx].f_value =
                 G_thread_entry[t_idx].results[res_idx].f_value ;
               metrics_obtained++ ;
+
+              if (G_debug) // validate what went into ring_buffer
+              {
+                char buf[BUF_SIZE] ;
+                String s =
+                  String(ring_buffer[ring_pos].xmetrics[xm_idx].f_value,
+                         FLOAT_DECIMAL_PLACES) ;
+                snprintf (
+                  buf, BUF_SIZE,
+                  "DEBUG: ft_gpslog() ring_pos:%d %s_%d f:%s",
+                  ring_pos,
+                  rt_xm_threadname[xm_idx],
+                  rt_xm_resultidx[xm_idx],
+                  s.c_str()) ;
+                Serial.println (buf) ;
+              }
             }
           }
 
@@ -832,12 +858,31 @@ void ft_gpslog (S_thread_entry *p)
       String s_long = String(ring_buffer[i].longitude, FLOAT_DECIMAL_PLACES) ;
       String s_elev = String(ring_buffer[i].elevation, FLOAT_DECIMAL_PLACES) ;
       String s_dilu = String(ring_buffer[i].dilution, FLOAT_DECIMAL_PLACES) ;
-      snprintf (line, BUF_SIZE-1, "%ld,%s,%s,%s,%s\n",
+      snprintf (line, BUF_SIZE-1, "%ld,%s,%s,%s,%s",
                 ring_buffer[i].epoch,
                 s_lat.c_str(),
                 s_long.c_str(),
                 s_elev.c_str(),
                 s_dilu.c_str()) ;
+
+      /* if we've requested for extra metrics, append them to "line". */
+
+      if (rt_xm_total > 0)
+      {
+        for (int xm_idx=0 ; xm_idx < rt_xm_total ; xm_idx++)
+        {
+          String s ;
+          if (ring_buffer[i].xmetrics[xm_idx].is_int)
+            s = String (ring_buffer[i].xmetrics[xm_idx].i_value) ;
+          else
+            s = String (ring_buffer[i].xmetrics[xm_idx].f_value,
+                        FLOAT_DECIMAL_PLACES) ;
+          strcat (line, ",") ;
+          strcat (line, s.c_str()) ;
+        }
+      }
+
+      strcat (line, "\n") ;
       f.print (line) ;
       p->results[1].i_value++ ; /* entries written counter */
     }
@@ -874,8 +919,7 @@ void ft_gpslog (S_thread_entry *p)
   if (duration > 0)
   {
     snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
-              "ele_sz:%d ring:%d/%d sleep:%ldms",
-              rt_rbuf_element_sz, ring_pos, ring_entries, duration) ;
+              "ring:%d/%d sleep:%ldms", ring_pos, ring_entries, duration) ;
     last_run = last_run + (cfg_normLogSecs * 1000) ;
     while (millis() < last_run)
     {
