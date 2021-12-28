@@ -746,6 +746,8 @@ void setup ()
 
   cfg_wifi_ssid = (char*) malloc (MAX_SSID_LEN + 1) ;
   cfg_wifi_pw = (char*) malloc (MAX_PASSWD_LEN + 1) ;
+  cfg_wifi_ssid[0] = 0 ;
+  cfg_wifi_pw[0] = 0 ;
   G_hostname = (char*) malloc (BUF_SIZE+1) ;
   G_mqtt_pub = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_hostname[0] = 0 ;

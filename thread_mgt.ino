@@ -139,6 +139,7 @@ void f_thread_create (char *name)
   G_thread_entry[idx].ts_started = millis () ;
   G_thread_entry[idx].msg[0] = 0 ;
   G_thread_entry[idx].ft_addr = NULL ;
+  G_thread_entry[idx].buf = NULL ;
   memset (&G_thread_entry[idx].in_args, 0, MAX_THREAD_ARGS * sizeof(char*)) ;
   memset (&G_thread_entry[idx].results, 0,
           MAX_THREAD_RESULT_VALUES * sizeof(S_thread_result)) ;
@@ -226,6 +227,15 @@ void f_thread_stop (char *name)
       G_thread_entry[idx].state = THREAD_WRAPUP ; // give it a chance to finish
       delay (THREAD_SHUTDOWN_PERIOD) ;
       vTaskDelete (G_thread_entry[idx].tid) ;
+
+      /* if this thread allocated memory for itself, free it now */
+
+      if (G_thread_entry[idx].buf != NULL)
+      {
+        free (G_thread_entry[idx].buf) ;
+        G_thread_entry[idx].buf = NULL ;
+      }
+
       G_thread_entry[idx].state = THREAD_STOPPED ;
       sprintf (line, "tid:%d '%s' stopped.\r\n",
                G_thread_entry[idx].tid, name) ;

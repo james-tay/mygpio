@@ -352,36 +352,40 @@ void ft_gpsmon (S_thread_entry *p)
 
 void ft_gpslog (S_thread_entry *p)
 {
-  static thread_local int cfg_gpsMode = 3 ;
-  static thread_local int cfg_minSatsUsed = 4 ;
-  static thread_local double cfg_maxPosDil = 3.5 ;
+  #define MAX_EXTRA_METRICS 8
+  #define MAX_PARM_LEN 80
 
-  static thread_local char cfg_gpsThread[MAX_THREAD_NAME] ; // initialize later
-  static thread_local double cfg_minDistMeters = 12.0 ;
-  static thread_local int cfg_normLogSecs = 10 ;
-  static thread_local int cfg_maxLogSecs = 60 ;
-  static thread_local int cfg_fileMaxSize = 262144 ;
-  static thread_local char cfg_fileName[MAX_FILENAME] ;
+  /* our configuration */
 
-  static thread_local double cur_ele = 0.0 ;
-  static thread_local double cur_lat = 0.0 ;
-  static thread_local double cur_long = 0.0 ;
-  static thread_local double cur_epoch = 0.0 ;
+  struct logger_configuration
+  {
+    int    gpsMode ;            // mode 3 means 3D fix
+    int    minSatsUsed ;        // minimum satellites used
+    int    normLogSecs ;        // normal logging interval (ie, moving)
+    int    maxLogSecs ;         // maximum logging interval (ie, stationary)
+    int    fileMaxSize ;        // log file (ie, CSV) max size
+    int    ring_pos ;           // current insertion point in ring buffer
+    int    ring_entries ;       // total elements in the ring buffer
+    long   last_run ;           // time this function last ran
+    long   last_update ;        // time of last ring buffer update
+    double maxPosDil ;          // position dilution limit (ie, too inaccurate)
+    double minDistMeters ;      // minimum delta to be considered movement
+    double cur_ele ;            // current elevation (meters)
+    double cur_lat ;            // current lattitude (degrees)
+    double cur_long ;           // current longitude (degrees)
+    double cur_epoch ;          // walllock time from satellite
 
-  static thread_local int ring_pos = 0 ;     // next empty entry
-  static thread_local int ring_entries = 0 ; // dynamically calculated
-  static thread_local long last_run = 0 ;    // time this function last ran
-  static thread_local long last_update = 0 ; // time of last ring buffer update
+    char   gpsThread[MAX_THREAD_NAME] ;         // name of ft_gpsmon()
+    char   fileName[MAX_FILENAME] ;             // CSV log file
+    char   extraMetrics[MAX_PARM_LEN] ;         // optional metrics
 
-  /* variables for tracking (optional) extra metrics */
+    int    xm_total ;                           // number of extra metrics
+    int    xm_resultidx[MAX_EXTRA_METRICS] ;    // metrics result indexes
+    char   *xm_threadname[MAX_EXTRA_METRICS] ;  // metrics thread names
+  } ;
+  typedef struct logger_configuration S_LoggerConf ;
 
-  #define MAX_EXTRA_METRICS 4
-  #define MAX_PARM_LEN 36
-  static thread_local char cfg_extraMetrics[MAX_PARM_LEN] ;
-
-  static thread_local int rt_xm_total = 0 ; // number of extra metrics
-  static thread_local int rt_xm_resultidx[MAX_EXTRA_METRICS] ;
-  static thread_local char *rt_xm_threadname[MAX_EXTRA_METRICS] ;
+  S_LoggerConf *cfg = NULL ;
 
   /* extra metrics, only used if user specifies "cfg_extraMetrics") */
 
@@ -406,6 +410,7 @@ void ft_gpslog (S_thread_entry *p)
     S_ExtraMetrics xmetrics[MAX_EXTRA_METRICS] ;
   } ;
   typedef struct ring_entry_t S_RingEntry ;
+
   static thread_local S_RingEntry *ring_buffer = NULL ; // the ring buffer
 
   /* a macro to check if we're told to terminate, make sure we free(). */
@@ -464,11 +469,24 @@ void ft_gpslog (S_thread_entry *p)
 
     p->num_int_results = 5 ;
 
-    /* parse our config file, load configuration into thread_local vars */
+    /* allocate memory for our configuration and initialize defaults */
 
-    strcpy (cfg_gpsThread, "") ;
-    strcpy (cfg_extraMetrics, "") ;
-    strcpy (cfg_fileName, "/gpslog.csv") ;
+    p->buf = malloc (sizeof(S_LoggerConf)) ;
+    cfg = (S_LoggerConf*) p->buf ;
+    memset (cfg, 0, sizeof(S_LoggerConf)) ;
+
+    cfg->gpsMode = 3 ;
+    cfg->minSatsUsed = 4 ;
+    cfg->normLogSecs = 10 ;
+    cfg->maxLogSecs = 60 ;
+    cfg->fileMaxSize = 262144 ;
+
+    cfg->maxPosDil = 3.5 ;
+    cfg->minDistMeters = 12.0 ;
+
+    strcpy (cfg->fileName, "/gpslog.csv") ;
+
+    /* parse our config file, load configuration into thread_local vars */
 
     File f = SPIFFS.open (p->in_args[0], "r") ;
     if (f)
@@ -495,27 +513,31 @@ void ft_gpslog (S_thread_entry *p)
                 Serial.println (buf) ;
               }
               if (strcmp (key, "cfg_gpsMode") == 0)
-                cfg_gpsMode = atoi (value) ;
+                cfg->gpsMode = atoi (value) ;
               if (strcmp (key, "cfg_minSatsUsed") == 0)
-                cfg_minSatsUsed = atoi (value) ;
+                cfg->minSatsUsed = atoi (value) ;
               if (strcmp (key, "cfg_maxPosDil") == 0)
-                cfg_maxPosDil = atof (value) ;
+                cfg->maxPosDil = atof (value) ;
+              if (strcmp (key, "cfg_minDistMeters") == 0)
+                cfg->minDistMeters = atof (value) ;
+              if (strcmp (key, "cfg_normLogSecs") == 0)
+                cfg->normLogSecs = atoi (value) ;
+              if (strcmp (key, "cfg_maxLogSecs") == 0)
+                cfg->maxLogSecs = atoi (value) ;
+              if (strcmp (key, "cfg_fileMaxSize") == 0)
+                cfg->fileMaxSize = atoi (value) ;
 
               if ((strcmp (key, "cfg_gpsThread") == 0) &&
-                  (strlen (cfg_gpsThread) < MAX_THREAD_NAME))
-                strncpy (cfg_gpsThread, value, MAX_THREAD_NAME) ;
-              if (strcmp (key, "cfg_minDistMeters") == 0)
-                cfg_minDistMeters = atof (value) ;
-              if (strcmp (key, "cfg_normLogSecs") == 0)
-                cfg_normLogSecs = atoi (value) ;
-              if (strcmp (key, "cfg_maxLogSecs") == 0)
-                cfg_maxLogSecs = atoi (value) ;
-              if (strcmp (key, "cfg_fileMaxSize") == 0)
-                cfg_fileMaxSize = atoi (value) ;
-              if (strcmp (key, "cfg_fileName") == 0)
-                strncpy (cfg_fileName, value, MAX_FILENAME) ;
-              if (strcmp (key, "cfg_extraMetrics") == 0)
-                strncpy (cfg_extraMetrics, value, MAX_PARM_LEN) ;
+                  (strlen (value) < MAX_THREAD_NAME))
+                strncpy (cfg->gpsThread, value, MAX_THREAD_NAME) ;
+
+              if ((strcmp (key, "cfg_fileName") == 0) &&
+                  (strlen (value) < MAX_FILENAME))
+                strncpy (cfg->fileName, value, MAX_FILENAME) ;
+
+              if ((strcmp (key, "cfg_extraMetrics") == 0) &&
+                  (strlen (value) < MAX_PARM_LEN))
+                strncpy (cfg->extraMetrics, value, MAX_PARM_LEN) ;
             }
             else
             {
@@ -537,15 +559,15 @@ void ft_gpslog (S_thread_entry *p)
       /* do some sanity check on our configuration to spot obvious mistakes */
 
       char *fault = NULL ;
-      if (cfg_minSatsUsed < 1)
+      if (cfg->minSatsUsed < 1)
         fault = "cfg_minSatsUsed cannot be less than 1" ;
-      if (strlen(cfg_gpsThread) < 1)
+      if (strlen(cfg->gpsThread) < 1)
         fault = "cfg_gpsThread cannot be empty" ;
-      if (cfg_normLogSecs < 1)
+      if (cfg->normLogSecs < 1)
         fault = "cfg_normLogSecs cannot be less than 1" ;
-      if (cfg_maxLogSecs < cfg_normLogSecs)
+      if (cfg->maxLogSecs < cfg->normLogSecs)
         fault = "cfg_maxLogSecs cannot be less than cfg_normLogSecs" ;
-      if (strlen(cfg_fileName) < 1)
+      if (strlen(cfg->fileName) < 1)
         fault = "cfg_fileName cannot be empty" ;
 
       if (fault)
@@ -562,38 +584,38 @@ void ft_gpslog (S_thread_entry *p)
 
     /* if cfg_extraMetrics is defined, parse it now */
 
-    if (strlen(cfg_extraMetrics) > 0)
+    if (strlen(cfg->extraMetrics) > 0)
     {
       char *idx=NULL, *key=NULL ;
-      key = strtok_r (cfg_extraMetrics, ",", &idx) ; // key is "<thr>:<i>"
+      key = strtok_r (cfg->extraMetrics, ",", &idx) ; // key is "<thr>:<i>"
       while (key)
       {
-        rt_xm_threadname[rt_xm_total] = key ;
-        rt_xm_resultidx[rt_xm_total] = -1 ;
+        cfg->xm_threadname[cfg->xm_total] = key ;
+        cfg->xm_resultidx[cfg->xm_total] = -1 ;
         for (int i=0 ; i < strlen(key) ; i++)
           if (key[i] == ':')
           {
             key[i] = 0 ;
-            rt_xm_resultidx[rt_xm_total] = atoi(key+i+1) ;
+            cfg->xm_resultidx[cfg->xm_total] = atoi(key+i+1) ;
           }
 
         /* sanity check thread name and result index */
 
-        if ((strlen(rt_xm_threadname[rt_xm_total]) < 1) ||
-            (strlen(rt_xm_threadname[rt_xm_total]) > MAX_THREAD_NAME))
+        if ((strlen(cfg->xm_threadname[cfg->xm_total]) < 1) ||
+            (strlen(cfg->xm_threadname[cfg->xm_total]) > MAX_THREAD_NAME))
         {
           strcpy (p->msg, "FATAL! Invalid thread name") ;
           p->state = THREAD_STOPPED ; return ;
         }
-        if ((rt_xm_resultidx[rt_xm_total] < 0) ||
-            (rt_xm_resultidx[rt_xm_total] >= MAX_THREAD_RESULT_VALUES))
+        if ((cfg->xm_resultidx[cfg->xm_total] < 0) ||
+            (cfg->xm_resultidx[cfg->xm_total] >= MAX_THREAD_RESULT_VALUES))
         {
           strcpy (p->msg, "FATAL! Invalid result index") ;
           p->state = THREAD_STOPPED ; return ;
         }
 
-        rt_xm_total++ ;
-        if (rt_xm_total > MAX_EXTRA_METRICS)
+        cfg->xm_total++ ;
+        if (cfg->xm_total > MAX_EXTRA_METRICS)
         {
           strcpy (p->msg, "FATAL! too many extra metrics") ;
           p->state = THREAD_STOPPED ; return ;
@@ -604,15 +626,15 @@ void ft_gpslog (S_thread_entry *p)
 
     /* calculate the size of our ring buffer and allocate memory */
 
-    ring_entries = (cfg_maxLogSecs / cfg_normLogSecs) + 1 ;
-    if (ring_entries > MAX_RING_BUFFER_ELEMENTS)
+    cfg->ring_entries = (cfg->maxLogSecs / cfg->normLogSecs) + 1 ;
+    if (cfg->ring_entries > MAX_RING_BUFFER_ELEMENTS)
     {
       snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
                 "FATAL! ring_buffer sz %d exceeds %d",
-                 ring_entries, MAX_RING_BUFFER_ELEMENTS) ;
+                 cfg->ring_entries, MAX_RING_BUFFER_ELEMENTS) ;
       p->state = THREAD_STOPPED ; return ;
     }
-    size_t sz = ring_entries * sizeof (S_RingEntry) ;
+    size_t sz = cfg->ring_entries * sizeof (S_RingEntry) ;
     ring_buffer = (S_RingEntry*) malloc (sz) ;
     if (ring_buffer == NULL)
     {
@@ -623,8 +645,10 @@ void ft_gpslog (S_thread_entry *p)
     memset (ring_buffer, 0, sz) ;
 
     p->results[0].i_value = sz ; /* ring buffer size */
-    last_run = now ;
+    cfg->last_run = now ;
   }
+
+  cfg = (S_LoggerConf*) p->buf ;
 
   /*
      attempt to identify the "cfg_gpsThread", make sure it's running. If not
@@ -635,13 +659,13 @@ void ft_gpslog (S_thread_entry *p)
   for (gps_tid=0 ; gps_tid < MAX_THREADS ; gps_tid++)
     if ((G_thread_entry[gps_tid].state == THREAD_RUNNING) &&
         (G_thread_entry[gps_tid].ft_addr == ft_gpsmon) &&
-        (strcmp(G_thread_entry[gps_tid].name, cfg_gpsThread) == 0))
+        (strcmp(G_thread_entry[gps_tid].name, cfg->gpsThread) == 0))
       break ;
   if (gps_tid == MAX_THREADS) /* can't locate "cfg_gpsThread", retry */
   {
     strcpy (p->msg, "WARNING: Cannot find cfg_gpsThread") ;
-    last_run = last_run + (cfg_normLogSecs * 1000) ;
-    while (millis() < last_run)
+    cfg->last_run = cfg->last_run + (cfg->normLogSecs * 1000) ;
+    while (millis() < cfg->last_run)
     {
       delay (THREAD_SHUTDOWN_PERIOD / 20) ;
       GPSLOG_CHECK_CLEANUP ;
@@ -659,9 +683,9 @@ void ft_gpslog (S_thread_entry *p)
   #define IDX_POS_DIL 10
 
   S_thread_result *r_ptr = G_thread_entry[gps_tid].results ;
-  if ((cfg_gpsMode != (int) r_ptr[IDX_GPS_MODE].f_value) ||
-      (cfg_minSatsUsed > (int) r_ptr[IDX_SATS_USED].f_value) ||
-      (cfg_maxPosDil < r_ptr[IDX_POS_DIL].f_value))
+  if ((cfg->gpsMode != (int) r_ptr[IDX_GPS_MODE].f_value) ||
+      (cfg->minSatsUsed > (int) r_ptr[IDX_SATS_USED].f_value) ||
+      (cfg->maxPosDil < r_ptr[IDX_POS_DIL].f_value))
   {
     snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
               "WARNING: No lock, mode:%d sats:%d dil:%s",
@@ -669,8 +693,8 @@ void ft_gpslog (S_thread_entry *p)
               (int) r_ptr[IDX_SATS_USED].f_value,
               String (r_ptr[IDX_POS_DIL].f_value, FLOAT_DECIMAL_PLACES)) ;
 
-    last_run = last_run + (cfg_normLogSecs * 1000) ;
-    while (millis() < last_run)
+    cfg->last_run = cfg->last_run + (cfg->normLogSecs * 1000) ;
+    while (millis() < cfg->last_run)
     {
       delay (THREAD_SHUTDOWN_PERIOD / 20) ;
       GPSLOG_CHECK_CLEANUP ;
@@ -688,17 +712,17 @@ void ft_gpslog (S_thread_entry *p)
   #define IDX_LAT 3
   #define IDX_LONG 4
 
-  if ((cur_ele == 0.0) && (cur_lat == 0.0) && (cur_long == 0.0))
+  if ((cfg->cur_ele == 0.0) && (cfg->cur_lat == 0.0) && (cfg->cur_long == 0.0))
   {
     strcpy (p->msg, "INFO: initialized") ;
-    cur_ele = r_ptr[IDX_ELE].f_value ;
-    cur_lat = r_ptr[IDX_LAT].f_value ;
-    cur_long = r_ptr[IDX_LONG].f_value ;
-    cur_epoch = r_ptr[IDX_UTC].f_value ;
-    last_update = now ;
+    cfg->cur_ele = r_ptr[IDX_ELE].f_value ;
+    cfg->cur_lat = r_ptr[IDX_LAT].f_value ;
+    cfg->cur_long = r_ptr[IDX_LONG].f_value ;
+    cfg->cur_epoch = r_ptr[IDX_UTC].f_value ;
+    cfg->last_update = now ;
 
-    last_run = last_run + (cfg_normLogSecs * 1000) ;
-    while (millis() < last_run)
+    cfg->last_run = cfg->last_run + (cfg->normLogSecs * 1000) ;
+    while (millis() < cfg->last_run)
     {
       delay (THREAD_SHUTDOWN_PERIOD / 20) ;
       GPSLOG_CHECK_CLEANUP ;
@@ -714,24 +738,24 @@ void ft_gpslog (S_thread_entry *p)
   #define AVE_EARTH_RADIUS 6371008.8 // meters
 
   double earthRadius = AVE_EARTH_RADIUS + r_ptr[IDX_ELE].f_value ;
-  double minDegrees = atan (cfg_minDistMeters / earthRadius) * 180.0 / M_PI ;
+  double minDegrees = atan (cfg->minDistMeters / earthRadius) * 180.0 / M_PI ;
 
   int we_moved = 0 ;
-  if ((abs(r_ptr[IDX_LAT].f_value - cur_lat) > minDegrees) ||
-      (abs(r_ptr[IDX_LONG].f_value - cur_long) > minDegrees))
+  if ((abs(r_ptr[IDX_LAT].f_value - cfg->cur_lat) > minDegrees) ||
+      (abs(r_ptr[IDX_LONG].f_value - cfg->cur_long) > minDegrees))
   {
     we_moved = 1 ;
     p->results[2].i_value++ ; /* "moving" counter */
   }
 
-  if (((we_moved) || (now - last_update > cfg_maxLogSecs * 1000)) &&
-      (ring_pos < ring_entries)) // make sure there's space available
+  if (((we_moved) || (now - cfg->last_update > cfg->maxLogSecs * 1000)) &&
+      (cfg->ring_pos < cfg->ring_entries)) // make sure there's space available
   {
-    ring_buffer[ring_pos].epoch = int(r_ptr[IDX_UTC].f_value) ;
-    ring_buffer[ring_pos].latitude = r_ptr[IDX_LAT].f_value ;
-    ring_buffer[ring_pos].longitude = r_ptr[IDX_LONG].f_value ;
-    ring_buffer[ring_pos].elevation = r_ptr[IDX_ELE].f_value ;
-    ring_buffer[ring_pos].dilution = r_ptr[IDX_POS_DIL].f_value ;
+    ring_buffer[cfg->ring_pos].epoch = int(r_ptr[IDX_UTC].f_value) ;
+    ring_buffer[cfg->ring_pos].latitude = r_ptr[IDX_LAT].f_value ;
+    ring_buffer[cfg->ring_pos].longitude = r_ptr[IDX_LONG].f_value ;
+    ring_buffer[cfg->ring_pos].elevation = r_ptr[IDX_ELE].f_value ;
+    ring_buffer[cfg->ring_pos].dilution = r_ptr[IDX_POS_DIL].f_value ;
 
     /*
        if there are extra metrics for us to add into ring_buffer, attempt
@@ -739,21 +763,21 @@ void ft_gpslog (S_thread_entry *p)
        "last_update", so that we retry.
     */
 
-    if (rt_xm_total > 0)
+    if (cfg->xm_total > 0)
     {
       int metrics_obtained = 0 ;
-      for (int xm_idx=0 ; xm_idx < rt_xm_total ; xm_idx++)
+      for (int xm_idx=0 ; xm_idx < cfg->xm_total ; xm_idx++)
         for (int t_idx=0 ; t_idx < MAX_THREADS ; t_idx++)
           if ((G_thread_entry[t_idx].state == THREAD_RUNNING) &&
-               (strcmp(rt_xm_threadname[xm_idx],
+               (strcmp(cfg->xm_threadname[xm_idx],
                 G_thread_entry[t_idx].name) == 0))
           {
-            int res_idx = rt_xm_resultidx[xm_idx] ;
+            int res_idx = cfg->xm_resultidx[xm_idx] ;
 
             if (G_thread_entry[t_idx].num_int_results > res_idx)  // is int
             {
-              ring_buffer[ring_pos].xmetrics[xm_idx].is_int = 1 ;
-              ring_buffer[ring_pos].xmetrics[xm_idx].i_value =
+              ring_buffer[cfg->ring_pos].xmetrics[xm_idx].is_int = 1 ;
+              ring_buffer[cfg->ring_pos].xmetrics[xm_idx].i_value =
                 G_thread_entry[t_idx].results[res_idx].i_value ;
               metrics_obtained++ ;
 
@@ -761,21 +785,21 @@ void ft_gpslog (S_thread_entry *p)
               {
                 char buf[BUF_SIZE] ;
                 String s =
-                  String(ring_buffer[ring_pos].xmetrics[xm_idx].i_value) ;
+                  String(ring_buffer[cfg->ring_pos].xmetrics[xm_idx].i_value) ;
                 snprintf (
                   buf, BUF_SIZE,
                   "DEBUG: ft_gpslog() ring_pos:%d %s_%d i:%d",
-                  ring_pos,
-                  rt_xm_threadname[xm_idx],
-                  rt_xm_resultidx[xm_idx],
+                  cfg->ring_pos,
+                  cfg->xm_threadname[xm_idx],
+                  cfg->xm_resultidx[xm_idx],
                   s.c_str()) ;
                 Serial.println (buf) ;
               }
             }
             if (G_thread_entry[t_idx].num_float_results > res_idx) // is float
             {
-              ring_buffer[ring_pos].xmetrics[xm_idx].is_int = 0 ;
-              ring_buffer[ring_pos].xmetrics[xm_idx].f_value =
+              ring_buffer[cfg->ring_pos].xmetrics[xm_idx].is_int = 0 ;
+              ring_buffer[cfg->ring_pos].xmetrics[xm_idx].f_value =
                 G_thread_entry[t_idx].results[res_idx].f_value ;
               metrics_obtained++ ;
 
@@ -783,30 +807,30 @@ void ft_gpslog (S_thread_entry *p)
               {
                 char buf[BUF_SIZE] ;
                 String s =
-                  String(ring_buffer[ring_pos].xmetrics[xm_idx].f_value,
+                  String(ring_buffer[cfg->ring_pos].xmetrics[xm_idx].f_value,
                          FLOAT_DECIMAL_PLACES) ;
                 snprintf (
                   buf, BUF_SIZE,
                   "DEBUG: ft_gpslog() ring_pos:%d %s_%d f:%s",
-                  ring_pos,
-                  rt_xm_threadname[xm_idx],
-                  rt_xm_resultidx[xm_idx],
+                  cfg->ring_pos,
+                  cfg->xm_threadname[xm_idx],
+                  cfg->xm_resultidx[xm_idx],
                   s.c_str()) ;
                 Serial.println (buf) ;
               }
             }
           }
 
-      if (metrics_obtained == rt_xm_total) // yay ! we got all extra metrics
+      if (metrics_obtained == cfg->xm_total) // yay ! we got all extra metrics
       {
-        ring_pos++ ;
-        last_update = now ;
+        cfg->ring_pos++ ;
+        cfg->last_update = now ;
       }
     }
     else
     {
-      ring_pos++ ;
-      last_update = now ;
+      cfg->ring_pos++ ;
+      cfg->last_update = now ;
     }
 
     if (we_moved == 0)
@@ -818,15 +842,15 @@ void ft_gpslog (S_thread_entry *p)
      write it to storage
   */
 
-  if (ring_pos == ring_entries)
+  if (cfg->ring_pos == cfg->ring_entries)
   {
     char line[BUF_SIZE] ;
 
-    File f = SPIFFS.open (cfg_fileName, "a") ;
+    File f = SPIFFS.open (cfg->fileName, "a") ;
     if (!f)
     {
       snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
-                "FATAL! Cannot open %s for writing", cfg_fileName) ;
+                "FATAL! Cannot open %s for writing", cfg->fileName) ;
       free (ring_buffer) ;
       ring_buffer = NULL ;
       p->state = THREAD_STOPPED ; return ;
@@ -834,17 +858,17 @@ void ft_gpslog (S_thread_entry *p)
     if (f.size() < 1)
     {
       strcpy (line, "time,latitude,longitude,elevation,dilution") ;
-      for (int i=0 ; i < rt_xm_total ; i++)
+      for (int i=0 ; i < cfg->xm_total ; i++)
       {
         char label[MAX_THREAD_NAME+4] ;
-        sprintf (label, ",%s_%d", rt_xm_threadname[i], rt_xm_resultidx[i]) ;
+        sprintf (label, ",%s_%d", cfg->xm_threadname[i], cfg->xm_resultidx[i]) ;
         strcat (line, label) ;
       }
       strcat (line, "\n") ;
       if (f.print (line) < 1)
       {
         snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
-                  "FATAL! Cannot write to %s", cfg_fileName) ;
+                  "FATAL! Cannot write to %s", cfg->fileName) ;
         free (ring_buffer) ;
         ring_buffer = NULL ;
         f.close () ;
@@ -852,7 +876,7 @@ void ft_gpslog (S_thread_entry *p)
       }
     }
 
-    for (int i=0 ; i < ring_pos ; i++)
+    for (int i=0 ; i < cfg->ring_pos ; i++)
     {
       String s_lat = String(ring_buffer[i].latitude, FLOAT_DECIMAL_PLACES) ;
       String s_long = String(ring_buffer[i].longitude, FLOAT_DECIMAL_PLACES) ;
@@ -867,9 +891,9 @@ void ft_gpslog (S_thread_entry *p)
 
       /* if we've requested for extra metrics, append them to "line". */
 
-      if (rt_xm_total > 0)
+      if (cfg->xm_total > 0)
       {
-        for (int xm_idx=0 ; xm_idx < rt_xm_total ; xm_idx++)
+        for (int xm_idx=0 ; xm_idx < cfg->xm_total ; xm_idx++)
         {
           String s ;
           if (ring_buffer[i].xmetrics[xm_idx].is_int)
@@ -886,26 +910,26 @@ void ft_gpslog (S_thread_entry *p)
       f.print (line) ;
       p->results[1].i_value++ ; /* entries written counter */
     }
-    ring_pos = 0 ; // reset ring buffer since it got flushed
+    cfg->ring_pos = 0 ; // reset ring buffer since it got flushed
 
     /* check if it's time to rotate cfg_fileName */
 
     int rotate = 0 ;
-    if (f.size() > cfg_fileMaxSize)
+    if (f.size() > cfg->fileMaxSize)
       rotate = 1 ;
     f.close () ;
 
     if (rotate) // ... delete old file if present
     {
       char dst_name[BUF_SIZE] ;
-      snprintf (dst_name, BUF_SIZE-1, "%s.old", cfg_fileName) ;
+      snprintf (dst_name, BUF_SIZE-1, "%s.old", cfg->fileName) ;
       File f = SPIFFS.open (dst_name) ;
       if (f)
       {
         f.close () ;
         SPIFFS.remove (dst_name) ;
       }
-      SPIFFS.rename (cfg_fileName, dst_name) ;
+      SPIFFS.rename (cfg->fileName, dst_name) ;
       p->results[4].i_value++ ; /* files rotated counter */
     }
   }
@@ -915,13 +939,14 @@ void ft_gpslog (S_thread_entry *p)
      being asked to shutdown.
   */
 
-  long duration = now + (cfg_normLogSecs * 1000) - millis () ;
+  long duration = now + (cfg->normLogSecs * 1000) - millis () ;
   if (duration > 0)
   {
     snprintf (p->msg, MAX_THREAD_MSG_BUF-1,
-              "ring:%d/%d sleep:%ldms", ring_pos, ring_entries, duration) ;
-    last_run = last_run + (cfg_normLogSecs * 1000) ;
-    while (millis() < last_run)
+              "ring:%d/%d sleep:%ldms",
+              cfg->ring_pos, cfg->ring_entries, duration) ;
+    cfg->last_run = cfg->last_run + (cfg->normLogSecs * 1000) ;
+    while (millis() < cfg->last_run)
     {
       delay (THREAD_SHUTDOWN_PERIOD / 20) ;
       GPSLOG_CHECK_CLEANUP ;
