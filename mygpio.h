@@ -137,6 +137,7 @@ struct thread_entry_s
   int num_float_results ;             // number of "f_value" results returned
   S_thread_result results[MAX_THREAD_RESULT_VALUES] ;
   char msg[MAX_THREAD_MSG_BUF] ;      // provide some optional feedback
+  void *buf ;                         // thread's local malloc()'ed buffer
 } ;
 typedef struct thread_entry_s S_thread_entry ;
 

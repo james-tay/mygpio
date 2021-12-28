@@ -111,7 +111,7 @@
        are named ft_<task>. This is a naming convention.
      - Thread life cycle is as follows :
          initialization by f_thread_create()
-         `-> the tread function f_thread_lifecycle()
+         `-> the thread function f_thread_lifecycle()
              `- main loop, call ft_<task>()
                 |-> run user code, complete within 1 second (recommended)
                 `-> update results in G_thread_entry structure
@@ -133,6 +133,10 @@
        in the main thread.
      - Threads can be started on the first f_cron() run by specifying their
        names (comma separated) in "/autoexec.cfg".
+     - Since the ESP32's (per thread) stack is fairly small, we should store
+       variables in heap as much as possible. A thread is free to malloc()
+       a SINGLE buffer and reference it at S_thread_entry->buf. This will be
+       automatically free()'ed after the thread terminates.
 
    Pin Flags
 
@@ -312,8 +316,8 @@
 
 /* ======= ALL GLOBAL VARIABLES ====== */
 
-char cfg_wifi_ssid[MAX_SSID_LEN + 1] ;
-char cfg_wifi_pw[MAX_PASSWD_LEN + 1] ;
+char *cfg_wifi_ssid ;
+char *cfg_wifi_pw ;
 
 int G_sleep = 0 ;               // a flag to tell us to enter sleep mode
 int G_sd = 0 ;                  // web server's socket descriptor
@@ -728,20 +732,20 @@ void f_esp32 (char **tokens)
 
 void setup ()
 {
-  Wire.begin () ;
   Serial.begin (DEF_BAUD) ;
   Serial.setTimeout (SERIAL_TIMEOUT) ;
-  Serial.println ("\nNOTICE: System boot.") ;
+  Serial.println ("\nNOTICE: System boot.") ; /* print as early as possible */
+
+  Wire.begin () ;
   G_serial_pos = 0 ;
   G_debug = 0 ;
-
-  cfg_wifi_ssid[0] = 0 ;
-  cfg_wifi_pw[0] = 0 ;
   G_next_cron = CRON_INTERVAL * 1000 ;
   pinMode (LED_BUILTIN, OUTPUT) ;
 
   /* early initialization for primary config global vars */
 
+  cfg_wifi_ssid = (char*) malloc (MAX_SSID_LEN + 1) ;
+  cfg_wifi_pw = (char*) malloc (MAX_PASSWD_LEN + 1) ;
   G_hostname = (char*) malloc (BUF_SIZE+1) ;
   G_mqtt_pub = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_hostname[0] = 0 ;

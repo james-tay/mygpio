@@ -376,7 +376,7 @@ void ft_gpslog (S_thread_entry *p)
   /* variables for tracking (optional) extra metrics */
 
   #define MAX_EXTRA_METRICS 4
-  #define MAX_PARM_LEN 20
+  #define MAX_PARM_LEN 36
   static thread_local char cfg_extraMetrics[MAX_PARM_LEN] ;
 
   static thread_local int rt_xm_total = 0 ; // number of extra metrics
