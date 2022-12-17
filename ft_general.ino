@@ -155,10 +155,10 @@ void ft_dread (S_thread_entry *p)
   if (p->loops == 0)
   {
     if (mode == 0)
-      pinMode (pin, INPUT) ;
+      pinMode (pin, INPUT) ;            // set mode to input (floating)
     else
     if (mode == 1)
-      pinMode (pin, INPUT_PULLUP) ;
+      pinMode (pin, INPUT_PULLUP) ;     // use built-in pull up resistor
     else
     {
       strcpy (p->msg, "FATAL! Invalid mode") ;
@@ -166,15 +166,25 @@ void ft_dread (S_thread_entry *p)
       return ;
     }
 
+    /* the current high or low state of the pin */
+
     p->results[0].meta[0] = "type" ;
     p->results[0].data[0] = "\"state\"" ;
     p->results[0].num_tags = 1 ;
+
+    /* number of times pin was high for less than "trig_ms" */
 
     p->results[1].meta[0] = "type" ;
     p->results[1].data[0] = "\"short_triggers\"" ;
     p->results[1].num_tags = 1 ;
 
-    p->num_int_results = 2 ;
+    /* number of times the pin was high for longer than "trig_ms" */
+
+    p->results[2].meta[0] = "type" ;
+    p->results[2].data[0] = "\"triggers\"" ;
+    p->results[2].num_tags = 1 ;
+
+    p->num_int_results = 3 ;
     strcpy (p->msg, "ok") ;
 
     p->results[0].i_value = digitalRead (pin) ; // one time initialization
@@ -191,6 +201,8 @@ void ft_dread (S_thread_entry *p)
     int cur_value = digitalRead (pin) ;
     if ((p->loops > 1) && (cur_value != p->results[0].i_value))
     {
+      if (cur_value)                    // count a high state immediately
+        p->results[2].i_value++ ;
       p->results[0].i_value = cur_value ;
       f_delivery (p, &p->results[0]) ;
     }
@@ -235,6 +247,7 @@ void ft_dread (S_thread_entry *p)
         }
       }
       p->results[0].i_value = 1 ;
+      p->results[2].i_value++ ;
       f_delivery (p, &p->results[0]) ;  // announce that pin went high
       return ;
     }
