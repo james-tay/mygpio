@@ -1,6 +1,10 @@
 /*
    Build/Upload
 
+     Note that this code has been tested with
+       - esp32 core v1.0.6
+       - arduino-cli v0.29.0
+
      % URL="https://dl.espressif.com/dl/package_esp32_index.json"
      % arduino-cli core update-index --additional-urls $URL
      % arduino-cli core install esp32:esp32 --additional-urls $URL
@@ -736,7 +740,6 @@ void setup ()
   Serial.setTimeout (SERIAL_TIMEOUT) ;
   Serial.println ("\nNOTICE: System boot.") ; /* print as early as possible */
 
-  Wire.begin () ;
   G_serial_pos = 0 ;
   G_debug = 0 ;
   G_next_cron = CRON_INTERVAL * 1000 ;
@@ -902,6 +905,8 @@ void setup ()
   sprintf (line, "NOTICE: Max allowed threads %d.", MAX_THREADS) ;
   Serial.println (line) ;
   G_publish_lock = xSemaphoreCreateMutex () ;
+
+  Wire.begin () ;
 
   digitalWrite (LED_BUILTIN, LOW) ;           // 1-sec blink to indicate boot.
   delay (1000) ;

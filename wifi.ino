@@ -13,6 +13,7 @@ int f_wifiConnect (char *ssid, char *pw, char *msg)
   char scan_ssid[MAX_SSID_LEN+1] ;
   char line[BUF_SIZE] ;
 
+  WiFi.mode (WIFI_STA) ;
   int n = WiFi.scanNetworks () ;
   for (int i=0 ; i < n ; i++)
   {

@@ -79,7 +79,7 @@
 /* ====== ALL OTHER GENERAL STUFF ====== */
 
 #define FLOAT_DECIMAL_PLACES 6  // when printing float metrics
-#define DEF_BAUD 9600           // USB serial port baud rate
+#define DEF_BAUD 115200         // USB serial port baud rate
 #define SERIAL_TIMEOUT 1000     // serial timeout in milliseconds
 #define BLINK_FREQ 5000         // blink to indicate we're alive (ms)
 #define MAX_GPIO_PINS 40        // total number of GPIO pins in G_pin_flags[]

@@ -198,14 +198,13 @@ void f_action (char **tokens)
 
     /* detect cpu clock frequency */
 
-    rtc_cpu_freq_t cpu_freq = rtc_clk_cpu_freq_get() ;
-    uint32_t hz = rtc_clk_cpu_freq_value (cpu_freq) ;
+    uint32_t cpu_freq = rtc_clk_apb_freq_get() ;
 
     /* now report all our findings */
 
     sprintf (line, "Running on cpu:%d\r\n", xPortGetCoreID()) ;
     strcat (G_reply_buf, line) ;
-    sprintf (line, "CPU speed: %u hz\r\n", hz) ;
+    sprintf (line, "CPU speed: %u hz\r\n", cpu_freq) ;
     strcat (G_reply_buf, line) ;
     sprintf (line, "Built: %s, %s\r\n", __DATE__, __TIME__) ;
     strcat (G_reply_buf, line) ;
