@@ -6,10 +6,10 @@
    into "msg" as a 1-line string.
 */
 
-int f_wifiConnect (char *ssid, char *pw, char *msg)
+void f_wifiConnect (char *ssid, char *pw, char *msg)
 {
   int scan_chan=0, scan_rssi, scan_idx ;
-  uint8_t *scan_bssid ;
+  uint8_t scan_bssid[6] ;
   char scan_ssid[MAX_SSID_LEN+1] ;
   char line[BUF_SIZE] ;
 
@@ -20,7 +20,7 @@ int f_wifiConnect (char *ssid, char *pw, char *msg)
     WiFi.SSID(i).toCharArray(scan_ssid, MAX_SSID_LEN) ;
     if (strcmp(ssid, scan_ssid) == 0)
     {
-      sprintf (line, "(%s ch:%d %ddBm) ",
+      sprintf (line, "found(%s ch:%d %ddBm) ",
                WiFi.BSSIDstr(i).c_str(), WiFi.channel(i), WiFi.RSSI(i)) ;
       strcat (msg, line) ;
 
@@ -29,7 +29,7 @@ int f_wifiConnect (char *ssid, char *pw, char *msg)
         scan_idx = i ;
         scan_rssi = WiFi.RSSI (i) ;
         scan_chan = WiFi.channel (i) ;
-        scan_bssid = WiFi.BSSID (i) ;
+        memcpy (scan_bssid, WiFi.BSSID(i), 6) ;
       }
       else
       {
@@ -38,7 +38,7 @@ int f_wifiConnect (char *ssid, char *pw, char *msg)
           scan_idx = i ;
           scan_rssi = WiFi.RSSI (i) ;
           scan_chan = WiFi.channel (i) ;
-          scan_bssid = WiFi.BSSID (i) ;
+          memcpy (scan_bssid, WiFi.BSSID(i), 6) ;
         }
       }
     }
@@ -47,10 +47,12 @@ int f_wifiConnect (char *ssid, char *pw, char *msg)
   if (scan_chan == 0) /* opsie, did not find requested AP */
   {
     strcpy (msg, "SSID not found") ;
-    return (0) ;
+    return ;
   }
 
-  sprintf (line, "[%s]", WiFi.BSSIDstr(scan_idx).c_str()) ;
+  sprintf (line, "using[%x:%x:%x:%x:%x:%x]",
+           scan_bssid[0], scan_bssid[1], scan_bssid[2],
+           scan_bssid[3], scan_bssid[4], scan_bssid[5]) ;
   strcat (msg, line) ;
   WiFi.begin (ssid, pw, scan_chan, scan_bssid, true) ;
 }
