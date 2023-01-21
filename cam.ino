@@ -1,3 +1,9 @@
+/*
+   References
+     - https://github.com/espressif/esp32-camera/blob/master/driver/include/esp_camera.h
+     - https://github.com/espressif/esp32-camera/blob/master/conversions/to_jpg.cpp
+*/
+
 /* camera pin configuration */
 
 #define CAM_PIN_PWDN 32
@@ -16,6 +22,14 @@
 #define CAM_PIN_VSYNC 25
 #define CAM_PIN_HREF 23
 #define CAM_PIN_PCLK 22
+
+/* jpeg quality */
+#define CAM_JPEG_QUALITY 90
+
+/*
+   This function is called from f_action(). Our job is to parse the "cam"
+   command's sub-commands and act on them.
+*/
 
 void f_cam_cmd (char **tokens)
 {
@@ -72,7 +86,7 @@ void f_cam_cmd (char **tokens)
     if (psramFound())
     {
       G_cam_config->frame_size = FRAMESIZE_SXGA ;
-      G_cam_config->fb_count = 2 ;
+      G_cam_config->fb_count = 1 ;
       G_cam_config->fb_location = CAMERA_FB_IN_PSRAM ;
     }
     else
@@ -83,7 +97,7 @@ void f_cam_cmd (char **tokens)
 
     esp_err_t err = esp_camera_init (G_cam_config) ;
     if (err)
-      sprintf (line, "FAULT: esp_camera_init() failed 0x%x", err) ;
+      sprintf (line, "FAULT: esp_camera_init() failed 0x%x.\r\n", err) ;
     else
       sprintf (line, "initialized psram free:%d size:%d bytes.\r\n",
                ESP.getFreePsram(), ESP.getPsramSize()) ;
@@ -92,8 +106,70 @@ void f_cam_cmd (char **tokens)
   }
 }
 
+/*
+   This function is called when a web client has called us with the "/cam"
+   URI. Our job is to attempt to capture a frame and send the jpeg data over.
+*/
+
 void f_cam_img (S_WebClient *client)
 {
+  char line[BUF_SIZE] ;
 
+  /* try grab a single camera frame first */
 
+  camera_fb_t *fb = esp_camera_fb_get () ;
+  if (fb == NULL)
+  {
+    strcpy (line, "HTTP/1.1 503 Unavailable\n") ;
+    write (client->sd, line, strlen(line)) ;
+    strcpy (line, "Connection: close\n\n") ;
+    write (client->sd, line, strlen(line)) ;
+    strcpy (line, "FAULT: esp_camera_fb_get() failed.\n") ;
+    write (client->sd, line, strlen(line)) ;
+    return ;
+  }
+
+  /* make sure the frame we just grabbed is a jpeg */
+
+  size_t jpg_len = fb->len ;
+  uint8_t *jpg_buf = fb->buf ;
+
+  if ((fb->format != PIXFORMAT_JPEG) &&
+      (frame2jpg (fb, CAM_JPEG_QUALITY, &jpg_buf, &jpg_len) == false))
+  {
+    strcpy (line, "HTTP/1.1 503 Unavailable\n") ;
+    write (client->sd, line, strlen(line)) ;
+    strcpy (line, "Connection: close\n\n") ;
+    write (client->sd, line, strlen(line)) ;
+    strcpy (line, "FAULT: frame2jpg() failed.\n") ;
+    write (client->sd, line, strlen(line)) ;
+    esp_camera_fb_return (fb) ;
+    return ;
+  }
+
+  /* set the HTTP header and send the jpeg data */
+
+  strcpy (line, "HTTP/1.1 200 OK\n") ;
+  write (client->sd, line, strlen(line)) ;
+  strcpy (line, "Accept-Ranges: bytes\n") ;
+  write (client->sd, line, strlen(line)) ;
+  strcpy (line, "Cache-Control: no-cache\n") ;
+  write (client->sd, line, strlen(line)) ;
+  strcpy (line, "Content-Type: image/jpeg\n") ;
+  write (client->sd, line, strlen(line)) ;
+  sprintf (line, "Content-Length: %d\n\n", jpg_len) ;
+  write (client->sd, line, strlen(line)) ;
+
+  int written = 0 ;
+  while (written != jpg_len)
+  {
+    int remainder = jpg_len - written ;
+    int amt = write (client->sd, jpg_buf + written, remainder) ;
+    if (amt < 1)
+      break ;
+    else
+      written = written + amt ;
+  }
+  esp_camera_fb_return (fb) ;
 }
+

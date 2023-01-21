@@ -254,6 +254,7 @@ void f_handleWebRequest (S_WebClient *client)
     response_code = -1 ;        // we'll handle the HTTP response ourselves
     f_cam_img (client) ;
   }
+  else
   if ((strcmp(client->method, "GET") == 0) &&
       (strcmp(client->uri, "/") == 0))
   {
