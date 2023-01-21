@@ -30,6 +30,7 @@ void f_action (char **tokens)
             "lcd print <row> <col> <message...>\r\n"
             "\r\n"
             "[System]\r\n"
+            "cam init\r\n"
             "debug <num>\r\n"
             "file recv <port> <filename>\r\n"
             "file send <port> <filename>\r\n"
@@ -225,6 +226,11 @@ void f_action (char **tokens)
   if (strcmp(tokens[0], "lcd") == 0)
   {
     f_lcd (tokens) ;
+  }
+  else
+  if ((strcmp(tokens[0], "cam") == 0) && (tokens[1] != NULL))
+  {
+    f_cam_cmd (tokens) ;
   }
   else
   if ((strcmp(tokens[0], "fs") == 0) && (tokens[1] != NULL))

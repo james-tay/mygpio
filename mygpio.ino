@@ -355,6 +355,7 @@ LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
 WiFiClient G_wClient ; // this is needed to instanciate "G_psClient"
 PubSubClient G_psClient (G_wClient) ;
+camera_config_t *G_cam_config = NULL ;  // used on esp32-cam platforms
 
 /* function prototypes */
 

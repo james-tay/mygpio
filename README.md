@@ -71,6 +71,14 @@ At this point we should be ready to compile and flash an ESP32,
 % arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32 .
 ```
 
+To build for the ESP32-CAM platform,
+
+```
+% arduino-cli compile -b esp32:esp32:esp32cam .
+% arduino-cli upload -v -p /dev/ttyUSB1 -b esp32:esp32:esp32cam .
+```
+
+
 ## Initial Setup
 
 "mygpio" listens on the serial port (ie, USB serial port), and waits for

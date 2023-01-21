@@ -222,8 +222,14 @@ void f_handleWebRequest (S_WebClient *client)
     Serial.println (line) ;
   }
 
-  /* at this point, we have parsed enough to decide on what to do with it */
+  /*
+     at this point, we have parsed enough to decide on what to do with it.
+     Save our HTTP response code in "response_code", which typically should
+     be 200. If we set this to -1, it means some function is handling the
+     HTTP response itself.
+  */
 
+  int response_code = 200 ;
   G_reply_buf[0] = 0 ;
   G_Metrics->restCmds++ ;
   G_Metrics->restInBytes = G_Metrics->restInBytes +
@@ -234,25 +240,47 @@ void f_handleWebRequest (S_WebClient *client)
   {
     f_handleWebMetrics () ;
   }
+  else
   if ((strcmp(client->method, "GET") == 0) &&
       (strcmp(client->uri, "/v1") == 0) &&
       (strncmp(client->query, "cmd=", 4) == 0))
   {
     f_v1api (client->query + 4) ;
   }
+  else
+  if ((strcmp(client->method, "GET") == 0) &&
+      (strcmp(client->uri, "/cam") == 0))
+  {
+    response_code = -1 ;        // we'll handle the HTTP response ourselves
+    f_cam_img (client) ;
+  }
+  if ((strcmp(client->method, "GET") == 0) &&
+      (strcmp(client->uri, "/") == 0))
+  {
+    strcpy (G_reply_buf, "OK\r\n") ;
+  }
+  else
+  {
+    strcpy (G_reply_buf, "Invalid request\r\n") ;
+    response_code = 404 ;
+  }
 
-  char line[BUF_SIZE] ;
-  strcpy (line, "HTTP/1.1 200 OK\n") ;
-  write (client->sd, line, strlen(line)) ;
-  strcpy (line, "Content-Type: text/plain\n") ;
-  write (client->sd, line, strlen(line)) ;
-  strcpy (line, "Connection: close\n") ;
-  write (client->sd, line, strlen(line)) ;
+  if (response_code > 0)
+  {
+    char line[BUF_SIZE] ;
+    sprintf (line, "HTTP/1.1 %d OK\n", response_code) ;
+    write (client->sd, line, strlen(line)) ;
+    strcpy (line, "Content-Type: text/plain\n") ;
+    write (client->sd, line, strlen(line)) ;
+    strcpy (line, "Connection: close\n") ;
+    write (client->sd, line, strlen(line)) ;
 
-  /* Now send G_reply_buf */
+    /* Now send G_reply_buf */
 
-  write (client->sd, "\n", 1) ;
-  write (client->sd, G_reply_buf, strlen(G_reply_buf)) ;
+    write (client->sd, "\n", 1) ;
+    write (client->sd, G_reply_buf, strlen(G_reply_buf)) ;
+  }
+
   close (client->sd) ;
   client->sd = 0 ;
   client->req_pos = 0 ;

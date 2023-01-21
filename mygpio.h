@@ -16,6 +16,7 @@
 #include <OneWire.h>                  // 1-wire support, typically 16.3 kbps
 #include <DallasTemperature.h>
 #include <LiquidCrystal_I2C.h>
+#include <esp_camera.h>
 
 #define MAX_SSID_LEN 32
 #define MAX_PASSWD_LEN 32             // maximum wifi password length
