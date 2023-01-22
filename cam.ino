@@ -25,7 +25,7 @@
 #define CAM_PIN_PCLK 22
 
 /* jpeg quality */
-#define CAM_JPEG_QUALITY 90
+#define CAM_JPEG_QUALITY 63
 
 /*
    This function is called from f_action(). Our job is to parse the "cam"
@@ -156,6 +156,36 @@ void f_cam_cmd (char **tokens)
     }
 
     sprintf (G_reply_buf, "setting %s -> %s.\r\n", key, tokens[3]) ;
+  }
+
+  if (strcmp(tokens[1], "help") == 0)                   // help
+  {
+    strcpy (G_reply_buf,
+            "[parameters]"
+            "cam set contrast <-2 to 2>\r\n"
+            "cam set brightness <-2 to 2>\r\n"
+            "cam set saturation <-2 to 2>\r\n"
+            "cam set sharpness <-2 to 2>\r\n"
+            "cam set denoise <n>\r\n"
+            "cam set quality <0 to 63>\r\n"
+            "cam set colorbar <0 or 1>\r\n"
+            "cam set whitebal <0 or 1>\r\n"
+            "cam set gain_ctrl <0 or 1>\r\n"
+            "cam set exposure_ctrl <0 or 1>\r\n"
+            "cam set hmirror <0 or 1>\r\n"
+            "cam set vflip <0 or 1>\r\n"
+            "cam set aec2 <0 or 1>\r\n"
+            "cam set awb_gain <n>\r\n"
+            "cam set agc_gain <0 to 30>\r\n"
+            "cam set aec_value <0 to 1200>\r\n"
+            "cam set framesize <format>\r\n"
+            "[framesizes]\r\n"
+            "uxga 1600x1200\r\n"
+            "sxga 1280x1024\r\n"
+            "hd   1280x720\r\n"
+            "xga  1024x768\r\n"
+            "svga 800x600\r\n"
+            "vga  640x480\r\n") ;
   }
 }
 
