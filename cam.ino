@@ -43,6 +43,9 @@ void f_cam_cmd (char **tokens)
       strcat (G_reply_buf, "FAULT: camera already initialized.\r\n") ;
       return ;
     }
+
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
+
     G_cam_config = (camera_config_t*) malloc (sizeof(camera_config_t)) ;
     memset (G_cam_config, 0, sizeof(camera_config_t)) ;
 
@@ -134,7 +137,25 @@ void f_cam_cmd (char **tokens)
     if (strcmp(key, "agc_gain") == 0)      s->set_agc_gain(s, v) ;
     if (strcmp(key, "aec_value") == 0)     s->set_aec_value(s, v) ;
 
-    sprintf (G_reply_buf, "setting %s -> %d.\r\n", key, v) ;
+    /* framesize is specified as a string */
+
+    if (strcmp(key, "framesize") == 0)
+    {
+      if (strcmp(tokens[3], "uxga") == 0)
+        s->set_framesize(s, FRAMESIZE_UXGA) ;   // 1600x1200
+      if (strcmp(tokens[3], "sxga") == 0)
+        s->set_framesize(s, FRAMESIZE_SXGA) ;   // 1280x1024
+      if (strcmp(tokens[3], "hd") == 0)
+        s->set_framesize(s, FRAMESIZE_HD) ;     // 1280x720
+      if (strcmp(tokens[3], "xga") == 0)
+        s->set_framesize(s, FRAMESIZE_XGA) ;    // 1024x768
+      if (strcmp(tokens[3], "svga") == 0)
+        s->set_framesize(s, FRAMESIZE_SVGA) ;   // 800x600
+      if (strcmp(tokens[3], "vga") == 0)
+        s->set_framesize(s, FRAMESIZE_VGA) ;    // 640x480
+    }
+
+    sprintf (G_reply_buf, "setting %s -> %s.\r\n", key, tokens[3]) ;
   }
 }
 
