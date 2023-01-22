@@ -213,9 +213,17 @@ void f_cam_img (S_WebClient *client)
 {
   char line[BUF_SIZE] ;
 
-  /* try grab a single camera frame first */
+  /*
+     somehow, there are always 2x frames in the frame buffer queue (despite we
+     configuring "fb_count" to 1). To ensure that we're getting the current
+     image, call esp_camera_fb_get() 2 times.
+  */
 
   camera_fb_t *fb = esp_camera_fb_get () ;
+  if (fb != NULL)
+    esp_camera_fb_return (fb) ;
+
+  fb = esp_camera_fb_get () ;
   if (fb == NULL)
   {
     strcpy (line, "HTTP/1.1 503 Unavailable\n") ;
