@@ -294,3 +294,22 @@ Multiple threads can be automatically started on boot using this method.
 Simply provide the thread names as a comma separated list in the 
 ``/autoexec.cfg`` file.
 
+## Support for ESP32-CAM
+
+The same source code can be compiled to support camera functions for the
+esp32-cam platform. To compile and upload,
+
+```
+% arduino-cli compile -b esp32:esp32:esp32cam .
+% arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32cam .
+```
+
+To use the camera, first initialize it, optionally configure it, and then
+start capturing jpeg frames. For example,
+
+```
+% curl http://esp32-cam.example.com/v1?cmd=cam+init
+% curl http://esp32-cam.example.com/v1?cmd=cam+vflip+1
+% curl http://esp32-cam.example.com/cam >image.jpg
+```
+

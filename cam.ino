@@ -24,8 +24,11 @@
 #define CAM_PIN_HREF 23
 #define CAM_PIN_PCLK 22
 
-/* jpeg quality */
-#define CAM_JPEG_QUALITY 63
+/* jpeg quality, 10 to 63, lower means higher quality */
+#define CAM_JPEG_QUALITY 10
+
+/* the flash is actually on a GPIO pin */
+#define CAM_FLASH_PIN 4
 
 /*
    This function is called from f_action(). Our job is to parse the "cam"
@@ -73,8 +76,8 @@ void f_cam_cmd (char **tokens)
     /* various other formats : YUV422,GRAYSCALE,RGB565,JPEG */
 
     G_cam_config->pixel_format = PIXFORMAT_JPEG ;
-    G_cam_config->grab_mode = CAMERA_GRAB_WHEN_EMPTY ;
-    G_cam_config->fb_location = CAMERA_FB_IN_DRAM ;
+    G_cam_config->grab_mode = CAMERA_GRAB_LATEST ;
+    G_cam_config->fb_location = CAMERA_FB_IN_PSRAM ;
 
     // UXGA  1600x1200
     // SXGA  1280x1024
@@ -83,17 +86,11 @@ void f_cam_cmd (char **tokens)
     // SVGA  800x600
     // VGA   640x480
 
-    G_cam_config->frame_size = FRAMESIZE_SVGA ;
-    G_cam_config->jpeg_quality = 10;
-    G_cam_config->fb_count = 1;
+    G_cam_config->frame_size = FRAMESIZE_SXGA ;
+    G_cam_config->jpeg_quality = CAM_JPEG_QUALITY ;
+    G_cam_config->fb_count = 1 ;
 
-    if (psramFound())
-    {
-      G_cam_config->frame_size = FRAMESIZE_SXGA ;
-      G_cam_config->fb_count = 1 ;
-      G_cam_config->fb_location = CAMERA_FB_IN_PSRAM ;
-    }
-    else
+    if (psramFound() == false) // all ESP32-CAM modules must have PSRAM.
     {
       strcat (G_reply_buf, "FAULT: No PSRAM found.\r\n") ;
       return ;
@@ -101,14 +98,18 @@ void f_cam_cmd (char **tokens)
 
     esp_err_t err = esp_camera_init (G_cam_config) ;
     if (err)
+    {
       sprintf (line, "FAULT: esp_camera_init() failed 0x%x.\r\n", err) ;
+      free (G_cam_config) ;
+      G_cam_config = NULL ;
+    }
     else
       sprintf (line, "initialized psram free:%d size:%d bytes.\r\n",
                ESP.getFreePsram(), ESP.getPsramSize()) ;
     strcat (G_reply_buf, line) ;
     return ;
   }
-
+  else
   if (strcmp(tokens[1], "set") == 0)                    // set <param> <value>
   {
     if ((tokens[2] == NULL) || (tokens[3] == NULL))
@@ -137,6 +138,15 @@ void f_cam_cmd (char **tokens)
     if (strcmp(key, "agc_gain") == 0)      s->set_agc_gain(s, v) ;
     if (strcmp(key, "aec_value") == 0)     s->set_aec_value(s, v) ;
 
+    /* the camera flash is on a GPIO pin */
+
+    if (strcmp(key, "flash") == 0)
+    {
+      pinMode (CAM_FLASH_PIN, OUTPUT) ;
+      if (v == 1) digitalWrite (CAM_FLASH_PIN, HIGH) ;
+      if (v == 0) digitalWrite (CAM_FLASH_PIN, LOW) ;
+    }
+
     /* framesize is specified as a string */
 
     if (strcmp(key, "framesize") == 0)
@@ -157,7 +167,7 @@ void f_cam_cmd (char **tokens)
 
     sprintf (G_reply_buf, "setting %s -> %s.\r\n", key, tokens[3]) ;
   }
-
+  else
   if (strcmp(tokens[1], "help") == 0)                   // help
   {
     strcpy (G_reply_buf,
@@ -167,7 +177,7 @@ void f_cam_cmd (char **tokens)
             "cam set saturation <-2 to 2>\r\n"
             "cam set sharpness <-2 to 2>\r\n"
             "cam set denoise <n>\r\n"
-            "cam set quality <0 to 63>\r\n"
+            "cam set quality <10 to 63>\r\n"
             "cam set colorbar <0 or 1>\r\n"
             "cam set whitebal <0 or 1>\r\n"
             "cam set gain_ctrl <0 or 1>\r\n"
@@ -178,6 +188,7 @@ void f_cam_cmd (char **tokens)
             "cam set awb_gain <n>\r\n"
             "cam set agc_gain <0 to 30>\r\n"
             "cam set aec_value <0 to 1200>\r\n"
+            "cam set flash <0 or 1>\r\n"
             "cam set framesize <format>\r\n"
             "[framesizes]\r\n"
             "uxga 1600x1200\r\n"
@@ -186,6 +197,10 @@ void f_cam_cmd (char **tokens)
             "xga  1024x768\r\n"
             "svga 800x600\r\n"
             "vga  640x480\r\n") ;
+  }
+  else
+  {
+    strcpy (G_reply_buf, "FAULT: unknown command.\r\n") ;
   }
 }
 
