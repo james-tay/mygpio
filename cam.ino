@@ -1,7 +1,8 @@
 /*
    References
-     - https://github.com/espressif/esp32-camera/blob/master/driver/include/esp_camera.h
      - https://github.com/espressif/esp32-camera/blob/master/conversions/to_jpg.cpp
+     - https://github.com/espressif/esp32-camera/blob/master/driver/include/sensor.h
+     - https://github.com/espressif/esp32-camera/blob/master/driver/include/esp_camera.h
 */
 
 /* camera pin configuration */
@@ -35,7 +36,7 @@ void f_cam_cmd (char **tokens)
 {
   char line[BUF_SIZE] ;
 
-  if (strcmp(tokens[1], "init") == 0)                           // init
+  if (strcmp(tokens[1], "init") == 0)                   // init
   {
     if (G_cam_config != NULL)
     {
@@ -103,6 +104,37 @@ void f_cam_cmd (char **tokens)
                ESP.getFreePsram(), ESP.getPsramSize()) ;
     strcat (G_reply_buf, line) ;
     return ;
+  }
+
+  if (strcmp(tokens[1], "set") == 0)                    // set <param> <value>
+  {
+    if ((tokens[2] == NULL) || (tokens[3] == NULL))
+    {
+      strcat (G_reply_buf, "FAULT: missing arguments.\r\n") ;
+      return ;
+    }
+    char *key = tokens[2] ;
+    int v = atoi(tokens[3]) ;
+    sensor_t *s = esp_camera_sensor_get () ;
+
+    if (strcmp(key, "contrast") == 0)      s->set_contrast(s, v) ;
+    if (strcmp(key, "brightness") == 0)    s->set_brightness(s, v) ;
+    if (strcmp(key, "saturation") == 0)    s->set_saturation(s, v) ;
+    if (strcmp(key, "sharpness") == 0)     s->set_sharpness(s, v) ;
+    if (strcmp(key, "denoise") == 0)       s->set_denoise(s, v) ;
+    if (strcmp(key, "quality") == 0)       s->set_quality(s, v) ;
+    if (strcmp(key, "colorbar") == 0)      s->set_colorbar(s, v) ;
+    if (strcmp(key, "whitebal") == 0)      s->set_whitebal(s, v) ;
+    if (strcmp(key, "gain_ctrl") == 0)     s->set_gain_ctrl(s, v) ;
+    if (strcmp(key, "exposure_ctrl") == 0) s->set_exposure_ctrl(s, v) ;
+    if (strcmp(key, "hmirror") == 0)       s->set_hmirror(s, v) ;
+    if (strcmp(key, "vflip") == 0)         s->set_vflip(s, v) ;
+    if (strcmp(key, "aec2") == 0)          s->set_aec2(s, v) ;
+    if (strcmp(key, "awb_gain") == 0)      s->set_awb_gain(s, v) ;
+    if (strcmp(key, "agc_gain") == 0)      s->set_agc_gain(s, v) ;
+    if (strcmp(key, "aec_value") == 0)     s->set_aec_value(s, v) ;
+
+    sprintf (G_reply_buf, "setting %s -> %d.\r\n", key, v) ;
   }
 }
 
