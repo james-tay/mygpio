@@ -313,3 +313,10 @@ start capturing jpeg frames. For example,
 % curl http://esp32-cam.example.com/cam >image.jpg
 ```
 
+To view have the image auto-reload in your browser, specify the refresh time
+in milli-seconds. Eg,
+
+```
+http://esp32-cam.example.com/cam?refresh=5000
+```
+

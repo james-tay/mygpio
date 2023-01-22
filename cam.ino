@@ -207,11 +207,58 @@ void f_cam_cmd (char **tokens)
 /*
    This function is called when a web client has called us with the "/cam"
    URI. Our job is to attempt to capture a frame and send the jpeg data over.
+   If we were called with something like "/cam?refresh=n", then render HTML
+   instead to have the browser call "/cam" every "n" milli-seconds.
 */
 
 void f_cam_img (S_WebClient *client)
 {
-  char line[BUF_SIZE] ;
+  char line[REPLY_SIZE] ;
+
+  if (strlen(client->query) > 0)
+  {
+    /* we received "/cam?key=value", parse it now */
+
+    strcpy (line, client->query) ;
+    char *idx = line ;
+    char *key = strtok_r (line, "=", &idx) ;
+    if (key != NULL)
+    {
+      char *value = strtok_r (NULL, "=", &idx) ;
+      if (value != NULL)
+      {
+        if (strcmp (key, "refresh") == 0)
+        {
+          int dur_ms = atoi (value) ;
+
+          /* now that we've parsed "key" and "value", "line" can be re-used */
+
+          strcpy (line, "HTTP/1.1 200 OK\n") ;
+          write (client->sd, line, strlen(line)) ;
+          strcpy (line, "Connection: close\n\n") ;
+          write (client->sd, line, strlen(line)) ;
+
+          sprintf (line,
+            "<html>\n"
+            "<head>\n"
+            "<script language=\"JavaScript\" type=\"text/javascript\">\n"
+            "function f_refresh() {\n"
+            "  document.getElementById('img').src = '/cam?'+Math.random();\n"
+            "  setTimeout ('f_refresh()', %d);\n"
+            "}\n"
+            "</script>\n"
+            "</head>\n"
+            "<body onload=\"setTimeout('f_refresh()',%d)\">\n"
+            "<img src=\"/cam\" id=\"img\">\n"
+            "</body>\n"
+            "</html>\n",
+            dur_ms, dur_ms) ;
+          write (client->sd, line, strlen(line)) ;
+          return ;
+        }
+      }
+    }
+  }
 
   /*
      somehow, there are always 2x frames in the frame buffer queue (despite we
