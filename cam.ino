@@ -37,7 +37,7 @@
 
 void f_cam_cmd (char **tokens)
 {
-  char line[BUF_SIZE] ;
+  char line[REPLY_SIZE] ;
 
   if (strcmp(tokens[1], "init") == 0)                   // init
   {
@@ -110,6 +110,68 @@ void f_cam_cmd (char **tokens)
     return ;
   }
   else
+  if (strcmp(tokens[1], "show") == 0)                   // show
+  {
+    sensor_t *s = esp_camera_sensor_get () ;
+    if (s == NULL)
+    {
+      strcat (G_reply_buf, "FAULT: esp_camera_sensor_get() failed.\r\n") ;
+      return ;
+    }
+
+    sprintf (G_reply_buf,
+             "quality: %d\r\n"
+             "brightness: %d\r\n"
+             "contrast: %d\r\n"
+             "saturation: %d\r\n"
+             "sharpness: %d\r\n"
+             "denoise: %d\r\n"
+             "special_effect: %d\r\n"
+             "wb_mode: %d\r\n"
+             "awb: %d\r\n"
+             "awb_gain: %d\r\n"
+             "aec: %d\r\n"
+             "aec2: %d\r\n"
+             "ae_level: %d\r\n"
+             "aec_value: %d\r\n"
+             "agc: %d\r\n"
+             "agc_gain: %d\r\n"
+             "gainceiling: %d\r\n"
+             "bpc: %d\r\n"
+             "wpc: %d\r\n"
+             "raw_gma: %d\r\n"
+             "lenc: %d\r\n"
+             "hmirror: %d\r\n"
+             "vflip: %d\r\n"
+             "dcw: %d\r\n"
+             "colorbar: %d\r\n",
+             s->status.quality,
+             s->status.brightness,
+             s->status.contrast,
+             s->status.saturation,
+             s->status.sharpness,
+             s->status.denoise,
+             s->status.special_effect,
+             s->status.wb_mode,
+             s->status.awb,
+             s->status.awb_gain,
+             s->status.aec,
+             s->status.aec2,
+             s->status.ae_level,
+             s->status.aec_value,
+             s->status.agc,
+             s->status.agc_gain,
+             s->status.gainceiling,
+             s->status.bpc,
+             s->status.wpc,
+             s->status.raw_gma,
+             s->status.lenc,
+             s->status.hmirror,
+             s->status.vflip,
+             s->status.dcw,
+             s->status.colorbar) ;
+  }
+  else
   if (strcmp(tokens[1], "set") == 0)                    // set <param> <value>
   {
     if ((tokens[2] == NULL) || (tokens[3] == NULL))
@@ -120,6 +182,11 @@ void f_cam_cmd (char **tokens)
     char *key = tokens[2] ;
     int v = atoi(tokens[3]) ;
     sensor_t *s = esp_camera_sensor_get () ;
+    if (s == NULL)
+    {
+      strcat (G_reply_buf, "FAULT: esp_camera_sensor_get() failed.\r\n") ;
+      return ;
+    }
 
     if (strcmp(key, "contrast") == 0)      s->set_contrast(s, v) ;
     if (strcmp(key, "brightness") == 0)    s->set_brightness(s, v) ;

@@ -32,6 +32,7 @@ void f_action (char **tokens)
             "[System]\r\n"
             "cam init\r\n"
             "cam help\r\n"
+            "cam show\r\n"
             "cam set <param> <value>\r\n"
             "debug <num>\r\n"
             "file recv <port> <filename>\r\n"
