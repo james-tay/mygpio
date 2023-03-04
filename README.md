@@ -309,7 +309,9 @@ start capturing jpeg frames. For example,
 
 ```
 % curl http://esp32-cam.example.com/v1?cmd=cam+init
-% curl http://esp32-cam.example.com/v1?cmd=cam+vflip+1
+% curl http://esp32-cam.example.com/v1?cmd=cam+set+framesize+xga
+% curl http://esp32-cam.example.com/v1?cmd=cam+set+vflip+1
+% curl http://esp32-cam.example.com/v1?cmd=cam+set+hmirror+1
 % curl http://esp32-cam.example.com/cam >image.jpg
 ```
 
@@ -319,4 +321,8 @@ in milli-seconds. Eg,
 ```
 http://esp32-cam.example.com/cam?refresh=5000
 ```
+
+Idle power draw from 5v USB power is about 80ma and up to 150ma when camera
+is capturing and transmitting over wifi.
+
 
