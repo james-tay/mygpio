@@ -330,5 +330,36 @@ To enable long exposure times on the esp32-cam module,
 ```
 % curl http://esp32-cam.example.com/v1?cmd=cam+reg+255+255+1
 % curl http://esp32-cam.example.com/v1?cmd=cam+reg+17+255+1
+```
+
+The esp32-cam's OTA may fail because it uses the "huge_app" partition scheme
+by default (which only has 1x partition for user application code). This
+partition scheme is defined in file,
+
+``.arduino15/packages/esp32/hardware/esp32/2.0.1/tools/partitions/huge_app.csv``
+
+We can modify,
+
+``.arduino15/packages/esp32/hardware/esp32/2.0.1/boards.txt``
+
+changing the lines,
 
 ```
+esp32cam.upload.maximum_size=3145728
+esp32cam.build.partitions=huge_app
+```
+
+to
+
+```
+esp32cam.upload.maximum_size=1966080
+esp32cam.build.partitions=min_spiffs
+```
+
+This in turn uses the partition scheme defined in the file,
+
+``.arduino15/packages/esp32/hardware/esp32/2.0.1/tools/partitions/min_spiffs.csv``
+
+After making the above changes, be sure to recompile, re-upload the binary
+and run an "fs format".
+
