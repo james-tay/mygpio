@@ -325,4 +325,10 @@ http://esp32-cam.example.com/cam?refresh=5000
 Idle power draw from 5v USB power is about 80ma and up to 150ma when camera
 is capturing and transmitting over wifi.
 
+To enable long exposure times on the esp32-cam module,
 
+```
+% curl http://esp32-cam.example.com/v1?cmd=cam+reg+255+255+1
+% curl http://esp32-cam.example.com/v1?cmd=cam+reg+17+255+1
+
+```

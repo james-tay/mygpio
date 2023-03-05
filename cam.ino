@@ -120,56 +120,56 @@ void f_cam_cmd (char **tokens)
     }
 
     sprintf (G_reply_buf,
-             "quality: %d\r\n"
-             "brightness: %d\r\n"
-             "contrast: %d\r\n"
-             "saturation: %d\r\n"
-             "sharpness: %d\r\n"
-             "denoise: %d\r\n"
-             "special_effect: %d\r\n"
-             "wb_mode: %d\r\n"
-             "awb: %d\r\n"
-             "awb_gain: %d\r\n"
-             "aec: %d\r\n"
-             "aec2: %d\r\n"
              "ae_level: %d\r\n"
+             "aec2: %d\r\n"
+             "aec: %d\r\n"
              "aec_value: %d\r\n"
              "agc: %d\r\n"
              "agc_gain: %d\r\n"
-             "gainceiling: %d\r\n"
+             "awb: %d\r\n"
+             "awb_gain: %d\r\n"
              "bpc: %d\r\n"
-             "wpc: %d\r\n"
-             "raw_gma: %d\r\n"
-             "lenc: %d\r\n"
-             "hmirror: %d\r\n"
-             "vflip: %d\r\n"
+             "brightness: %d\r\n"
+             "colorbar: %d\r\n"
+             "contrast: %d\r\n"
              "dcw: %d\r\n"
-             "colorbar: %d\r\n",
-             s->status.quality,
-             s->status.brightness,
-             s->status.contrast,
-             s->status.saturation,
-             s->status.sharpness,
-             s->status.denoise,
-             s->status.special_effect,
-             s->status.wb_mode,
-             s->status.awb,
-             s->status.awb_gain,
-             s->status.aec,
-             s->status.aec2,
+             "denoise: %d\r\n"
+             "gainceiling: %d\r\n"
+             "hmirror: %d\r\n"
+             "lenc: %d\r\n"
+             "quality: %d\r\n"
+             "raw_gma: %d\r\n"
+             "saturation: %d\r\n"
+             "sharpness: %d\r\n"
+             "special_effect: %d\r\n"
+             "vflip: %d\r\n"
+             "wb_mode: %d\r\n"
+             "wpc: %d\r\n",
              s->status.ae_level,
+             s->status.aec2,
+             s->status.aec,
              s->status.aec_value,
              s->status.agc,
              s->status.agc_gain,
-             s->status.gainceiling,
+             s->status.awb,
+             s->status.awb_gain,
              s->status.bpc,
-             s->status.wpc,
-             s->status.raw_gma,
-             s->status.lenc,
-             s->status.hmirror,
-             s->status.vflip,
+             s->status.brightness,
+             s->status.colorbar,
+             s->status.contrast,
              s->status.dcw,
-             s->status.colorbar) ;
+             s->status.denoise,
+             s->status.gainceiling,
+             s->status.hmirror,
+             s->status.lenc,
+             s->status.quality,
+             s->status.raw_gma,
+             s->status.saturation,
+             s->status.sharpness,
+             s->status.special_effect,
+             s->status.vflip,
+             s->status.wb_mode,
+             s->status.wpc) ;
   }
   else
   if (strcmp(tokens[1], "set") == 0)                    // set <param> <value>
@@ -188,22 +188,22 @@ void f_cam_cmd (char **tokens)
       return ;
     }
 
-    if (strcmp(key, "contrast") == 0)      s->set_contrast(s, v) ;
+    if (strcmp(key, "aec2") == 0)          s->set_aec2(s, v) ;
+    if (strcmp(key, "aec_value") == 0)     s->set_aec_value(s, v) ;
+    if (strcmp(key, "agc_gain") == 0)      s->set_agc_gain(s, v) ;
+    if (strcmp(key, "awb_gain") == 0)      s->set_awb_gain(s, v) ;
     if (strcmp(key, "brightness") == 0)    s->set_brightness(s, v) ;
+    if (strcmp(key, "colorbar") == 0)      s->set_colorbar(s, v) ;
+    if (strcmp(key, "contrast") == 0)      s->set_contrast(s, v) ;
+    if (strcmp(key, "denoise") == 0)       s->set_denoise(s, v) ;
+    if (strcmp(key, "exposure_ctrl") == 0) s->set_exposure_ctrl(s, v) ;
+    if (strcmp(key, "gain_ctrl") == 0)     s->set_gain_ctrl(s, v) ;
+    if (strcmp(key, "hmirror") == 0)       s->set_hmirror(s, v) ;
+    if (strcmp(key, "quality") == 0)       s->set_quality(s, v) ;
     if (strcmp(key, "saturation") == 0)    s->set_saturation(s, v) ;
     if (strcmp(key, "sharpness") == 0)     s->set_sharpness(s, v) ;
-    if (strcmp(key, "denoise") == 0)       s->set_denoise(s, v) ;
-    if (strcmp(key, "quality") == 0)       s->set_quality(s, v) ;
-    if (strcmp(key, "colorbar") == 0)      s->set_colorbar(s, v) ;
-    if (strcmp(key, "whitebal") == 0)      s->set_whitebal(s, v) ;
-    if (strcmp(key, "gain_ctrl") == 0)     s->set_gain_ctrl(s, v) ;
-    if (strcmp(key, "exposure_ctrl") == 0) s->set_exposure_ctrl(s, v) ;
-    if (strcmp(key, "hmirror") == 0)       s->set_hmirror(s, v) ;
     if (strcmp(key, "vflip") == 0)         s->set_vflip(s, v) ;
-    if (strcmp(key, "aec2") == 0)          s->set_aec2(s, v) ;
-    if (strcmp(key, "awb_gain") == 0)      s->set_awb_gain(s, v) ;
-    if (strcmp(key, "agc_gain") == 0)      s->set_agc_gain(s, v) ;
-    if (strcmp(key, "aec_value") == 0)     s->set_aec_value(s, v) ;
+    if (strcmp(key, "whitebal") == 0)      s->set_whitebal(s, v) ;
 
     /* the camera flash is on a GPIO pin */
 
@@ -239,24 +239,24 @@ void f_cam_cmd (char **tokens)
   {
     strcpy (G_reply_buf,
             "[parameters]"
-            "cam set contrast <-2 to 2>\r\n"
-            "cam set brightness <-2 to 2>\r\n"
-            "cam set saturation <-2 to 2>\r\n"
-            "cam set sharpness <-2 to 2>\r\n"
-            "cam set denoise <n>\r\n"
-            "cam set quality <10 to 63>\r\n"
-            "cam set colorbar <0 or 1>\r\n"
-            "cam set whitebal <0 or 1>\r\n"
-            "cam set gain_ctrl <0 or 1>\r\n"
-            "cam set exposure_ctrl <0 or 1>\r\n"
-            "cam set hmirror <0 or 1>\r\n"
-            "cam set vflip <0 or 1>\r\n"
             "cam set aec2 <0 or 1>\r\n"
-            "cam set awb_gain <n>\r\n"
-            "cam set agc_gain <0 to 30>\r\n"
             "cam set aec_value <0 to 1200>\r\n"
+            "cam set agc_gain <0 to 30>\r\n"
+            "cam set awb_gain <n>\r\n"
+            "cam set brightness <-2 to 2>\r\n"
+            "cam set colorbar <0 or 1>\r\n"
+            "cam set contrast <-2 to 2>\r\n"
+            "cam set denoise <n>\r\n"
+            "cam set exposure_ctrl <0 or 1>\r\n"
             "cam set flash <0 or 1>\r\n"
             "cam set framesize <format>\r\n"
+            "cam set gain_ctrl <0 or 1>\r\n"
+            "cam set hmirror <0 or 1>\r\n"
+            "cam set quality <10 to 63>\r\n"
+            "cam set saturation <-2 to 2>\r\n"
+            "cam set sharpness <-2 to 2>\r\n"
+            "cam set vflip <0 or 1>\r\n"
+            "cam set whitebal <0 or 1>\r\n"
             "[framesizes]\r\n"
             "uxga 1600x1200\r\n"
             "sxga 1280x1024\r\n"
@@ -264,6 +264,28 @@ void f_cam_cmd (char **tokens)
             "xga  1024x768\r\n"
             "svga 800x600\r\n"
             "vga  640x480\r\n") ;
+  }
+  else
+  if (strcmp(tokens[1], "reg") == 0)                    // reg
+  {
+    if ((tokens[2] == NULL) || (tokens[3] == NULL) || (tokens[4] == NULL))
+    {
+      strcpy (G_reply_buf, "FAULT: Incorrect arguments to command.\r\n") ;
+      return ;
+    }
+
+    int addr = atoi(tokens[2]) ;
+    int mask = atoi(tokens[3]) ;
+    int value = atoi(tokens[4]) ;
+    sensor_t *s = esp_camera_sensor_get () ;
+    if (s == NULL)
+    {
+      strcat (G_reply_buf, "FAULT: esp_camera_sensor_get() failed.\r\n") ;
+      return ;
+    }
+    int result = s->set_reg (s, addr, mask, value) ;
+    sprintf (G_reply_buf, "set_reg(s,0x%x,0x%x,0x%x) returned %d.\r\n",
+             addr, mask, value, result) ;
   }
   else
   {
