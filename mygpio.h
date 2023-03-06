@@ -172,6 +172,15 @@ struct internal_metrics
   unsigned long mqttOversize ;
   unsigned long mqttPubWaits ;
   unsigned long wifiReconnects ;
+
+  /* camera metrics, only used if G_cam_config is not NULL */
+
+  unsigned long camFaults ;
+  unsigned long camFrames ;
+  unsigned long camLastFrameSize ;
+  unsigned long camLastCaptureDurMs ;
+  unsigned long camLastCaptureTimeMs ;
+  unsigned long camLastXmitDurMs ;
 } ;
 typedef struct internal_metrics S_Metrics ;
 

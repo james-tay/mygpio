@@ -95,7 +95,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
   if (G_debug)
     Serial.println ("DEBUG: f_handleWebMetrics()") ;
 
-  char line[BUF_MEDIUM] ; // <<-- also used to print our current stack addr
+  char line[BUF_MEDIUM] ; // <<-- also used to identify our current stack addr
   sprintf (G_reply_buf,
            "ec_uptime_secs %ld\n"
            "ec_serial_in_bytes %ld\n"
@@ -139,6 +139,26 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
            xPortGetFreeHeapSize(),
            threads) ;
   strcat (G_reply_buf, line) ;
+
+  /* if we have a camera, and it's initialized */
+
+  if (G_cam_config != NULL)
+  {
+    sprintf (line,
+             "ec_cam_faults %ld\n"
+             "ec_cam_frames %ld\n"
+             "ec_cam_last_frame_size %ld\n"
+             "ec_cam_last_capture_dur_ms %ld\n"
+             "ec_cam_last_capture_time_ms %ld\n"
+             "ec_cam_last_xmit_time_ms %ld\n",
+             G_Metrics->camFaults,
+             G_Metrics->camFrames,
+             G_Metrics->camLastFrameSize,
+             G_Metrics->camLastCaptureDurMs,
+             G_Metrics->camLastCaptureTimeMs,
+             G_Metrics->camLastXmitDurMs) ;
+    strcat (G_reply_buf, line) ;
+  }
 
   /* individual thread metrics */
 

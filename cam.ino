@@ -86,13 +86,15 @@ void f_cam_cmd (char **tokens)
     // SVGA  800x600
     // VGA   640x480
 
-    G_cam_config->frame_size = FRAMESIZE_SXGA ;
+    G_cam_config->frame_size = FRAMESIZE_UXGA ;
     G_cam_config->jpeg_quality = CAM_JPEG_QUALITY ;
     G_cam_config->fb_count = 1 ;
 
     if (psramFound() == false) // all ESP32-CAM modules must have PSRAM.
     {
       strcat (G_reply_buf, "FAULT: No PSRAM found.\r\n") ;
+      free (G_cam_config) ;
+      G_cam_config = NULL ;
       return ;
     }
 
@@ -304,6 +306,17 @@ void f_cam_img (S_WebClient *client)
 {
   char line[REPLY_SIZE] ;
 
+  if (G_cam_config == NULL)
+  {
+    strcpy (line, "HTTP/1.1 503 Unavailable\n") ;
+    write (client->sd, line, strlen(line)) ;
+    strcpy (line, "Connection: close\n\n") ;
+    write (client->sd, line, strlen(line)) ;
+    strcpy (line, "FAULT: camera is not initialized.\n") ;
+    write (client->sd, line, strlen(line)) ;
+    return ;
+  }
+
   if (strlen(client->query) > 0)
   {
     /* we received "/cam?key=value", parse it now */
@@ -355,6 +368,7 @@ void f_cam_img (S_WebClient *client)
      image, call esp_camera_fb_get() 2 times.
   */
 
+  unsigned long t_start = millis () ;
   camera_fb_t *fb = esp_camera_fb_get () ;
   if (fb != NULL)
     esp_camera_fb_return (fb) ;
@@ -362,6 +376,7 @@ void f_cam_img (S_WebClient *client)
   fb = esp_camera_fb_get () ;
   if (fb == NULL)
   {
+    G_Metrics->camFaults++ ;
     strcpy (line, "HTTP/1.1 503 Unavailable\n") ;
     write (client->sd, line, strlen(line)) ;
     strcpy (line, "Connection: close\n\n") ;
@@ -379,6 +394,7 @@ void f_cam_img (S_WebClient *client)
   if ((fb->format != PIXFORMAT_JPEG) &&
       (frame2jpg (fb, CAM_JPEG_QUALITY, &jpg_buf, &jpg_len) == false))
   {
+    G_Metrics->camFaults++ ;
     strcpy (line, "HTTP/1.1 503 Unavailable\n") ;
     write (client->sd, line, strlen(line)) ;
     strcpy (line, "Connection: close\n\n") ;
@@ -389,8 +405,15 @@ void f_cam_img (S_WebClient *client)
     return ;
   }
 
+  unsigned long t_end = millis () ;
+  G_Metrics->camLastFrameSize = jpg_len ;
+  G_Metrics->camLastCaptureDurMs = t_end - t_start ;
+  G_Metrics->camLastCaptureTimeMs = t_end ;
+  G_Metrics->camFrames++ ;
+
   /* set the HTTP header and send the jpeg data */
 
+  t_start = t_end ;
   strcpy (line, "HTTP/1.1 200 OK\n") ;
   write (client->sd, line, strlen(line)) ;
   strcpy (line, "Accept-Ranges: bytes\n") ;
@@ -412,6 +435,9 @@ void f_cam_img (S_WebClient *client)
     else
       written = written + amt ;
   }
+  t_end = millis () ;
+  G_Metrics->camLastXmitDurMs = t_end - t_start ;
+
   esp_camera_fb_return (fb) ;
 }
 
