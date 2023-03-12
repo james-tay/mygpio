@@ -156,6 +156,16 @@ struct web_client
 } ;
 typedef struct web_client S_WebClient ;
 
+/* Data structure to manage camera related tasks */
+
+struct cam_mgt
+{
+  int client_sd ;                       // web client's socket descriptor
+  SemaphoreHandle_t lock ;              // serialize esp_camera_fb_get()
+  TaskHandle_t tid ;
+} ;
+typedef struct cam_mgt S_CamMgt ;
+
 /* internal performance metrics */
 
 struct internal_metrics
@@ -181,6 +191,8 @@ struct internal_metrics
   unsigned long camLastCaptureDurMs ;
   unsigned long camLastCaptureTimeMs ;
   unsigned long camLastXmitDurMs ;
+  unsigned long camClientFaults ;
+  unsigned long camStreamed ;
 } ;
 typedef struct internal_metrics S_Metrics ;
 

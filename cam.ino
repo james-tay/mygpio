@@ -30,11 +30,114 @@
 /* the flash is actually on a GPIO pin */
 #define CAM_FLASH_PIN 4
 
+/* when called with "/cam?refresh=n", the minimum millisecs we allow */
+#define CAM_REFRESH_MIN_MS 1000
+
+/* the boundary string which separates JPG frames while streaming */
+#define CAM_STREAM_BOUNDARY "00FRAME00BOUNDARY00"
+
 /* xclk in Mhz, min/max/default */
 
 #define XCLK_MHZ_MIN 6
 #define XCLK_MHZ_MAX 24
 #define XCLK_MHZ_DEF 20
+
+/*
+   This function forms the lifecycle for the thread responsible for supporting
+   video streaming. Only 1 (web) client is supported at any one time, so this
+   thread blocks until it is assigned a client to service.
+*/
+
+void f_cam_streaming_thread ()
+{
+  char line[REPLY_SIZE] ;
+  camera_fb_t *fb = NULL ;
+
+  while (1)
+  {
+    /* wait here until G_CamMgt->client_sd is no longer -1. */
+
+    while (G_CamMgt->client_sd < 0)
+      delay (100) ;
+
+    /* if we're here, that means a web client is waiting, send headers */
+
+    sprintf (line, "HTTP/1.1 200 OK\n"
+                   "Content-Type: multipart/x-mixed-replace;boundary=%s\n\n",
+                   CAM_STREAM_BOUNDARY) ;
+    if (write (G_CamMgt->client_sd, line, strlen(line)) < 0)
+    {
+      G_Metrics->camClientFaults++ ;
+      close (G_CamMgt->client_sd) ;
+      G_CamMgt->client_sd = -1 ;
+    }
+
+    /* main loop, send frames until client disconnects or camera fault */
+
+    while (G_CamMgt->client_sd >= 0)
+    {
+      xSemaphoreTake (G_CamMgt->lock, portMAX_DELAY) ;
+      fb = esp_camera_fb_get () ;
+      xSemaphoreGive (G_CamMgt->lock) ;
+
+      if (fb == NULL)                   // uh oh, something went wrong
+      {
+        G_Metrics->camFaults++ ;
+        close (G_CamMgt->client_sd) ;
+        G_CamMgt->client_sd = -1 ;
+        break ;
+      }
+
+      /* make sure the frame we just grabbed is a jpeg */
+
+      size_t jpg_len = fb->len ;
+      uint8_t *jpg_buf = fb->buf ;
+
+      if ((fb->format != PIXFORMAT_JPEG) &&
+          (frame2jpg (fb, CAM_JPEG_QUALITY, &jpg_buf, &jpg_len) == false))
+      {
+        G_Metrics->camFaults++ ;
+        esp_camera_fb_return (fb) ;
+        close (G_CamMgt->client_sd) ;
+        G_CamMgt->client_sd = -1 ;
+        break ;
+      }
+
+      /* send the jpeg frame */
+
+      sprintf (line, "--%s\n"
+                     "Content-Type: image/jpeg\n"
+                     "Content-Length: %d\n\n",
+                     CAM_STREAM_BOUNDARY,
+                     jpg_len) ;
+      if (write (G_CamMgt->client_sd, line, strlen(line)) < 0)
+      {
+        close (G_CamMgt->client_sd) ;
+        G_CamMgt->client_sd = -1 ;
+      }
+      else
+      {
+        int written = 0 ;
+        while (written != jpg_len)
+        {
+          int remainder = jpg_len - written ;
+          int amt = write (G_CamMgt->client_sd, jpg_buf + written, remainder) ;
+          if (amt < 1)
+          {
+            close (G_CamMgt->client_sd) ;
+            G_CamMgt->client_sd = -1 ;
+            break ;
+          }
+          else
+            written = written + amt ;
+        }
+        G_Metrics->camStreamed++ ;
+      }
+      esp_camera_fb_return (fb) ;
+
+    } /* ... while (G_CamMgt->client_sd >= 0) */
+  } /* ... while (1) */
+}
 
 /*
    This function is called from f_action(). Our job is to parse the "cam"
@@ -67,6 +170,19 @@ void f_cam_cmd (char **tokens)
     }
 
     /* now we go about initialing the camera data structures */
+
+    G_CamMgt = (S_CamMgt*) malloc (sizeof(S_CamMgt)) ;
+    memset (G_CamMgt, 0, sizeof(S_CamMgt)) ;
+
+    G_CamMgt->client_sd = -1 ;                  // -1 indicates not-in-use
+    G_CamMgt->lock = xSemaphoreCreateMutex () ;
+
+    xTaskCreate ((TaskFunction_t) f_cam_streaming_thread,       // function
+                 "streaming_thread",                            // description
+                 MAX_THREAD_STACK,                              // stack depth
+                 NULL,                                          // params
+                 tskIDLE_PRIORITY,                              // priority
+                 &G_CamMgt->tid) ;                              // handle
 
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
     G_cam_config = (camera_config_t*) malloc (sizeof(camera_config_t)) ;
@@ -321,7 +437,8 @@ void f_cam_cmd (char **tokens)
    This function is called when a web client has called us with the "/cam"
    URI. Our job is to attempt to capture a frame and send the jpeg data over.
    If we were called with something like "/cam?refresh=n", then render HTML
-   instead to have the browser call "/cam" every "n" milli-seconds.
+   instead to have the browser call "/cam" every "n" milli-seconds. If we are
+   called with "/cam?stream=n", then enter streaming mode.
 */
 
 void f_cam_img (S_WebClient *client)
@@ -351,9 +468,11 @@ void f_cam_img (S_WebClient *client)
       char *value = strtok_r (NULL, "=", &idx) ;
       if (value != NULL)
       {
-        if (strcmp (key, "refresh") == 0)
+        if (strcmp (key, "refresh") == 0)               // "/cam?refresh=n"
         {
           int dur_ms = atoi (value) ;
+          if (dur_ms < CAM_REFRESH_MIN_MS)
+            dur_ms = CAM_REFRESH_MIN_MS ;
 
           /* now that we've parsed "key" and "value", "line" can be re-used */
 
@@ -380,6 +499,37 @@ void f_cam_img (S_WebClient *client)
           write (client->sd, line, strlen(line)) ;
           return ;
         }
+        if (strcmp (key, "stream") == 0)                // "/cam?stream=n"
+        {
+          if (G_CamMgt->client_sd < 0)
+          {
+            G_CamMgt->client_sd = client->sd ;
+
+            /*
+               BUG - we have to wait here because once this function returns,
+               our parent function will close "client_sd", and FreeRTOS does
+               not have a dup().
+            */
+
+            while (G_CamMgt->client_sd != -1)
+              delay (100) ;
+          }
+          else
+          {
+            strcpy (line, "HTTP/1.1 200 OK\n") ;
+            write (client->sd, line, strlen(line)) ;
+            strcpy (line, "Connection: close\n\n") ;
+            write (client->sd, line, strlen(line)) ;
+            strcpy (line,
+              "<html>\n"
+              "<body>\n"
+              "Video stream busy\n"
+              "</body>\n"
+              "</html>\n") ;
+            write (client->sd, line, strlen(line)) ;
+          }
+          return ;
+        }
       }
     }
   }
@@ -391,11 +541,13 @@ void f_cam_img (S_WebClient *client)
   */
 
   unsigned long t_start = millis () ;
+  xSemaphoreTake (G_CamMgt->lock, portMAX_DELAY) ;
   camera_fb_t *fb = esp_camera_fb_get () ;
   if (fb != NULL)
     esp_camera_fb_return (fb) ;
 
   fb = esp_camera_fb_get () ;
+  xSemaphoreGive (G_CamMgt->lock) ;
   if (fb == NULL)
   {
     G_Metrics->camFaults++ ;

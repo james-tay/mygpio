@@ -350,6 +350,7 @@ SemaphoreHandle_t G_pinflags_lock ;  // lock before ANY access to "G_pin_flags"
 S_Metrics *G_Metrics ;
 S_thread_entry *G_thread_entry ;
 S_WebClient *G_WebClient ;
+S_CamMgt *G_CamMgt=NULL ;
 S_hw_uart *G_hw_uart ;
 LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 

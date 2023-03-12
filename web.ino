@@ -150,13 +150,17 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
              "ec_cam_last_frame_size %ld\n"
              "ec_cam_last_capture_dur_ms %ld\n"
              "ec_cam_last_capture_time_ms %ld\n"
-             "ec_cam_last_xmit_time_ms %ld\n",
+             "ec_cam_last_xmit_time_ms %ld\n"
+             "ec_cam_client_faults %ld\n"
+             "ec_cam_streamed %ld\n",
              G_Metrics->camFaults,
              G_Metrics->camFrames,
              G_Metrics->camLastFrameSize,
              G_Metrics->camLastCaptureDurMs,
              G_Metrics->camLastCaptureTimeMs,
-             G_Metrics->camLastXmitDurMs) ;
+             G_Metrics->camLastXmitDurMs,
+             G_Metrics->camClientFaults,
+             G_Metrics->camStreamed) ;
     strcat (G_reply_buf, line) ;
   }
 
