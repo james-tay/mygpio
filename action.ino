@@ -30,7 +30,7 @@ void f_action (char **tokens)
             "lcd print <row> <col> <message...>\r\n"
             "\r\n"
             "[System]\r\n"
-            "cam init\r\n"
+            "cam init [xclk Mhz (6-24, def 20)]\r\n"
             "cam help\r\n"
             "cam show\r\n"
             "cam set <param> <value>\r\n"

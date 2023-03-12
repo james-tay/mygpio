@@ -30,6 +30,12 @@
 /* the flash is actually on a GPIO pin */
 #define CAM_FLASH_PIN 4
 
+/* xclk in Mhz, min/max/default */
+
+#define XCLK_MHZ_MIN 6
+#define XCLK_MHZ_MAX 24
+#define XCLK_MHZ_DEF 20
+
 /*
    This function is called from f_action(). Our job is to parse the "cam"
    command's sub-commands and act on them.
@@ -47,8 +53,22 @@ void f_cam_cmd (char **tokens)
       return ;
     }
 
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
+    /* let's see if the user specified the desired xclk frequency */
 
+    int xclk_mhz = XCLK_MHZ_DEF ;
+    if (tokens[2] != NULL)
+    {
+      xclk_mhz = atoi (tokens[2]) ;
+      if ((xclk_mhz < XCLK_MHZ_MIN) || (xclk_mhz > XCLK_MHZ_MAX))
+      {
+        sprintf (G_reply_buf, "FAULT: invalid xclk %dmhz.\r\n", xclk_mhz) ;
+        return ;
+      }
+    }
+
+    /* now we go about initialing the camera data structures */
+
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
     G_cam_config = (camera_config_t*) malloc (sizeof(camera_config_t)) ;
     memset (G_cam_config, 0, sizeof(camera_config_t)) ;
 
@@ -69,7 +89,7 @@ void f_cam_cmd (char **tokens)
     G_cam_config->pin_sscb_scl = CAM_PIN_SIOC ;
     G_cam_config->pin_pclk = CAM_PIN_PCLK ;
 
-    G_cam_config->xclk_freq_hz = 20000000 ;
+    G_cam_config->xclk_freq_hz = xclk_mhz * 1000000 ;
     G_cam_config->ledc_timer = LEDC_TIMER_0 ;
     G_cam_config->ledc_channel = LEDC_CHANNEL_0 ;
 
@@ -146,7 +166,8 @@ void f_cam_cmd (char **tokens)
              "special_effect: %d\r\n"
              "vflip: %d\r\n"
              "wb_mode: %d\r\n"
-             "wpc: %d\r\n",
+             "wpc: %d\r\n"
+             "xclk: %d\r\n",
              s->status.ae_level,
              s->status.aec2,
              s->status.aec,
@@ -171,7 +192,8 @@ void f_cam_cmd (char **tokens)
              s->status.special_effect,
              s->status.vflip,
              s->status.wb_mode,
-             s->status.wpc) ;
+             s->status.wpc,
+             s->xclk_freq_hz) ;
   }
   else
   if (strcmp(tokens[1], "set") == 0)                    // set <param> <value>
