@@ -71,8 +71,8 @@ void ft_i2sin (S_thread_entry *p)
       .sample_rate = (uint32_t) sampleRate,
       .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
       .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-      .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_I2S |
-                                                 I2S_COMM_FORMAT_I2S_MSB),
+      .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_STAND_I2S |
+                                                 I2S_COMM_FORMAT_STAND_MSB),
       .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
       .dma_buf_count = MYI2S_DMA_IN_BUFS,
       .dma_buf_len = MYI2S_DMA_SAMPLES
@@ -296,8 +296,8 @@ void ft_i2sout (S_thread_entry *p)
       .sample_rate = (uint32_t) sampleRate,
       .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
       .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-      .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_I2S |
-                                                 I2S_COMM_FORMAT_I2S_MSB),
+      .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_STAND_I2S |
+                                                 I2S_COMM_FORMAT_STAND_MSB),
       .intr_alloc_flags = 0,
       .dma_buf_count = MYI2S_DMA_OUT_BUFS,
       .dma_buf_len = MYI2S_DMA_SAMPLES
