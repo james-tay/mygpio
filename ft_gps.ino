@@ -26,60 +26,60 @@ void ft_gpsmon (S_thread_entry *p)
   /* configure metrics that we will expose */
 
   p->results[0].num_tags = 1 ;
-  p->results[0].meta[0] = "msg" ;
-  p->results[0].data[0] = "\"cksumOk\"" ;
+  p->results[0].meta[0] = (char*) "msg" ;
+  p->results[0].data[0] = (char*) "\"cksumOk\"" ;
 
   p->results[1].num_tags = 1 ;
-  p->results[1].meta[0] = "msg" ;
-  p->results[1].data[0] = "\"cksumBad\"" ;
+  p->results[1].meta[0] = (char*) "msg" ;
+  p->results[1].data[0] = (char*) "\"cksumBad\"" ;
 
   p->results[2].num_tags = 1 ;
-  p->results[2].meta[0] = "msg" ;
-  p->results[2].data[0] = "\"overrun\"" ;
+  p->results[2].meta[0] = (char*) "msg" ;
+  p->results[2].data[0] = (char*) "\"overrun\"" ;
 
   p->results[3].num_tags = 1 ;
-  p->results[3].meta[0] = "position" ;
-  p->results[3].data[0] = "\"latitude\"" ;
+  p->results[3].meta[0] = (char*) "position" ;
+  p->results[3].data[0] = (char*) "\"latitude\"" ;
 
   p->results[4].num_tags = 1 ;
-  p->results[4].meta[0] = "position" ;
-  p->results[4].data[0] = "\"longitude\"" ;
+  p->results[4].meta[0] = (char*) "position" ;
+  p->results[4].data[0] = (char*) "\"longitude\"" ;
 
   p->results[5].num_tags = 1 ;
-  p->results[5].meta[0] = "time" ;
-  p->results[5].data[0] = "\"utc\"" ;
+  p->results[5].meta[0] = (char*) "time" ;
+  p->results[5].data[0] = (char*) "\"utc\"" ;
 
   p->results[6].num_tags = 1 ;
-  p->results[6].meta[0] = "satellites" ;
-  p->results[6].data[0] = "\"used\"" ;
+  p->results[6].meta[0] = (char*) "satellites" ;
+  p->results[6].data[0] = (char*) "\"used\"" ;
 
   p->results[7].num_tags = 1 ;
-  p->results[7].meta[0] = "elevation" ;
-  p->results[7].data[0] = "\"sealevel\"" ;
+  p->results[7].meta[0] = (char*) "elevation" ;
+  p->results[7].data[0] = (char*) "\"sealevel\"" ;
 
   p->results[8].num_tags = 1 ;
-  p->results[8].meta[0] = "elevation" ;
-  p->results[8].data[0] = "\"geoid\"" ;
+  p->results[8].meta[0] = (char*) "elevation" ;
+  p->results[8].data[0] = (char*) "\"geoid\"" ;
 
   p->results[9].num_tags = 1 ;
-  p->results[9].meta[0] = "nav" ;
-  p->results[9].data[0] = "\"mode\"" ; // 1=none, 2=2D fix, 3=3D fix
+  p->results[9].meta[0] = (char*) "nav" ;
+  p->results[9].data[0] = (char*) "\"mode\"" ; // 1=none, 2=2D fix, 3=3D fix
 
   p->results[10].num_tags = 1 ;
-  p->results[10].meta[0] = "dilution" ;
-  p->results[10].data[0] = "\"position\"" ;
+  p->results[10].meta[0] = (char*) "dilution" ;
+  p->results[10].data[0] = (char*) "\"position\"" ;
 
   p->results[11].num_tags = 1 ;
-  p->results[11].meta[0] = "dilution" ;
-  p->results[11].data[0] = "\"horizontal\"" ;
+  p->results[11].meta[0] = (char*) "dilution" ;
+  p->results[11].data[0] = (char*) "\"horizontal\"" ;
 
   p->results[12].num_tags = 1 ;
-  p->results[12].meta[0] = "dilution" ;
-  p->results[12].data[0] = "\"vertical\"" ;
+  p->results[12].meta[0] = (char*) "dilution" ;
+  p->results[12].data[0] = (char*) "\"vertical\"" ;
 
   p->results[13].num_tags = 1 ;
-  p->results[13].meta[0] = "speed" ;
-  p->results[13].data[0] = "\"kmh\"" ;
+  p->results[13].meta[0] = (char*) "speed" ;
+  p->results[13].data[0] = (char*) "\"kmh\"" ;
 
   p->num_float_results = 14 ;
 
@@ -164,7 +164,7 @@ void ft_gpsmon (S_thread_entry *p)
                   if (tok_end - tok_start > 0)
                     msg_tokens[num_tokens] = gps_buf + tok_start ;
                   else
-                    msg_tokens[num_tokens] = "" ; // provide an 0-length string
+                    msg_tokens[num_tokens] = (char*) "" ; // empty string
                   num_tokens++ ;
                   tok_start = tok_end + 1 ;
                 }
@@ -448,24 +448,24 @@ void ft_gpslog (S_thread_entry *p)
     /* configure results (ie, internal metrics) we want to expose */
 
     p->results[0].num_tags = 1 ;
-    p->results[0].meta[0] = "ringbuffer" ;
-    p->results[0].data[0] = "\"size\"" ;
+    p->results[0].meta[0] = (char*) "ringbuffer" ;
+    p->results[0].data[0] = (char*) "\"size\"" ;
 
     p->results[1].num_tags = 1 ;
-    p->results[1].meta[0] = "entries" ;
-    p->results[1].data[0] = "\"written\"" ;
+    p->results[1].meta[0] = (char*) "entries" ;
+    p->results[1].data[0] = (char*) "\"written\"" ;
 
     p->results[2].num_tags = 1 ;
-    p->results[2].meta[0] = "entries" ;
-    p->results[2].data[0] = "\"moving\"" ;
+    p->results[2].meta[0] = (char*) "entries" ;
+    p->results[2].data[0] = (char*) "\"moving\"" ;
 
     p->results[3].num_tags = 1 ;
-    p->results[3].meta[0] = "entries" ;
-    p->results[3].data[0] = "\"stationary\"" ;
+    p->results[3].meta[0] = (char*) "entries" ;
+    p->results[3].data[0] = (char*) "\"stationary\"" ;
 
     p->results[4].num_tags = 1 ;
-    p->results[4].meta[0] = "files" ;
-    p->results[4].data[0] = "\"rotated\"" ;
+    p->results[4].meta[0] = (char*) "files" ;
+    p->results[4].data[0] = (char*) "\"rotated\"" ;
 
     p->num_int_results = 5 ;
 
@@ -560,15 +560,15 @@ void ft_gpslog (S_thread_entry *p)
 
       char *fault = NULL ;
       if (cfg->minSatsUsed < 1)
-        fault = "cfg_minSatsUsed cannot be less than 1" ;
+        fault = (char*) "cfg_minSatsUsed cannot be less than 1" ;
       if (strlen(cfg->gpsThread) < 1)
-        fault = "cfg_gpsThread cannot be empty" ;
+        fault = (char*) "cfg_gpsThread cannot be empty" ;
       if (cfg->normLogSecs < 1)
-        fault = "cfg_normLogSecs cannot be less than 1" ;
+        fault = (char*) "cfg_normLogSecs cannot be less than 1" ;
       if (cfg->maxLogSecs < cfg->normLogSecs)
-        fault = "cfg_maxLogSecs cannot be less than cfg_normLogSecs" ;
+        fault = (char*) "cfg_maxLogSecs cannot be less than cfg_normLogSecs" ;
       if (strlen(cfg->fileName) < 1)
-        fault = "cfg_fileName cannot be empty" ;
+        fault = (char*) "cfg_fileName cannot be empty" ;
 
       if (fault)
       {

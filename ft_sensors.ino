@@ -16,58 +16,58 @@ void ft_adxl335 (S_thread_entry *p)
     delay (50) ;
 
     p->results[0].num_tags = 2 ;
-    p->results[0].meta[0] = "axis" ;
-    p->results[0].data[0] = "\"x\"" ;
-    p->results[0].meta[1] = "type" ;
-    p->results[0].data[1] = "\"Min\"" ;
+    p->results[0].meta[0] = (char*) "axis" ;
+    p->results[0].data[0] = (char*) "\"x\"" ;
+    p->results[0].meta[1] = (char*) "type" ;
+    p->results[0].data[1] = (char*) "\"Min\"" ;
 
     p->results[1].num_tags = 2 ;
-    p->results[1].meta[0] = "axis" ;
-    p->results[1].data[0] = "\"x\"" ;
-    p->results[1].meta[1] = "type" ;
-    p->results[1].data[1] = "\"Ave\"" ;
+    p->results[1].meta[0] = (char*) "axis" ;
+    p->results[1].data[0] = (char*) "\"x\"" ;
+    p->results[1].meta[1] = (char*) "type" ;
+    p->results[1].data[1] = (char*) "\"Ave\"" ;
 
     p->results[2].num_tags = 2 ;
-    p->results[2].meta[0] = "axis" ;
-    p->results[2].data[0] = "\"x\"" ;
-    p->results[2].meta[1] = "type" ;
-    p->results[2].data[1] = "\"Max\"" ;
+    p->results[2].meta[0] = (char*) "axis" ;
+    p->results[2].data[0] = (char*) "\"x\"" ;
+    p->results[2].meta[1] = (char*) "type" ;
+    p->results[2].data[1] = (char*) "\"Max\"" ;
 
     p->results[3].num_tags = 2 ;
-    p->results[3].meta[0] = "axis" ;
-    p->results[3].data[0] = "\"y\"" ;
-    p->results[3].meta[1] = "type" ;
-    p->results[3].data[1] = "\"Min\"" ;
+    p->results[3].meta[0] = (char*) "axis" ;
+    p->results[3].data[0] = (char*) "\"y\"" ;
+    p->results[3].meta[1] = (char*) "type" ;
+    p->results[3].data[1] = (char*) "\"Min\"" ;
 
     p->results[4].num_tags = 2 ;
-    p->results[4].meta[0] = "axis" ;
-    p->results[4].data[0] = "\"y\"" ;
-    p->results[4].meta[1] = "type" ;
-    p->results[4].data[1] = "\"Ave\"" ;
+    p->results[4].meta[0] = (char*) "axis" ;
+    p->results[4].data[0] = (char*) "\"y\"" ;
+    p->results[4].meta[1] = (char*) "type" ;
+    p->results[4].data[1] = (char*) "\"Ave\"" ;
 
     p->results[5].num_tags = 2 ;
-    p->results[5].meta[0] = "axis" ;
-    p->results[5].data[0] = "\"y\"" ;
-    p->results[5].meta[1] = "type" ;
-    p->results[5].data[1] = "\"Max\"" ;
+    p->results[5].meta[0] = (char*) "axis" ;
+    p->results[5].data[0] = (char*) "\"y\"" ;
+    p->results[5].meta[1] = (char*) "type" ;
+    p->results[5].data[1] = (char*) "\"Max\"" ;
 
     p->results[6].num_tags = 2 ;
-    p->results[6].meta[0] = "axis" ;
-    p->results[6].data[0] = "\"z\"" ;
-    p->results[6].meta[1] = "type" ;
-    p->results[6].data[1] = "\"Min\"" ;
+    p->results[6].meta[0] = (char*) "axis" ;
+    p->results[6].data[0] = (char*) "\"z\"" ;
+    p->results[6].meta[1] = (char*) "type" ;
+    p->results[6].data[1] = (char*) "\"Min\"" ;
 
     p->results[7].num_tags = 2 ;
-    p->results[7].meta[0] = "axis" ;
-    p->results[7].data[0] = "\"z\"" ;
-    p->results[7].meta[1] = "type" ;
-    p->results[7].data[1] = "\"Ave\"" ;
+    p->results[7].meta[0] = (char*) "axis" ;
+    p->results[7].data[0] = (char*) "\"z\"" ;
+    p->results[7].meta[1] = (char*) "type" ;
+    p->results[7].data[1] = (char*) "\"Ave\"" ;
 
     p->results[8].num_tags = 2 ;
-    p->results[8].meta[0] = "axis" ;
-    p->results[8].data[0] = "\"z\"" ;
-    p->results[8].meta[1] = "type" ;
-    p->results[8].data[1] = "\"Max\"" ;
+    p->results[8].meta[0] = (char*) "axis" ;
+    p->results[8].data[0] = (char*) "\"z\"" ;
+    p->results[8].meta[1] = (char*) "type" ;
+    p->results[8].data[1] = (char*) "\"Max\"" ;
 
     strcpy (p->msg, "ok") ;
   }
@@ -120,20 +120,20 @@ void ft_hcsr04 (S_thread_entry *p)
   if (p->loops == 0)
   {
     p->results[0].num_tags = 1 ;
-    p->results[0].meta[0] = "type" ;
-    p->results[0].data[0] = "\"Min\"" ;
+    p->results[0].meta[0] = (char*) "type" ;
+    p->results[0].data[0] = (char*) "\"Min\"" ;
 
     p->results[1].num_tags = 1 ;
-    p->results[1].meta[0] = "type" ;
-    p->results[1].data[0] = "\"Ave\"" ;
+    p->results[1].meta[0] = (char*) "type" ;
+    p->results[1].data[0] = (char*) "\"Ave\"" ;
 
     p->results[2].num_tags = 1 ;
-    p->results[2].meta[0] = "type" ;
-    p->results[2].data[0] = "\"Max\"" ;
+    p->results[2].meta[0] = (char*) "type" ;
+    p->results[2].data[0] = (char*) "\"Max\"" ;
 
     p->results[3].num_tags = 1 ;
-    p->results[3].meta[0] = "type" ;
-    p->results[3].data[0] = "\"Cur\"" ;
+    p->results[3].meta[0] = (char*) "type" ;
+    p->results[3].data[0] = (char*) "\"Cur\"" ;
 
     p->results[0].i_value = millis () ; // use this to store time of last run
     strcpy (p->msg, "init") ;
@@ -242,14 +242,14 @@ void ft_dht22 (S_thread_entry *p)
   if (p->loops == 0)
   {
     p->results[0].num_tags = 1 ;
-    p->results[0].meta[0] = "measurement" ;
-    p->results[0].data[0] = "\"temperature\"" ;
+    p->results[0].meta[0] = (char*) "measurement" ;
+    p->results[0].data[0] = (char*) "\"temperature\"" ;
     p->results[1].num_tags = 1 ;
-    p->results[1].meta[0] = "measurement" ;
-    p->results[1].data[0] = "\"humidity\"" ;
+    p->results[1].meta[0] = (char*) "measurement" ;
+    p->results[1].data[0] = (char*) "\"humidity\"" ;
     p->results[2].num_tags = 1 ;
-    p->results[2].meta[0] = "readings" ;
-    p->results[2].data[0] = "\"abnormal\"" ;
+    p->results[2].meta[0] = (char*) "readings" ;
+    p->results[2].data[0] = (char*) "\"abnormal\"" ;
   }
 
   int delay_ms = atoi (p->in_args[0]) ;
@@ -434,9 +434,9 @@ void ft_ds18b20 (S_thread_entry *p)
         memcpy (addr_buf+w_offset, hex_buf, 16 + 2) ;
 
         p->results[idx].num_tags = 2 ;
-        p->results[idx].meta[0] = "measurement" ;
-        p->results[idx].data[0] = "\"temperature\"" ;
-        p->results[idx].meta[1] = "address" ;
+        p->results[idx].meta[0] = (char*) "measurement" ;
+        p->results[idx].data[0] = (char*) "\"temperature\"" ;
+        p->results[idx].meta[1] = (char*) "address" ;
         p->results[idx].data[1] = addr_buf + w_offset ;
         p->results[idx].f_value = t[idx] ;
 

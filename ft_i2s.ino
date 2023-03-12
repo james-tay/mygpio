@@ -68,7 +68,7 @@ void ft_i2sin (S_thread_entry *p)
   {
     const i2s_config_t i2s_config = {
       .mode = i2s_mode_t (I2S_MODE_MASTER | I2S_MODE_RX),
-      .sample_rate = sampleRate,
+      .sample_rate = (uint32_t) sampleRate,
       .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
       .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
       .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_I2S |
@@ -109,33 +109,33 @@ void ft_i2sin (S_thread_entry *p)
     /* track i2s_read() success/failures, and timing info in our results[] */
 
     p->results[0].num_tags = 1 ;
-    p->results[0].meta[0] = "dma_read" ;
-    p->results[0].data[0] = "\"success\"" ;
+    p->results[0].meta[0] = (char*) "dma_read" ;
+    p->results[0].data[0] = (char*) "\"success\"" ;
     p->results[0].i_value = 0 ;                // i2s_read() bytes_read == size
 
     p->results[1].num_tags = 1 ;
-    p->results[1].meta[0] = "dma_read" ;
-    p->results[1].data[0] = "\"fails\"" ;
+    p->results[1].meta[0] = (char*) "dma_read" ;
+    p->results[1].data[0] = (char*) "\"fails\"" ;
     p->results[1].i_value = 0 ;                // i2s_read() bytes_read < size
 
     p->results[2].num_tags = 1 ;
-    p->results[2].meta[0] = "loop_work" ;
-    p->results[2].data[0] = "\"ms\"" ;
+    p->results[2].meta[0] = (char*) "loop_work" ;
+    p->results[2].data[0] = (char*) "\"ms\"" ;
     p->results[2].i_value = 0 ;                // millisecs last main work
 
     p->results[3].num_tags = 1 ;
-    p->results[3].meta[0] = "loop_total" ;
-    p->results[3].data[0] = "\"ms\"" ;
+    p->results[3].meta[0] = (char*) "loop_total" ;
+    p->results[3].data[0] = (char*) "\"ms\"" ;
     p->results[3].i_value = 0 ;                // millisecs last main loop
 
     p->results[4].num_tags = 1 ;
-    p->results[4].meta[0] = "signal" ;
-    p->results[4].data[0] = "\"dynrange\"" ;
+    p->results[4].meta[0] = (char*) "signal" ;
+    p->results[4].data[0] = (char*) "\"dynrange\"" ;
     p->results[4].i_value = 0 ;                // dynamic range (before gain)
 
     p->results[5].num_tags = 1 ;
-    p->results[5].meta[0] = "signal" ;
-    p->results[5].data[0] = "\"clipped\"" ;
+    p->results[5].meta[0] = (char*) "signal" ;
+    p->results[5].data[0] = (char*) "\"clipped\"" ;
     p->results[5].i_value = 0 ;                // sample sets clipped
 
     p->num_int_results = 6 ;
@@ -293,7 +293,7 @@ void ft_i2sout (S_thread_entry *p)
   {
     const i2s_config_t i2s_config = {
       .mode = i2s_mode_t (I2S_MODE_MASTER | I2S_MODE_TX),
-      .sample_rate = sampleRate,
+      .sample_rate = (uint32_t) sampleRate,
       .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
       .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
       .communication_format = i2s_comm_format_t (I2S_COMM_FORMAT_I2S |
@@ -329,28 +329,28 @@ void ft_i2sout (S_thread_entry *p)
     /* track UDP recv() metrics */
 
     p->results[0].num_tags = 1 ;
-    p->results[0].meta[0] = "recv" ;
-    p->results[0].data[0] = "\"ok\"" ;
+    p->results[0].meta[0] = (char*) "recv" ;
+    p->results[0].data[0] = (char*) "\"ok\"" ;
     p->results[0].i_value = 0 ;         // recv() returns "dma_bufsize"
 
     p->results[1].num_tags = 1 ;
-    p->results[1].meta[0] = "recv" ;
-    p->results[1].data[0] = "\"short\"" ;
+    p->results[1].meta[0] = (char*) "recv" ;
+    p->results[1].data[0] = (char*) "\"short\"" ;
     p->results[1].i_value = 0 ;         // recv() returns < "dma_bufsize"
 
     p->results[2].num_tags = 1 ;
-    p->results[2].meta[0] = "recv" ;
-    p->results[2].data[0] = "\"idle\"" ;
+    p->results[2].meta[0] = (char*) "recv" ;
+    p->results[2].data[0] = (char*) "\"idle\"" ;
     p->results[2].i_value = 0 ;         // select() timed out
 
     p->results[3].num_tags = 1 ;
-    p->results[3].meta[0] = "dma_write" ;
-    p->results[3].data[0] = "\"fails\"" ;
+    p->results[3].meta[0] = (char*) "dma_write" ;
+    p->results[3].data[0] = (char*) "\"fails\"" ;
     p->results[3].i_value = 0 ;         // i2s_write() failed
 
     p->results[4].num_tags = 1 ;
-    p->results[4].meta[0] = "signal" ;
-    p->results[4].data[0] = "\"dynrange\"" ;
+    p->results[4].meta[0] = (char*) "signal" ;
+    p->results[4].data[0] = (char*) "\"dynrange\"" ;
     p->results[4].i_value = 0 ;         // current "dynamic range" percentage
 
     p->num_int_results = 5 ;

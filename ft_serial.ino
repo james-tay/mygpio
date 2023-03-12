@@ -24,20 +24,20 @@ void ft_serial2tcp (S_thread_entry *p)
   /* configure metrics that we will expose */
 
   p->results[0].num_tags = 1 ;
-  p->results[0].meta[0] = "client" ;
-  p->results[0].data[0] = "\"connects\"" ;
+  p->results[0].meta[0] = (char*) "client" ;
+  p->results[0].data[0] = (char*) "\"connects\"" ;
 
   p->results[1].num_tags = 1 ;
-  p->results[1].meta[0] = "client" ;
-  p->results[1].data[0] = "\"connected\"" ;
+  p->results[1].meta[0] = (char*) "client" ;
+  p->results[1].data[0] = (char*) "\"connected\"" ;
 
   p->results[2].num_tags = 1 ;
-  p->results[2].meta[0] = "uart_bytes" ;
-  p->results[2].data[0] = "\"read\"" ;
+  p->results[2].meta[0] = (char*) "uart_bytes" ;
+  p->results[2].data[0] = (char*) "\"read\"" ;
 
   p->results[3].num_tags = 1 ;
-  p->results[3].meta[0] = "uart_bytes" ;
-  p->results[3].data[0] = "\"written\"" ;
+  p->results[3].meta[0] = (char*) "uart_bytes" ;
+  p->results[3].data[0] = (char*) "\"written\"" ;
 
   p->num_int_results = 4 ;
 

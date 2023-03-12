@@ -16,8 +16,8 @@ void ft_counter (S_thread_entry *p)
   {
     p->num_int_results = 1 ;
     p->results[0].num_tags = 1 ;
-    p->results[0].meta[0] = "myType" ;
-    p->results[0].data[0] = "\"myCounter\"" ;
+    p->results[0].meta[0] = (char*) "myType" ;
+    p->results[0].data[0] = (char*) "\"myCounter\"" ;
     p->results[0].i_value = atoi (p->in_args[1]) ;
     strcpy (p->msg, "ok") ;
   }
@@ -100,23 +100,23 @@ void ft_aread (S_thread_entry *p)
 
   if (p->loops > 0)
   {
-    char *cur_state = "normal" ;
-    char *prev_state = "normal" ;
+    char *cur_state = (char*) "normal" ;
+    char *prev_state = (char*) "normal" ;
     if ((loThres != NULL) && (strlen(loThres) > 0))
     {
       int loValue = atoi (loThres) ;
       if (cur_value < loValue)
-        cur_state = "low" ;
+        cur_state = (char*) "low" ;
       if (p->results[0].i_value < loValue)
-        prev_state = "low" ;
+        prev_state = (char*) "low" ;
     }
     if ((hiThres != NULL) && (strlen(hiThres) > 0))
     {
       int hiValue = atoi (hiThres) ;
       if (cur_value > hiValue)
-        cur_state = "high" ;
+        cur_state = (char*) "high" ;
       if (p->results[0].i_value > hiValue)
-        prev_state = "high" ;
+        prev_state = (char*) "high" ;
     }
     if (cur_state != prev_state)
     {
@@ -168,20 +168,20 @@ void ft_dread (S_thread_entry *p)
 
     /* the current high or low state of the pin */
 
-    p->results[0].meta[0] = "type" ;
-    p->results[0].data[0] = "\"state\"" ;
+    p->results[0].meta[0] = (char*) "type" ;
+    p->results[0].data[0] = (char*) "\"state\"" ;
     p->results[0].num_tags = 1 ;
 
     /* number of times pin was high for less than "trig_ms" */
 
-    p->results[1].meta[0] = "type" ;
-    p->results[1].data[0] = "\"short_triggers\"" ;
+    p->results[1].meta[0] = (char*) "type" ;
+    p->results[1].data[0] = (char*) "\"short_triggers\"" ;
     p->results[1].num_tags = 1 ;
 
     /* number of times the pin was high for longer than "trig_ms" */
 
-    p->results[2].meta[0] = "type" ;
-    p->results[2].data[0] = "\"triggers\"" ;
+    p->results[2].meta[0] = (char*) "type" ;
+    p->results[2].data[0] = (char*) "\"triggers\"" ;
     p->results[2].num_tags = 1 ;
 
     p->num_int_results = 3 ;
@@ -274,17 +274,17 @@ void ft_tread (S_thread_entry *p)
   if (p->loops == 0)
   {
     p->results[0].num_tags = 1 ;
-    p->results[0].meta[0] = "type" ;
-    p->results[0].data[0] = "\"Cur\"" ;
+    p->results[0].meta[0] = (char*) "type" ;
+    p->results[0].data[0] = (char*) "\"Cur\"" ;
     p->results[1].num_tags = 1 ;
-    p->results[1].meta[0] = "type" ;
-    p->results[1].data[0] = "\"Min\"" ;
+    p->results[1].meta[0] = (char*) "type" ;
+    p->results[1].data[0] = (char*) "\"Min\"" ;
     p->results[2].num_tags = 1 ;
-    p->results[2].meta[0] = "type" ;
-    p->results[2].data[0] = "\"Max\"" ;
+    p->results[2].meta[0] = (char*) "type" ;
+    p->results[2].data[0] = (char*) "\"Max\"" ;
     p->results[3].num_tags = 1 ;
-    p->results[3].meta[0] = "type" ;
-    p->results[3].data[0] = "\"State\"" ;
+    p->results[3].meta[0] = (char*) "type" ;
+    p->results[3].data[0] = (char*) "\"State\"" ;
     strcpy (p->msg, "init") ;
   }
 
@@ -407,22 +407,22 @@ void ft_relay (S_thread_entry *p)
     /* note: f_relay() reads this */
 
     p->results[0].num_tags = 1 ;
-    p->results[0].meta[0] = "fault" ;
-    p->results[0].data[0] = "\"timeout\"" ;
+    p->results[0].meta[0] = (char*) "fault" ;
+    p->results[0].data[0] = (char*) "\"timeout\"" ;
     p->results[0].i_value = duration_secs ;     // timeout to fault (secs)
 
     /* note: f_relay() reads and updates this */
 
     p->results[1].num_tags = 1 ;
-    p->results[1].meta[0] = "relay" ;
-    p->results[1].data[0] = "\"state\"" ;
+    p->results[1].meta[0] = (char*) "relay" ;
+    p->results[1].data[0] = (char*) "\"state\"" ;
     p->results[1].i_value = 0 ;                 // 0=off, 1=on, -1=fault
 
     /* note: f_relay() updates this */
 
     p->results[2].num_tags = 1 ;
-    p->results[2].meta[0] = "autooff" ;
-    p->results[2].data[0] = "\"time\"" ;
+    p->results[2].meta[0] = (char*) "autooff" ;
+    p->results[2].data[0] = (char*) "\"time\"" ;
     p->results[2].i_value = 0 ;                 // millis() auto off time
 
     p->num_int_results = 3 ;

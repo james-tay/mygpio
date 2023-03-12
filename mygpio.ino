@@ -696,10 +696,10 @@ void f_esp32 (char **tokens)
       if ((G_thread_entry[i].state == THREAD_RUNNING) ||
           (G_thread_entry[i].state == THREAD_STOPPED))
       {
-        char *state = "running" ;
-        char *metric = "(none)" ;
+        char *state = (char*) "running" ;
+        char *metric = (char*) "(none)" ;
         if (G_thread_entry[i].state == THREAD_STOPPED)
-          state = "stopped" ;
+          state = (char*) "stopped" ;
         if (G_thread_entry[i].metric != NULL)
           metric = G_thread_entry[i].metric ;
 

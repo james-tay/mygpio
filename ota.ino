@@ -28,7 +28,7 @@ void f_ota (char *url)
     uri++ ;
   }
   if (uri == NULL)
-    uri = "" ;
+    uri = (char*) "" ;
   if (strlen(host) < 1)
   {
     strcat (G_reply_buf, "WARNING: Invalid URL specified.\r\n") ;

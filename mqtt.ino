@@ -90,7 +90,7 @@ int f_mqtt_connect ()
 {
   char buf[BUF_SIZE], line[BUF_SIZE] ;
   File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
-  if (f != NULL)
+  if (!f)
   {
     int amt = f.readBytes (buf, BUF_SIZE-1) ;
     f.close () ;
@@ -101,7 +101,7 @@ int f_mqtt_connect ()
     }
   }
   f = SPIFFS.open (MQTT_PUB_FILE, "r") ;      // publish file is mandatory
-  if (f == NULL)
+  if (!f)
   {
     sprintf (line, "WARNING: Cannot read MQTT publish file '%s'.",
              MQTT_PUB_FILE) ;
@@ -129,7 +129,7 @@ int f_mqtt_connect ()
   }
 
   f = SPIFFS.open (MQTT_CFG_FILE, "r") ;      // broker config is mandatory
-  if (f == NULL)
+  if (!f)
   {
     sprintf (line, "WARNING: Cannot read MQTT subscribe file '%s'.",
              MQTT_CFG_FILE) ;
@@ -184,7 +184,7 @@ int f_mqtt_connect ()
             */
 
             File f = SPIFFS.open (HOSTNAME_FILE, "r") ;
-            if (f != NULL)
+            if (!f)
             {
               int amt = f.readBytes (G_hostname, BUF_SIZE) ;
               if (amt > 0)
@@ -204,7 +204,7 @@ int f_mqtt_connect ()
           /* take this opportunity to read MQTT_TAGS_FILE */
 
           File f = SPIFFS.open (MQTT_TAGS_FILE, "r") ;
-          if (f != NULL)
+          if (!f)
           {
             int amt = f.readBytes (G_mqtt_tags, MAX_MQTT_LEN-1) ;
             if (amt > 0)

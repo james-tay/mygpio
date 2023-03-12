@@ -109,8 +109,8 @@ void f_cron ()
       Serial.println ("DEBUG: f_cron() calling f_wifi(connect)") ;
 
     char *args[3] ;
-    args[0] = "wifi" ;
-    args[1] = "connect" ;
+    args[0] = (char*) "wifi" ;
+    args[1] = (char*) "connect" ;
     args[2] = NULL ;
     f_wifi (args) ;
     G_Metrics->wifiReconnects++ ;
@@ -131,7 +131,7 @@ void f_cron ()
   if (G_Metrics->cronRuns == 0)
   {
     File f = SPIFFS.open (AUTOEXEC_FILE, "r") ;
-    if (f != NULL)
+    if (!f)
     {
       char buf[BUF_SIZE], *idx=buf ;
       int amt = f.readBytes (buf, BUF_SIZE-1) ;
