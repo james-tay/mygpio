@@ -55,9 +55,9 @@ void f_cam_streaming_thread ()
 
   while (1)
   {
-    /* wait here until G_CamMgt->client_sd is no longer -1. */
+    /* wait here until G_CamMgt->client->sd is no longer 0. */
 
-    while (G_CamMgt->client_sd < 0)
+    while ((G_CamMgt->client == NULL) || (G_CamMgt->client->sd == 0))
       delay (100) ;
 
     /* if we're here, that means a web client is waiting, send headers */
@@ -65,17 +65,21 @@ void f_cam_streaming_thread ()
     sprintf (line, "HTTP/1.1 200 OK\n"
                    "Content-Type: multipart/x-mixed-replace;boundary=%s\n\n",
                    CAM_STREAM_BOUNDARY) ;
-    if (write (G_CamMgt->client_sd, line, strlen(line)) < 0)
+    if (write (G_CamMgt->client->sd, line, strlen(line)) < 0)
     {
       G_Metrics->camClientFaults++ ;
-      close (G_CamMgt->client_sd) ;
-      G_CamMgt->client_sd = -1 ;
+      close (G_CamMgt->client->sd) ;
+      G_CamMgt->client->hold_open = 0 ;
+      G_CamMgt->client->sd = 0 ;
+      G_CamMgt->client = NULL ;
     }
 
     /* main loop, send frames until client disconnects or camera fault */
 
-    while (G_CamMgt->client_sd >= 0)
+    while ((G_CamMgt->client != NULL) && (G_CamMgt->client->sd > 0))
     {
+      delay (400) ; // DEBUG TEST - suspected overheating
+
       xSemaphoreTake (G_CamMgt->lock, portMAX_DELAY) ;
       fb = esp_camera_fb_get () ;
       xSemaphoreGive (G_CamMgt->lock) ;
@@ -83,8 +87,10 @@ void f_cam_streaming_thread ()
       if (fb == NULL)                   // uh oh, something went wrong
       {
         G_Metrics->camFaults++ ;
-        close (G_CamMgt->client_sd) ;
-        G_CamMgt->client_sd = -1 ;
+        close (G_CamMgt->client->sd) ;
+        G_CamMgt->client->hold_open = 0 ;
+        G_CamMgt->client->sd = 0 ;
+        G_CamMgt->client = NULL ;
         break ;
       }
 
@@ -98,8 +104,10 @@ void f_cam_streaming_thread ()
       {
         G_Metrics->camFaults++ ;
         esp_camera_fb_return (fb) ;
-        close (G_CamMgt->client_sd) ;
-        G_CamMgt->client_sd = -1 ;
+        close (G_CamMgt->client->sd) ;
+        G_CamMgt->client->hold_open = 0 ;
+        G_CamMgt->client->sd = 0 ;
+        G_CamMgt->client = NULL ;
         break ;
       }
 
@@ -110,10 +118,13 @@ void f_cam_streaming_thread ()
                      "Content-Length: %d\n\n",
                      CAM_STREAM_BOUNDARY,
                      jpg_len) ;
-      if (write (G_CamMgt->client_sd, line, strlen(line)) < 0)
+      if (write (G_CamMgt->client->sd, line, strlen(line)) < 0)
       {
-        close (G_CamMgt->client_sd) ;
-        G_CamMgt->client_sd = -1 ;
+        G_Metrics->camClientClosed++ ;
+        close (G_CamMgt->client->sd) ;
+        G_CamMgt->client->hold_open = 0 ;
+        G_CamMgt->client->sd = 0 ;
+        G_CamMgt->client = NULL ;
       }
       else
       {
@@ -121,11 +132,14 @@ void f_cam_streaming_thread ()
         while (written != jpg_len)
         {
           int remainder = jpg_len - written ;
-          int amt = write (G_CamMgt->client_sd, jpg_buf + written, remainder) ;
+          int amt = write (G_CamMgt->client->sd, jpg_buf + written, remainder) ;
           if (amt < 1)
           {
-            close (G_CamMgt->client_sd) ;
-            G_CamMgt->client_sd = -1 ;
+            G_Metrics->camClientClosed++ ;
+            close (G_CamMgt->client->sd) ;
+            G_CamMgt->client->hold_open = 0 ;
+            G_CamMgt->client->sd = 0 ;
+            G_CamMgt->client = NULL ;
             break ;
           }
           else
@@ -135,7 +149,7 @@ void f_cam_streaming_thread ()
       }
       esp_camera_fb_return (fb) ;
 
-    } /* ... while (G_CamMgt->client_sd >= 0) */
+    } /* ... while (G_CamMgt->client->sd > 0) */
   } /* ... while (1) */
 }
 
@@ -173,8 +187,6 @@ void f_cam_cmd (char **tokens)
 
     G_CamMgt = (S_CamMgt*) malloc (sizeof(S_CamMgt)) ;
     memset (G_CamMgt, 0, sizeof(S_CamMgt)) ;
-
-    G_CamMgt->client_sd = -1 ;                  // -1 indicates not-in-use
     G_CamMgt->lock = xSemaphoreCreateMutex () ;
 
     xTaskCreate ((TaskFunction_t) f_cam_streaming_thread,       // function
@@ -501,18 +513,11 @@ void f_cam_img (S_WebClient *client)
         }
         if (strcmp (key, "stream") == 0)                // "/cam?stream=n"
         {
-          if (G_CamMgt->client_sd < 0)
+          if (G_CamMgt->client == NULL)
           {
-            G_CamMgt->client_sd = client->sd ;
-
-            /*
-               BUG - we have to wait here because once this function returns,
-               our parent function will close "client_sd", and FreeRTOS does
-               not have a dup().
-            */
-
-            while (G_CamMgt->client_sd != -1)
-              delay (100) ;
+            client->hold_open = 1 ;
+            client->req_pos = 0 ;
+            G_CamMgt->client = client ;
           }
           else
           {

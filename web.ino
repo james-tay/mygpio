@@ -152,6 +152,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
              "ec_cam_last_capture_time_ms %ld\n"
              "ec_cam_last_xmit_time_ms %ld\n"
              "ec_cam_client_faults %ld\n"
+             "ec_cam_client_closed %ld\n"
              "ec_cam_streamed %ld\n",
              G_Metrics->camFaults,
              G_Metrics->camFrames,
@@ -160,6 +161,7 @@ void f_handleWebMetrics ()                      // for uri "/metrics"
              G_Metrics->camLastCaptureTimeMs,
              G_Metrics->camLastXmitDurMs,
              G_Metrics->camClientFaults,
+             G_Metrics->camClientClosed,
              G_Metrics->camStreamed) ;
     strcat (G_reply_buf, line) ;
   }
@@ -306,9 +308,12 @@ void f_handleWebRequest (S_WebClient *client)
     write (client->sd, G_reply_buf, strlen(G_reply_buf)) ;
   }
 
-  close (client->sd) ;
-  client->sd = 0 ;
-  client->req_pos = 0 ;
+  if (client->hold_open == 0)
+  {
+    close (client->sd) ;
+    client->sd = 0 ;
+    client->req_pos = 0 ;
+  }
 }
 
 void f_handleWebServer ()
@@ -323,7 +328,7 @@ void f_handleWebServer ()
   FD_SET (G_sd, &fds) ;
   max_fd = G_sd ;
   for (i=0 ; i < MAX_HTTP_CLIENTS ; i++)
-    if (G_WebClient[i].sd > 0)
+    if ((G_WebClient[i].sd > 0) && (G_WebClient[i].hold_open == 0))
     {
       FD_SET (G_WebClient[i].sd, &fds) ;
       if (G_WebClient[i].sd > max_fd)
@@ -353,7 +358,7 @@ void f_handleWebServer ()
 
         int idx ;
         for (idx=0 ; idx < MAX_HTTP_CLIENTS ; idx++)
-          if (G_WebClient[idx].sd == 0)
+          if ((G_WebClient[idx].sd == 0) && (G_WebClient[idx].hold_open == 0))
           {
             G_WebClient[idx].sd = sd ;
             G_WebClient[idx].connect_time = millis () ;
@@ -369,7 +374,9 @@ void f_handleWebServer ()
     }
 
     for (i=0 ; i < MAX_HTTP_CLIENTS ; i++)
-      if ((G_WebClient[i].sd >0) && (FD_ISSET (G_WebClient[i].sd, &fds)))
+      if ((G_WebClient[i].sd > 0) &&
+          (G_WebClient[i].hold_open == 0) &&
+          (FD_ISSET (G_WebClient[i].sd, &fds)))
       {
         /* activity on this client, could be more data, or a disconnect */
 
@@ -450,6 +457,7 @@ void f_handleWebServer ()
   unsigned long now = millis () ;
   for (i=0 ; i < MAX_HTTP_CLIENTS ; i++)
     if ((G_WebClient[i].sd > 0) &&
+        (G_WebClient[i].hold_open == 0) &&
         (G_WebClient[i].connect_time + (MAX_HTTP_RTIME*1000) < now ))
     {
       if (G_debug)

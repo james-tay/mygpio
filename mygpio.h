@@ -147,6 +147,7 @@ typedef struct thread_entry_s S_thread_entry ;
 struct web_client
 {
   int sd ;                              // the client's socket descriptor
+  int hold_open ;                       // we don't close() on the client
   int req_pos ;                         // insertion point in "request"
   unsigned long connect_time ;          // millis() timestamp of connection
   char request[MAX_HTTP_REQUEST] ;      // http request from client
@@ -160,7 +161,7 @@ typedef struct web_client S_WebClient ;
 
 struct cam_mgt
 {
-  int client_sd ;                       // web client's socket descriptor
+  S_WebClient *client ;                 // current web client
   SemaphoreHandle_t lock ;              // serialize esp_camera_fb_get()
   TaskHandle_t tid ;
 } ;
@@ -192,6 +193,7 @@ struct internal_metrics
   unsigned long camLastCaptureTimeMs ;
   unsigned long camLastXmitDurMs ;
   unsigned long camClientFaults ;
+  unsigned long camClientClosed ;
   unsigned long camStreamed ;
 } ;
 typedef struct internal_metrics S_Metrics ;
