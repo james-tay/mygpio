@@ -163,7 +163,8 @@ struct cam_mgt
 {
   S_WebClient *client ;                 // current web client
   SemaphoreHandle_t lock ;              // serialize esp_camera_fb_get()
-  TaskHandle_t tid ;
+  TaskHandle_t tid ;                    // xTaskCreate() updates this
+  int stream_fps ;                      // desired fps while streaming
 } ;
 typedef struct cam_mgt S_CamMgt ;
 

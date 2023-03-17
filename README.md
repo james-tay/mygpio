@@ -322,6 +322,13 @@ in milli-seconds. Eg,
 http://esp32-cam.example.com/cam?refresh=5000
 ```
 
+To stream images from the camera, specify the desired frame rate (eg, 5 fps),
+
+```
+http://esp32-cam.example.com/cam?stream=5
+
+```
+
 Idle power draw from 5v USB power is about 80ma and up to 150ma when camera
 is capturing and transmitting over wifi.
 

@@ -42,6 +42,11 @@
 #define XCLK_MHZ_MAX 24
 #define XCLK_MHZ_DEF 20
 
+/* min/max fps when streaming */
+
+#define STREAM_MIN_FPS 1
+#define STREAM_MAX_FPS 15
+
 /*
    This function forms the lifecycle for the thread responsible for supporting
    video streaming. Only 1 (web) client is supported at any one time, so this
@@ -52,6 +57,8 @@ void f_cam_streaming_thread ()
 {
   char line[REPLY_SIZE] ;
   camera_fb_t *fb = NULL ;
+  int interval_ms = 0 ;
+  unsigned long next_tm=0 ;
 
   while (1)
   {
@@ -74,12 +81,15 @@ void f_cam_streaming_thread ()
       G_CamMgt->client = NULL ;
     }
 
+    /* based on the desired fps, calculate "interval_ms" */
+
+    interval_ms = 1000 / G_CamMgt->stream_fps ;
+    next_tm = millis() + interval_ms ;
+
     /* main loop, send frames until client disconnects or camera fault */
 
     while ((G_CamMgt->client != NULL) && (G_CamMgt->client->sd > 0))
     {
-      delay (400) ; // DEBUG TEST - suspected overheating
-
       xSemaphoreTake (G_CamMgt->lock, portMAX_DELAY) ;
       fb = esp_camera_fb_get () ;
       xSemaphoreGive (G_CamMgt->lock) ;
@@ -149,6 +159,20 @@ void f_cam_streaming_thread ()
       }
       esp_camera_fb_return (fb) ;
 
+      /* figure out how long we should wait */
+
+      unsigned long now = millis() ;
+      int sleep_ms = next_tm - now ;
+      if (sleep_ms > 0)
+      {
+        next_tm = next_tm + interval_ms ;
+        delay (sleep_ms) ;
+      }
+      else /* ops ! we're behind schedule */
+      {
+        while (next_tm < now)
+          next_tm = next_tm + interval_ms ;
+      }
     } /* ... while (G_CamMgt->client->sd > 0) */
   } /* ... while (1) */
 }
@@ -518,6 +542,11 @@ void f_cam_img (S_WebClient *client)
             client->hold_open = 1 ;
             client->req_pos = 0 ;
             G_CamMgt->client = client ;
+            G_CamMgt->stream_fps = atoi (value) ;
+            if (G_CamMgt->stream_fps < STREAM_MIN_FPS)
+              G_CamMgt->stream_fps = STREAM_MIN_FPS ;
+            if (G_CamMgt->stream_fps > STREAM_MAX_FPS)
+              G_CamMgt->stream_fps = STREAM_MAX_FPS ;
           }
           else
           {
