@@ -304,8 +304,10 @@ esp32-cam platform. To compile and upload,
 % arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32cam .
 ```
 
-To use the camera, first initialize it, optionally configure it, and then
-start capturing jpeg frames. For example,
+Due to the way the esp32 camera module uses serial signalling, it may be
+necessary to perform initial configuration (ie, wifi setup) using the arduino
+IDE's Serial Monitor. To use the camera, first initialize it, optionally
+configure it, and then start capturing jpeg frames. For example,
 
 ```
 % curl http://esp32-cam.example.com/v1?cmd=cam+init
@@ -326,7 +328,6 @@ To stream images from the camera, specify the desired frame rate (eg, 5 fps),
 
 ```
 http://esp32-cam.example.com/cam?stream=5
-
 ```
 
 Idle power draw from 5v USB power is about 80ma and up to 150ma when camera
@@ -369,4 +370,16 @@ This in turn uses the partition scheme defined in the file,
 
 After making the above changes, be sure to recompile, re-upload the binary
 and run an "fs format".
+
+### Notes
+
+- Running the camera's XCLK at 20mhz (default) may result in wifi interference,
+  as a workaround run it at a different frequency. The following example sets
+  XCLK to 6mhz when initializing the camera,
+  `curl http://esp32-cam.example.com/v1?cmd=cam+init+6`
+
+- Due to high cpu consumption at high(er) resolutions and/or frame rates, it
+  may be possible to overheat the unit, which results in unstable behavior. To
+  workaround this, either reduce the frame rate, reduce the XCLK frequency or
+  do this only for short periods (eg, a few minutes).
 
