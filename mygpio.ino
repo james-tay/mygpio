@@ -682,6 +682,7 @@ void f_esp32 (char **tokens)
       "ft_i2sout,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<UDPport>\r\n"
       "ft_relay,<pin>,<dur(secs)>\r\n"
       "ft_serial2tcp,<port>,<baud>,<RXpin>,<TXpin>\r\n"
+      "ft_watchdog,<intervalSecs>,<minUptimeSecs>,<noActivitySecs>\r\n"
       "\r\n"
       "[Notes]\r\n"
       "<delay> - interval between sampling (millisecs)\r\n"
