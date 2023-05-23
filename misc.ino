@@ -131,7 +131,7 @@ void f_cron ()
   if (G_Metrics->cronRuns == 0)
   {
     File f = SPIFFS.open (AUTOEXEC_FILE, "r") ;
-    if (!f)
+    if (f)
     {
       char buf[BUF_SIZE], *idx=buf ;
       int amt = f.readBytes (buf, BUF_SIZE-1) ;

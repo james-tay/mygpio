@@ -90,7 +90,7 @@ int f_mqtt_connect ()
 {
   char buf[BUF_SIZE], line[BUF_SIZE] ;
   File f = SPIFFS.open (MQTT_SUB_FILE, "r") ; // subscribe file is optional
-  if (!f)
+  if (f)
   {
     int amt = f.readBytes (buf, BUF_SIZE-1) ;
     f.close () ;
@@ -184,7 +184,7 @@ int f_mqtt_connect ()
             */
 
             File f = SPIFFS.open (HOSTNAME_FILE, "r") ;
-            if (!f)
+            if (f)
             {
               int amt = f.readBytes (G_hostname, BUF_SIZE) ;
               if (amt > 0)
@@ -204,7 +204,7 @@ int f_mqtt_connect ()
           /* take this opportunity to read MQTT_TAGS_FILE */
 
           File f = SPIFFS.open (MQTT_TAGS_FILE, "r") ;
-          if (!f)
+          if (f)
           {
             int amt = f.readBytes (G_mqtt_tags, MAX_MQTT_LEN-1) ;
             if (amt > 0)

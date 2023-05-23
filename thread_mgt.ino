@@ -104,7 +104,7 @@ void f_thread_create (char *name)
 
   sprintf (filename, "/tags-%s", name) ;
   f = SPIFFS.open (filename, "r") ;
-  if (!f)
+  if (f)
   {
     int amt = f.readBytes (G_thread_entry[idx].tags_buf,
                            MAX_THREAD_TAGS_BUF-1) ;

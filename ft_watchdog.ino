@@ -58,6 +58,18 @@ void ft_watchdog (S_thread_entry *p)
       min_uptime_secs = WG_MIN_UPTIME_SECS ;
     if (no_activity_secs < WG_MIN_NO_ACTIVITY_SECS)
       no_activity_secs = WG_MIN_NO_ACTIVITY_SECS ;
+
+    /* initialize a result which exposes how long our last activity occured */
+
+    p->num_int_results = 1 ;
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = (char*) "dur" ;
+    p->results[0].data[0] = (char*) "\"last_activity\"" ;
+    p->results[0].i_value = 0 ;
+
+    /* indicate successful initialization */
+
+    strcpy (p->msg, "ok") ;
   }
 
   /* now inspect "G_Metrics" and see if we received activity recently */
@@ -78,9 +90,13 @@ void ft_watchdog (S_thread_entry *p)
     last_activity = now_secs ;
   }
 
+  /* check if we've received activity recently, if not, request reboot */
 
+  int dur = now_secs - last_activity ;
+  p->results[0].i_value = dur ;
 
-
+  if (dur > no_activity_secs)
+    G_reboot = 1 ;
 
   delay (interval_secs * 1000) ;
 }
