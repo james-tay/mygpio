@@ -128,6 +128,29 @@ def f_diff_file (file_path, contents):
   else:
     return(False)
 
+# This function writes "contents" to "file_path" on "dev". On success it
+# returns True, otherwise False if something goes wrong.
+
+def f_write_dev_file(dev, file, contents):
+  if (file.startswith("/")):
+    file_path = file
+  else:
+    file_path = "/%s" % file
+  url = "http://%s/v1?cmd=fs+write+%s+%s" % (dev, file_path, contents)
+
+  try:
+    resp = urllib.request.urlopen(url, timeout=5).read().decode("utf-8")
+  except:
+    e = sys.exc_info()
+    print("WARNING: Failed to write %s on %s - %s" % (file_path, dev, e[1]))
+    return(False)
+
+  if (resp.startswith("FAULT")):
+    print("WARNING: Error writing %s on %s - %s" % (file_path, dev, resp))
+    return(False)
+
+  return(True)
+
 # -----------------------------------------------------------------------------
 
 if (len(sys.argv) != 3):
@@ -139,8 +162,12 @@ if (len(sys.argv) != 3):
 
 for (dirpath, dirnames, filenames) in os.walk(sys.argv[1]):
   for d in dirnames:
-    print("NOTICE: Reading local %s%s." % (dirpath, d))
-    x = f_read_local_conf("%s%s" % (dirpath, d))
+    if (dirpath.endswith("/")):
+      full_path = "%s%s" % (dirpath, d)
+    else:
+      full_path = "%s/%s" % (dirpath, d)
+    print("NOTICE: Reading local %s." % full_path)
+    x = f_read_local_conf(full_path)
     if (x is not None):
       G_conf[d] = x
 
@@ -176,6 +203,22 @@ if (sys.argv[2] == "to_local"):
         fd.close()
       else:
         print("NOTICE: No changes to %s." % file_path)
-
   sys.exit(0)
+
+if (sys.argv[2] == "from_local"):
+  for dev in G_devices.keys():          # loop through all devices
+    for filename in G_conf[dev].keys(): # go through all files on this device
+      write_this_file = False           # whether we'll call f_write_dev_File()
+
+      if (filename not in G_devices[dev]):
+        print("NOTICE: File %s not present on %s." % (filename, dev))
+        write_this_file = True
+      else:
+        if (G_devices[dev][filename] != G_conf[dev][filename]):
+          print("NOTICE: File %s does not match on %s." % (filename, dev))
+          write_this_file = True
+      if (write_this_file):
+        f_write_dev_file(dev, filename, G_conf[dev][filename])
+      else:
+        print("NOTICE: No change to %s on %s." % (filename, dev))
 
