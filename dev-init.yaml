@@ -1,0 +1,13 @@
+# Sample configuration for dev-init.py
+
+dev_state: "/srv/dev-state.json"
+prom_server: http://prometheus:9090
+prom_query: ec_uptime_secs
+poll_freq: 60
+devices:
+  - instance: "esp32-1:80"
+    addr: esp32-1
+    init:
+      - "lcd+init"
+      - "hi+4"
+      - "lo+4"
