@@ -383,3 +383,8 @@ and run an "fs format".
   workaround this, either reduce the frame rate, reduce the XCLK frequency or
   do this only for short periods (eg, a few minutes).
 
+- The "DallasTemperature" library is not thread safe. When multiple DS18B20
+  sensors are accessed by different GPIO pins, ft_ds18b20() does not correctly
+  print their addresses. For this reason, printing of addresses can be
+  suppressed with the "noaddr" flag.
+

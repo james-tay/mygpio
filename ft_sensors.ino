@@ -299,10 +299,10 @@ void ft_dht22 (S_thread_entry *p)
            unreasonably high/low.
         */
 
-        if (((fabsf(temperature - prev_t) < DHT22_MAX_TEMPERATURE_DELTA) ||
-             (fabsf(humidity - prev_h) < DHT22_MAX_HUMIDITY_DELTA)) &&
-           (temperature < DHT22_MAX_TEMPERATURE) &&
-           (temperature > DHT22_MIN_TEMPERATURE))
+        if ((fabsf(temperature - prev_t) < DHT22_MAX_TEMPERATURE_DELTA) &&
+            (fabsf(humidity - prev_h) < DHT22_MAX_HUMIDITY_DELTA) &&
+            (temperature < DHT22_MAX_TEMPERATURE) &&
+            (temperature > DHT22_MIN_TEMPERATURE))
           success = 1 ;
         else
           p->results[2].f_value = p->results[2].f_value + 1 ;
@@ -354,9 +354,9 @@ void ft_ds18b20 (S_thread_entry *p)
   #define DS18B20_POWER_OFF_DELAY_MS 500
   #define DS18B20_RETRIES 10
 
-  if (p->num_args != 3)
+  if ((p->num_args != 3) && (p->num_args != 4))
   {
-    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
+    strcpy (p->msg, "FATAL! Expecting 3x or 4x arguments") ;
     p->state = THREAD_STOPPED ;
     return ;
   }
@@ -364,6 +364,9 @@ void ft_ds18b20 (S_thread_entry *p)
   int delay_ms = atoi (p->in_args[0]) ;
   int dataPin = atoi (p->in_args[1]) ;
   int pwrPin = atoi (p->in_args[2]) ;
+  int noAddr = 0 ;
+  if ((p->num_args == 4) and (strcmp(p->in_args[3], "noaddr") == 0))
+    noAddr = 1 ;
   unsigned long start_time = millis () ;
 
   /*
@@ -426,19 +429,26 @@ void ft_ds18b20 (S_thread_entry *p)
 
       for (int idx=0 ; idx < results ; idx++)
       {
-        sprintf (hex_buf, "\"%02x%02x%02x%02x%02x%02x%02x%02x\"",
-                 addr[r_offset], addr[r_offset+1],
-                 addr[r_offset+2], addr[r_offset+3],
-                 addr[r_offset+4], addr[r_offset+5],
-                 addr[r_offset+6], addr[r_offset+7]) ;
-        memcpy (addr_buf+w_offset, hex_buf, 16 + 2) ;
-
-        p->results[idx].num_tags = 2 ;
+        p->results[idx].f_value = t[idx] ;
+        p->results[idx].num_tags = 1 ;
         p->results[idx].meta[0] = (char*) "measurement" ;
         p->results[idx].data[0] = (char*) "\"temperature\"" ;
-        p->results[idx].meta[1] = (char*) "address" ;
-        p->results[idx].data[1] = addr_buf + w_offset ;
-        p->results[idx].f_value = t[idx] ;
+
+        if (noAddr == 0)
+        {
+          sprintf (hex_buf, "\"%02x%02x%02x%02x%02x%02x%02x%02x\"",
+                   addr[r_offset], addr[r_offset+1],
+                   addr[r_offset+2], addr[r_offset+3],
+                   addr[r_offset+4], addr[r_offset+5],
+                   addr[r_offset+6], addr[r_offset+7]) ;
+          memcpy (addr_buf+w_offset, hex_buf, 16 + 2) ;
+
+          p->results[idx].num_tags = 2 ;
+          p->results[idx].meta[0] = (char*) "measurement" ;
+          p->results[idx].data[0] = (char*) "\"temperature\"" ;
+          p->results[idx].meta[1] = (char*) "address" ;
+          p->results[idx].data[1] = addr_buf + w_offset ;
+        }
 
         r_offset = r_offset + 8 ;       // move to next device address
         w_offset = w_offset + 16 + 3 ;  // move to next string
