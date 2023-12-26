@@ -239,6 +239,13 @@ void ft_dht22 (S_thread_entry *p)
     p->state = THREAD_STOPPED ;
     return ;
   }
+
+  int delay_ms = atoi (p->in_args[0]) ;
+  int dataPin = atoi (p->in_args[1]) ;
+  int pwrPin = atoi (p->in_args[2]) ;
+  unsigned long start_time = millis () ;
+  unsigned long cutoff_time = start_time + delay_ms ;
+
   if (p->loops == 0)
   {
     p->results[0].num_tags = 1 ;
@@ -250,13 +257,9 @@ void ft_dht22 (S_thread_entry *p)
     p->results[2].num_tags = 1 ;
     p->results[2].meta[0] = (char*) "readings" ;
     p->results[2].data[0] = (char*) "\"abnormal\"" ;
-  }
 
-  int delay_ms = atoi (p->in_args[0]) ;
-  int dataPin = atoi (p->in_args[1]) ;
-  int pwrPin = atoi (p->in_args[2]) ;
-  unsigned long start_time = millis () ;
-  unsigned long cutoff_time = start_time + delay_ms ;
+    f_register_power_pin (pwrPin, p) ;
+  }
 
   /* if pwrPin is > 0, that means it's a real pin, so power it on now */
 
@@ -321,10 +324,8 @@ void ft_dht22 (S_thread_entry *p)
 
   /* if pwrPin is > 0, that means it's a real pin, so power it off now */
 
-  if (pwrPin >= 0)
-  {
+  if ((pwrPin >= 0) && (G_pin_flags[pwrPin].is_shared_power == 0))
     digitalWrite (pwrPin, LOW) ;
-  }
 
   /* report results (or failure) */
 
@@ -396,6 +397,7 @@ void ft_ds18b20 (S_thread_entry *p)
        polled by different threads.
     */
 
+    f_register_power_pin (pwrPin, p) ;
     pinMode (pwrPin, OUTPUT) ;
     digitalWrite (pwrPin, HIGH) ;
     delay (DS18B20_POWER_ON_DELAY_MS) ;
@@ -410,9 +412,13 @@ void ft_ds18b20 (S_thread_entry *p)
       p->num_float_results = 0 ;
       retries-- ;
       sprintf (p->msg, "Read failed, retries %d.", retries) ;
-      pinMode (pwrPin, OUTPUT) ;
-      digitalWrite (pwrPin, LOW) ;
-      delay (DS18B20_POWER_OFF_DELAY_MS) ;      /* reboot the DS18B20 */
+
+      if (G_pin_flags[pwrPin].is_shared_power == 0)
+      {
+        pinMode (pwrPin, OUTPUT) ;
+        digitalWrite (pwrPin, LOW) ;
+        delay (DS18B20_POWER_OFF_DELAY_MS) ;      /* reboot the DS18B20 */
+      }
       digitalWrite (pwrPin, HIGH) ;
       delay (DS18B20_POWER_ON_DELAY_MS) ;
     }
