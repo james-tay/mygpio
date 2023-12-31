@@ -352,6 +352,7 @@ S_thread_entry *G_thread_entry ;
 S_WebClient *G_WebClient ;
 S_CamMgt *G_CamMgt=NULL ;
 S_hw_uart *G_hw_uart ;
+S_pwm_instance *G_pwm_instance ;
 LiquidCrystal_I2C G_lcd (LCD_ADDR, LCD_WIDTH, LCD_ROWS) ;
 
 WiFiClient G_wClient ; // this is needed to instanciate "G_psClient"
@@ -758,6 +759,7 @@ void setup ()
   G_mqtt_pub = (char*) malloc (MAX_MQTT_LEN + 1) ;
   G_hostname[0] = 0 ;
   G_mqtt_pub[0] = 0 ;
+  G_pwm_instance = NULL ;
 
   char line[BUF_MEDIUM] ;
   if (SPIFFS.begin())

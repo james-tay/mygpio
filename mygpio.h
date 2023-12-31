@@ -219,6 +219,19 @@ struct hw_uart
 } ;
 typedef struct hw_uart S_hw_uart ;
 
+/* definitions and data structure to track PWM outputs */
+
+#define PWM_NUM_CHANNELS 16     // esp32 has 16 PWM channels
+
+struct pwm_instance
+{
+  int gpio ;                    // the GPIO pin used (0 means unused)
+  int res ;                     // resolution, 1-20 bits for esp32
+  int freq ;                    // in hertz
+  int duty ;                    // if "res" is 8-bit, duty is 1-255
+} ;
+typedef struct pwm_instance S_pwm_instance ;
+
 /* Function prototypes in "misc.c" */
 
 int f_i2c_readShort (int device, unsigned char addr, short *result) ;

@@ -55,6 +55,14 @@ Next, we need to be able to build for the ESP32 platform, thus,
 % arduino-cli core install esp32:esp32 --additional-urls $URL
 ```
 
+For reference,
+
+```
+% arduino-cli core list
+ID          Installed Latest Name
+esp32:esp32 2.0.1     2.0.11 esp32
+```
+
 Install the external libraries we depend on,
 
 ```
@@ -62,6 +70,18 @@ Install the external libraries we depend on,
 % arduino-cli lib install PubSubClient
 % arduino-cli lib install DallasTemperature
 % arduino-cli lib install "LiquidCrystal I2C"
+```
+
+For reference,
+
+```
+% arduino-cli lib list
+Name              Installed Available    Location              Description
+ArduinoOTA        1.0.9     1.0.10       LIBRARY_LOCATION_USER ...
+DallasTemperature 3.9.0     -            LIBRARY_LOCATION_USER -
+LiquidCrystal I2C 1.1.2     -            LIBRARY_LOCATION_USER -
+OneWire           2.3.7     -            LIBRARY_LOCATION_USER -
+PubSubClient      2.8       -            LIBRARY_LOCATION_USER -
 ```
 
 At this point we should be ready to compile and flash an ESP32,

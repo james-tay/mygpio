@@ -23,6 +23,9 @@ void f_action (char **tokens)
             "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
             "relay <thread name> on|off\r\n"
             "tone <GPIO pin> <freq> <dur(ms)>\r\n"
+            "pwm_on <GPIO pin> <freq> <duty> <res[1-20]>\r\n"
+            "pwm_duty <GPIO pin> <duty>\r\n"
+            "pwm_off <GPIO pin>\r\n"
             "\r\n"
             "lcd init          - LCD on I2C\r\n"
             "lcd backlight <on/off>\r\n"
@@ -74,6 +77,8 @@ void f_action (char **tokens)
             "/mqtt.pub     <sensor topic pub prefix>,<cmd topic pub prefix>\r\n"
             "/mqtt.sub     <cmd topic prefix>\r\n"
             "/mqtt.tags    <meta=\"value\",...>\r\n"
+            "/tags-<t>     <metric>[,<label>=\"<value>\",...]\r\n"
+            "/thread-<t>   <function>,...\r\n"
             "/wifi.ssid    <ssid>\r\n"
             "/wifi.pw      <pw>\r\n") ;
   }
@@ -319,6 +324,23 @@ void f_action (char **tokens)
 
     sprintf (line, "PWM %.2fhz\r\n", d) ;
     strcat (G_reply_buf, line) ;
+  }
+  else
+  if ((strcmp(tokens[0], "pwm_on") == 0) && (tokens[1] != NULL) &&
+      (tokens[2] != NULL) && (tokens[3] != NULL) && (tokens[4] != NULL))
+  {
+    f_pwm_on (tokens) ;
+  }
+  else
+  if ((strcmp(tokens[0], "pwm_duty") == 0) && (tokens[1] != NULL) &&
+      (tokens[2] != NULL))
+  {
+    f_pwm_duty (tokens) ;
+  }
+  else
+  if ((strcmp(tokens[0], "pwm_off") == 0) && (tokens[1] != NULL))
+  {
+    f_pwm_off (tokens) ;
   }
   else
   {
