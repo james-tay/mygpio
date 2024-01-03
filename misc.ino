@@ -75,6 +75,8 @@ int f_blink (int num)
 
 void f_cron ()
 {
+  char msg[BUF_SIZE] ;
+
   if (G_debug)
     Serial.println ("DEBUG: f_cron()") ;
 
@@ -82,7 +84,7 @@ void f_cron ()
      Under certain circumstances, we want to try auto-reconnecting our wifi,
      even though our wifi state is WL_CONNECTED. In particular,
        a) if our rssi is 0 dBm (ie, not connected)
-       b) our rssi is poorer than RSSI_LOW_THRES (eg, -72dBm)
+       b) our rssi is poorer than the value in WIFI_RSSI_FILE, eg "-72" (dBm)
        b) our mqtt state is MQTT_CONNECTION_LOST
   */
 
@@ -90,8 +92,15 @@ void f_cron ()
 
   if (WiFi.status() == WL_CONNECTED)
   {
-    if ((WiFi.RSSI() == 0) || (WiFi.RSSI() < RSSI_LOW_THRES))
-      wifi_reconnect = 1 ;
+    File f = SPIFFS.open (WIFI_RSSI_FILE, "r") ;
+    int amt = f.readBytes (msg, BUF_SIZE-1) ;
+    f.close () ;
+    if (amt > 0)
+    {
+      msg[amt] = 0 ;
+      if ((WiFi.RSSI() == 0) || (WiFi.RSSI() < atoi(msg)))
+        wifi_reconnect = 1 ;
+    }
     if (G_psClient.state() == MQTT_CONNECTION_LOST)
       wifi_reconnect = 1 ;
   }

@@ -11,7 +11,7 @@ import select
 import termios
 
 cfg_serial_port = "/dev/ttyUSB0"
-cfg_serial_baud = termios.B9600
+cfg_serial_baud = termios.B115200
 cfg_discard_wait_sec = 0.2              # wait for bytes before first xmit
 cfg_read_timeout = 20.0                 # secs to wait for (text) response
 cfg_debug = 0

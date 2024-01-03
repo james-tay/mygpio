@@ -26,10 +26,10 @@
 #define MAX_FILENAME 16               // maximum filename length
 #define WEB_PORT 80                   // web server listens on this port
 #define CRON_INTERVAL 60              // how often we run f_cron()
-#define RSSI_LOW_THRES -72            // less than this is consider low signal
 
-#define WIFI_SSID_FILE "/wifi.ssid"
-#define WIFI_PW_FILE "/wifi.pw"
+#define WIFI_SSID_FILE "/wifi.ssid"   // Wifi SSID to connect to
+#define WIFI_PW_FILE "/wifi.pw"       // Wifi password to use
+#define WIFI_RSSI_FILE "/wifi.rssi"   // Wifi RSSI low threshold in dBm
 #define MQTT_CFG_FILE "/mqtt.cfg"     // used in f_mqtt_connect()
 #define MQTT_PUB_FILE "/mqtt.pub"     // loaded into "G_mqtt_pub"
 #define MQTT_SUB_FILE "/mqtt.sub"     // loaded into "G_mqtt_sub"

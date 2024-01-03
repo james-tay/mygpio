@@ -104,7 +104,7 @@ To build for the ESP32-CAM platform,
 "mygpio" listens on the serial port (ie, USB serial port), and waits for
 user commands. This is similar to how you perform initial configuration with
 network devices (eg, Cisco, Arista, Juniper switches, etc). Simply run your
-favorite terminal emulator, setting the serial line to 9600 baud, N-8-1. On
+favorite terminal emulator, setting the serial line to 115200 baud, N-8-1. On
 a linux machine, this is typically,
 
 ```
@@ -112,7 +112,7 @@ a linux machine, this is typically,
 ```
 
 Once connected, press ENTER, and "mygpio" should respond with the "OK"
-prompt. You can type ``help`` and press ENTER, for a list of all commands
+prompt. You can type `help` and press ENTER, for a list of all commands
 available.
 
 Since the ESP32 supports a simplistic filesystem, "mygpio" uses files to
@@ -151,7 +151,7 @@ For example,
 % curl http://esp32.example.com/v1?cmd=uptime
 ```
 
-Some commands may have multiple arguments, separate arguments with a ``+``,
+Some commands may have multiple arguments, separate arguments with a `+`,
 for example,
 
 ```
@@ -203,9 +203,9 @@ When the above configuration is completed, reboot the ESP32,
 After a reboot, "mygpio" will attempt to load basic configuration into memory.
 If present, this includes,
 
-- our hostname (ie, ``/hostname``)
-- MQTT configuration (ie, ``/mqtt.cfg``, ``/mqtt.pub`` and ``/mqtt.sub``)
-- wifi SSID and password (ie, ``/wifi.ssid`` and ``/wifi.pw``)
+- our hostname (ie, `/hostname`)
+- MQTT configuration (ie, `/mqtt.cfg`, `/mqtt.pub` and `/mqtt.sub`)
+- wifi SSID and password (ie, `/wifi.ssid` and `/wifi.pw`)
 
 It will then scan for its wifi SSID and connect to the AP with the strongest
 signal. Note that MQTT (even if configured) will be in a disconnected state.
@@ -213,8 +213,11 @@ After running for 60 seconds (and every 60 seconds after that), it runs
 
 - if wifi is disconnected, scan for APs and try to reconnect
 - if MQTT is disconnected, try to connect
-- if we're up for exactly 1 minute, check if the file ``/autoexec.cfg``
+- if we're up for exactly 1 minute, check if the file `/autoexec.cfg`
   exists, and start background threads listed in this file.
+- if `/wifi.rssi` exists, and our wifi RSSI is lower than the value in this
+  file, re-scan wifi and search for other base stations (same SSID) with a
+  stronger RSSI. Eg, "-72" (dBm).
 
 A bad configuration or misbehaving thread may lead to a crash. To reduce the
 effects of crash looping, we delay all thread creation for 1 minute so that
@@ -241,7 +244,7 @@ Each thread we run must have a unique name. In the following example, we
 have a DHT22 (temperature and humidity) sensor with its data pin connected to
 the ESP32's GPIO17, and its power supply pin connected to GPIO16. We want
 our thread to poll the sensor every 60000 milliseconds. Thus we create a
-config file in the format ``/thread-<name>``. In this example, our thread
+config file in the format `/thread-<name>`. In this example, our thread
 will be named "env1",
 
 ```
@@ -277,7 +280,7 @@ many sensors are connected to a single ESP32, or we may have multiple ESP32s
 with many DHT22 sensors attached. In this scenario, we want to expose all
 the sensor metrics with some addition metadata tags to help us identify what
 the sensor is reading. To do this, each thread has a tags config file in the
-format ``/tags-<name>``. In the following example, we want our DHT22's metrics
+format `/tags-<name>`. In the following example, we want our DHT22's metrics
 exposed as "sensor_environment". We also tag the location and model of the
 sensor (notice that we escape the double-quotes).
 
@@ -312,7 +315,7 @@ after boot),
 
 Multiple threads can be automatically started on boot using this method.
 Simply provide the thread names as a comma separated list in the 
-``/autoexec.cfg`` file.
+`/autoexec.cfg` file.
 
 ## Support for ESP32-CAM
 
@@ -364,11 +367,11 @@ The esp32-cam's OTA may fail because it uses the "huge_app" partition scheme
 by default (which only has 1x partition for user application code). This
 partition scheme is defined in file,
 
-``.arduino15/packages/esp32/hardware/esp32/2.0.1/tools/partitions/huge_app.csv``
+`.arduino15/packages/esp32/hardware/esp32/2.0.1/tools/partitions/huge_app.csv`
 
 We can modify,
 
-``.arduino15/packages/esp32/hardware/esp32/2.0.1/boards.txt``
+`.arduino15/packages/esp32/hardware/esp32/2.0.1/boards.txt`
 
 changing the lines,
 
@@ -386,7 +389,7 @@ esp32cam.build.partitions=min_spiffs
 
 This in turn uses the partition scheme defined in the file,
 
-``.arduino15/packages/esp32/hardware/esp32/2.0.1/tools/partitions/min_spiffs.csv``
+`.arduino15/packages/esp32/hardware/esp32/2.0.1/tools/partitions/min_spiffs.csv`
 
 After making the above changes, be sure to recompile, re-upload the binary
 and run an "fs format".
@@ -404,7 +407,7 @@ and run an "fs format".
   do this only for short periods (eg, a few minutes).
 
 - The "DallasTemperature" library is not thread safe. When multiple DS18B20
-  sensors are accessed by different GPIO pins, ft_ds18b20() does not correctly
+  sensors are accessed by different GPIO pins, `ft_ds18b20()` does not correctly
   print their addresses. For this reason, printing of addresses can be
   suppressed with the "noaddr" flag.
 
