@@ -742,7 +742,16 @@ void setup ()
 {
   Serial.begin (DEF_BAUD) ;
   Serial.setTimeout (SERIAL_TIMEOUT) ;
-  Serial.println ("\nNOTICE: System boot.") ; /* print as early as possible */
+
+  unsigned char mac[6] ;
+  char line[BUF_MEDIUM] ;
+
+  WiFi.macAddress(mac) ;
+  sprintf (line, "\nNOTICE: System boot with wifi mac %x:%x:%x:%x:%x:%x.",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]) ;
+  Serial.println (line) ;
+  sprintf (line, "NOTICE: Built on %s %s", __DATE__, __TIME__) ;
+  Serial.println (line) ;
 
   G_serial_pos = 0 ;
   G_debug = 0 ;
@@ -761,26 +770,17 @@ void setup ()
   G_mqtt_pub[0] = 0 ;
   G_pwm_instance = NULL ;
 
-  char line[BUF_MEDIUM] ;
   if (SPIFFS.begin())
   {
     int amt ;
     File f_cfg, f_pw ;
-
-    Serial.println ("NOTICE: Checking built-in configuration.") ;
 
     /* if other config files are present, load them into memory now */
 
     f_cfg = SPIFFS.open (MQTT_PUB_FILE, "r") ;
     f_cfg.seek (0) ;
     amt = f_cfg.readBytes (G_mqtt_pub, BUF_MEDIUM) ;
-    if (amt < 1)
-    {
-      snprintf (line, BUF_MEDIUM, "WARNING: %s read returned %d - %s",
-                MQTT_PUB_FILE, amt, strerror(errno)) ;
-      Serial.println (line) ;
-    }
-    else
+    if (amt > 0)
     {
       G_mqtt_pub[amt] = 0 ;
       snprintf (line, BUF_MEDIUM, "NOTICE: publish prefix '%s'.", G_mqtt_pub) ;
@@ -790,20 +790,13 @@ void setup ()
 
     f_cfg = SPIFFS.open (HOSTNAME_FILE, "r") ;
     amt = f_cfg.readBytes (G_hostname, BUF_MEDIUM) ;
-    if (amt < 1)
-    {
-      snprintf (line, BUF_MEDIUM, "WARNING: %s read returned %d - %s",
-                HOSTNAME_FILE, amt, strerror(errno)) ;
-      Serial.println (line) ;
-    }
-    else
+    if (amt > 0)
     {
       G_hostname[amt] = 0 ;
       snprintf (line, BUF_MEDIUM, "NOTICE: hostname is '%s'.", G_hostname) ;
       Serial.println (line) ;
     }
     f_cfg.close () ;
-
 
     /* if wifi ssid and password are available, try connect to wifi now.  */
 
@@ -821,11 +814,11 @@ void setup ()
         cfg_wifi_pw[p_amt] = 0 ;
       if ((s_amt > 0) && (p_amt > 0))
       {
-        sprintf (line, "NOTICE: Wifi config loaded for %s.", cfg_wifi_ssid) ;
+        sprintf (line,
+                 "NOTICE: Connecting to %s, disconnect serial terminal now.",
+                 cfg_wifi_ssid) ;
         Serial.println (line) ;
-        strcpy (line, "NOTICE: ") ;
-        f_wifiConnect (cfg_wifi_ssid, cfg_wifi_pw, line) ;
-        Serial.println (line) ;
+        WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
 
         /* fire up our web server socket */
 
@@ -836,13 +829,8 @@ void setup ()
           saddr.sin_family = AF_INET ;
           saddr.sin_addr.s_addr = htonl(INADDR_ANY) ;
           saddr.sin_port = htons (WEB_PORT) ;
-
-          if ((bind (G_sd, (struct sockaddr*) &saddr, sizeof(saddr)) == 0) &&
-              (listen (G_sd, MAX_SD_BACKLOG) == 0))
-          {
-            sprintf (line, "NOTICE: Webserver started on port %d.", WEB_PORT) ;
-            Serial.println (line) ;
-          }
+          bind (G_sd, (struct sockaddr*) &saddr, sizeof(saddr)) ;
+          listen (G_sd, MAX_SD_BACKLOG) ;
         }
       }
     }
@@ -907,8 +895,6 @@ void setup ()
     memset (&G_thread_entry[i], 0, sizeof(S_thread_entry)) ;
     G_thread_entry[i].lock = xSemaphoreCreateMutex () ;
   }
-  sprintf (line, "NOTICE: Max allowed threads %d.", MAX_THREADS) ;
-  Serial.println (line) ;
   G_publish_lock = xSemaphoreCreateMutex () ;
 
   Wire.begin () ;
@@ -916,7 +902,7 @@ void setup ()
   digitalWrite (LED_BUILTIN, LOW) ;           // 1-sec blink to indicate boot.
   delay (1000) ;
   digitalWrite (LED_BUILTIN, HIGH) ;
-  Serial.println ("NOTICE: Ready.") ;
+  Serial.println ("NOTICE: Ready. Type 'help' for commands.") ;
 }
 
 void loop ()

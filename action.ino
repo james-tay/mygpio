@@ -79,6 +79,7 @@ void f_action (char **tokens)
             "/mqtt.tags    <meta=\"value\",...>\r\n"
             "/tags-<t>     <metric>[,<label>=\"<value>\",...]\r\n"
             "/thread-<t>   <function>,...\r\n"
+            "/wifi.rssi    <dBm>\r\n"
             "/wifi.ssid    <ssid>\r\n"
             "/wifi.pw      <pw>\r\n") ;
   }

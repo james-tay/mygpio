@@ -125,10 +125,14 @@ void f_cron ()
     G_Metrics->wifiReconnects++ ;
   }
 
-  /* If MQTT is not connected, try reconnect */
+  /* If MQTT is configured, but not connected, try reconnect */
 
-  if ((G_psClient.connected() == false) ||
-      (G_psClient.state() != MQTT_CONNECTED))
+  File f = SPIFFS.open (MQTT_CFG_FILE, "r") ;
+  int amt = f.readBytes (msg, BUF_SIZE-1) ;
+  f.close () ;
+  if ((amt > 0) &&
+      ((G_psClient.connected() == false) ||
+       (G_psClient.state() != MQTT_CONNECTED)))
   {
     if (G_debug)
       Serial.println ("DEBUG: f_cron() calling f_mqtt_connect()") ;
