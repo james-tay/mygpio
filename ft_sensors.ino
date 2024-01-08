@@ -100,6 +100,16 @@ void ft_adxl335 (S_thread_entry *p)
   p->num_int_results = 9 ; // "announce" that we have results to view
 }
 
+/*
+   This thread grabs multiple samples from an HC-SR04, for up to "aggr_ms",
+   before aggregating the results (ie, exposing min/ave/max/cur).  It then
+   sleeps until its next measurement cycle, determined by "delay_ms". In
+   general, a sample takes the longest to complete when measuring a distant
+   object (eg, 4m), in which case 14 samples can be typically measured in about
+   500ms (ie, "aggr_ms"). By contrast, with a near object (eg, 18cm), about 38
+   measurements can be done in 500ms.
+*/
+
 void ft_hcsr04 (S_thread_entry *p)
 {
   if (p->num_args != 5)
@@ -111,11 +121,18 @@ void ft_hcsr04 (S_thread_entry *p)
 
   char s[BUF_SIZE] ;
 
-  unsigned long delay_ms = atoi (p->in_args[0]) ;
-  unsigned long aggr_ms = atoi (p->in_args[1]) ;
+  unsigned long delay_ms = atoi (p->in_args[0]) ;       // an entire cycle
+  unsigned long aggr_ms = atoi (p->in_args[1]) ;        // repeatedly sample
   int trigPin = atoi (p->in_args[2]) ;
   int echoPin = atoi (p->in_args[3]) ;
   int thres = atoi (p->in_args[4]) ;
+
+  if (delay_ms < aggr_ms)
+  {
+    strcpy (p->msg, "FATAL! 'delay' cannot be less than 'aggr'.") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
 
   if (p->loops == 0)
   {
@@ -138,15 +155,29 @@ void ft_hcsr04 (S_thread_entry *p)
     p->results[0].i_value = millis () ; // use this to store time of last run
     strcpy (p->msg, "init") ;
   }
+  else
+  {
+    /*
+       "p->results[0].i_value" stores our last cycle start time. Sit here and
+       wait until it's time to run again.
+    */
 
-  /* probe our device until "aggr_ms" expires */
+    unsigned long next_run = p->results[0].i_value + delay_ms ;
+    int nap_ms = next_run - millis () ;
+    if (nap_ms > 0)
+      delay (nap_ms) ;
+
+    p->results[0].i_value = p->results[0].i_value + delay_ms ;
+  }
+
+  /* quickly probe our device as fast as possible until "aggr_ms" passes */
 
   int samples=0, faults=0 ;
   double v_total=0.0, v_min, v_max ;
   unsigned long job_start = p->results[0].i_value ;
   unsigned long job_end = p->results[0].i_value + aggr_ms ;
 
-  while ((job_start < job_end) && (p->state == THREAD_RUNNING))
+  while ((millis() < job_end) && (p->state == THREAD_RUNNING))
   {
     vTaskPrioritySet (p->tid, configMAX_PRIORITIES - 1) ;
     double f_value = f_hcsr04 (trigPin, echoPin) ;
@@ -187,16 +218,14 @@ void ft_hcsr04 (S_thread_entry *p)
     else
       faults++ ;
 
-    /* figure out how long to pause until our next job cycle */
+    /* show what's going on internally */
 
-    int nap = job_start + delay_ms - millis () ;
-    if (nap > 0)
-      delay (nap) ;
-    job_start = job_start + delay_ms ;
+    sprintf (s, "[busy loop:%d samples:%d faults:%d]",
+             p->loops, samples, faults) ;
+    strcpy (p->msg, s) ;
+
+    delay (10) ; // mandatory sleep inbetween samples
   }
-
-  sprintf (s, "[loop:%d samples:%d faults:%d]", p->loops, samples, faults) ;
-  strcpy (p->msg, s) ;
 
   /* "assemble" our final results */
 
@@ -204,14 +233,14 @@ void ft_hcsr04 (S_thread_entry *p)
   p->results[1].f_value = v_total / (double) samples ;
   p->results[2].f_value = v_max ;
 
-  /* get ready for our next run */
-
-  p->results[0].i_value = p->results[0].i_value + aggr_ms ;
-
   if (samples > 0)
     p->num_float_results = 4 ;                  // indicate results are good
   else
     p->num_float_results = 0 ;                  // indicate results are bad
+
+  sprintf (s, "[idle loop:%d samples:%d faults:%d]",
+           p->loops, samples, faults) ;
+  strcpy (p->msg, s) ;
 }
 
 void ft_dht22 (S_thread_entry *p)
