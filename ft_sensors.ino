@@ -112,6 +112,8 @@ void ft_adxl335 (S_thread_entry *p)
 
 void ft_hcsr04 (S_thread_entry *p)
 {
+  static thread_local int prev_state ;  // 0 when < thres, 1 when > thres
+
   if (p->num_args != 5)
   {
     strcpy (p->msg, "FATAL! Expecting 5x arguments") ;
@@ -153,6 +155,7 @@ void ft_hcsr04 (S_thread_entry *p)
     p->results[3].data[0] = (char*) "\"Cur\"" ;
 
     p->results[0].i_value = millis () ; // use this to store time of last run
+    prev_state = -1 ;
     strcpy (p->msg, "init") ;
   }
   else
@@ -195,25 +198,7 @@ void ft_hcsr04 (S_thread_entry *p)
       if (f_value < v_min)
         v_min = f_value ;
       samples++ ;
-
-      /* check for state change */
-
-      if (samples > 1)
-      {
-        int prev_state = 1 ;
-        if (p->results[3].f_value < (double) thres)
-          prev_state = 0 ;
-        int cur_state = 1 ;
-        if (f_value < (double) thres)
-          cur_state = 0 ;
-
-        if (prev_state != cur_state)
-        {
-          p->results[3].f_value = f_value ;
-          f_delivery (p, &p->results[3]) ;
-        }
-      }
-      p->results[3].f_value = f_value ; // use this to store previous value
+      p->results[3].f_value = f_value ;         // update current value
     }
     else
       faults++ ;
@@ -234,7 +219,18 @@ void ft_hcsr04 (S_thread_entry *p)
   p->results[2].f_value = v_max ;
 
   if (samples > 0)
+  {
     p->num_float_results = 4 ;                  // indicate results are good
+
+    /* check if we had a state change, ie, crossed "thres" */
+
+    int cur_state = 0 ;
+    if (p->results[1].f_value > (double) thres)
+      cur_state = 1 ;
+    if ((prev_state > -1) && (prev_state != cur_state)) // skip init cycle
+      f_delivery (p, &p->results[1]) ;                  // send ave value
+    prev_state = cur_state ;
+  }
   else
     p->num_float_results = 0 ;                  // indicate results are bad
 
