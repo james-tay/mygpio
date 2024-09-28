@@ -346,6 +346,7 @@ SemaphoreHandle_t G_publish_lock ;      // signal main thread to publish()
 
 S_pin_flag *G_pin_flags ;            // array of structs for each GPIO pin
 SemaphoreHandle_t G_pinflags_lock ;  // lock before ANY access to "G_pin_flags"
+SemaphoreHandle_t G_hcsr04_lock ;    // serialize HC-SR04 sampling
 
 S_Metrics *G_Metrics ;
 S_thread_entry *G_thread_entry ;
@@ -887,6 +888,7 @@ void setup ()
       G_pin_flags[i].users[j] = NULL ;
   }
   G_pinflags_lock = xSemaphoreCreateMutex () ;
+  G_hcsr04_lock = xSemaphoreCreateMutex () ;
 
   sz = MAX_THREADS * sizeof(S_thread_entry) ;
   G_thread_entry = (S_thread_entry*) malloc (sz) ;

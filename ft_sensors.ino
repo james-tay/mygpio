@@ -108,6 +108,11 @@ void ft_adxl335 (S_thread_entry *p)
    object (eg, 4m), in which case 14 samples can be typically measured in about
    500ms (ie, "aggr_ms"). By contrast, with a near object (eg, 18cm), about 38
    measurements can be done in 500ms.
+
+   If we have multiple HC-SR04 sensors attached to us, then running multiple
+   instances of this thread can lead to multiple sensors firing concurrently
+   and interfering with each other. To prevent this, we must acquire the mutex
+   lock "G_hcsr04_lock" before we command our sensor to take a sample.
 */
 
 void ft_hcsr04 (S_thread_entry *p)
@@ -125,9 +130,10 @@ void ft_hcsr04 (S_thread_entry *p)
 
   unsigned long delay_ms = atoi (p->in_args[0]) ;       // an entire cycle
   unsigned long aggr_ms = atoi (p->in_args[1]) ;        // repeatedly sample
-  int trigPin = atoi (p->in_args[2]) ;
-  int echoPin = atoi (p->in_args[3]) ;
-  int thres = atoi (p->in_args[4]) ;
+  int trigPin = atoi (p->in_args[2]) ;                  // trigger GPIO pin
+  int echoPin = atoi (p->in_args[3]) ;                  // response GPIO pin
+  int thres = atoi (p->in_args[4]) ;                    // send an MQTT event
+  int nap_ms = 0 ;
 
   if (delay_ms < aggr_ms)
   {
@@ -162,11 +168,12 @@ void ft_hcsr04 (S_thread_entry *p)
   {
     /*
        "p->results[0].i_value" stores our last cycle start time. Sit here and
-       wait until it's time to run again.
+       wait until it's time to run again. We don't actually expose any integer
+       results.
     */
 
     unsigned long next_run = p->results[0].i_value + delay_ms ;
-    int nap_ms = next_run - millis () ;
+    nap_ms = next_run - millis () ;
     if (nap_ms > 0)
       delay (nap_ms) ;
 
@@ -179,6 +186,8 @@ void ft_hcsr04 (S_thread_entry *p)
   double v_total=0.0, v_min, v_max ;
   unsigned long job_start = p->results[0].i_value ;
   unsigned long job_end = p->results[0].i_value + aggr_ms ;
+
+  xSemaphoreTake (G_hcsr04_lock, portMAX_DELAY) ; // only 1x sensor polling
 
   while ((millis() < job_end) && (p->state == THREAD_RUNNING))
   {
@@ -205,12 +214,13 @@ void ft_hcsr04 (S_thread_entry *p)
 
     /* show what's going on internally */
 
-    sprintf (s, "[busy loop:%d samples:%d faults:%d]",
-             p->loops, samples, faults) ;
+    sprintf (s, "[busy nap_ms:%d samples:%d faults:%d]",
+             nap_ms, samples, faults) ;
     strcpy (p->msg, s) ;
 
-    delay (10) ; // mandatory sleep inbetween samples
+    delay (10) ; // mandatory sleep (ms) inbetween samples
   }
+  xSemaphoreGive (G_hcsr04_lock) ;
 
   /* "assemble" our final results */
 
@@ -234,8 +244,8 @@ void ft_hcsr04 (S_thread_entry *p)
   else
     p->num_float_results = 0 ;                  // indicate results are bad
 
-  sprintf (s, "[idle loop:%d samples:%d faults:%d]",
-           p->loops, samples, faults) ;
+  sprintf (s, "[idle nap_ms:%d samples:%d faults:%d]",
+           nap_ms, samples, faults) ;
   strcpy (p->msg, s) ;
 }
 

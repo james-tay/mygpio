@@ -98,6 +98,8 @@ To build for the ESP32-CAM platform,
 % arduino-cli upload -v -p /dev/ttyUSB1 -b esp32:esp32:esp32cam .
 ```
 
+It is probably easiest to use the Arduino Serial Monitor to initially
+interact with the ESP32(cam).
 
 ## Initial Setup
 
