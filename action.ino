@@ -13,7 +13,7 @@ void f_action (char **tokens)
             "[GPIO]\r\n"
             "hi <GPIO pin> [pulse (usecs)]\r\n"
             "lo <GPIO pin>\r\n"
-            "aread <GPIO pin>  - analog read (always 0 on esp8266)\r\n"
+            "aread <GPIO pin>  - analog read\r\n"
             "dread <GPIO pin>  - digital read\r\n"
             "tread <GPIO pin>  - capacitive touch read\r\n"
             "bmp180            - barometric pressure (I2C)\r\n"

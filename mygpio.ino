@@ -672,6 +672,7 @@ void f_esp32 (char **tokens)
       "[Currently available <ft_tasks>]\r\n"
       "ft_adxl335,<delay>,<aggr>,<xPin>,<yPin>,<zPin>,<pwrPin>\r\n"
       "ft_aread,<delay>,<inPin>,[pwrPin],[loThres],[hiThres]\r\n"
+      "ft_fast_aread,<delay>,<samples>,<inPin>\r\n"
       "ft_dht22,<delay>,<dataPin>,<pwrPin>\r\n"
       "ft_ds18b20,<delay>,<dataPin>,<pwrPin>[,noaddr]\r\n"
       "ft_dread,<delay>,<pin>,<0=norm,1=pullup>[,<trig_ms>]\r\n"

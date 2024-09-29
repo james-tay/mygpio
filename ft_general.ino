@@ -135,6 +135,75 @@ void ft_aread (S_thread_entry *p)
     delay (nap) ;
 }
 
+/*
+   This thread calls analogRead() as fast as possible to collect the specified
+   number of samples and then sleeps until it's time to do work again. This
+   is useful for sampling rapidly changing inputs and capturing its min, max
+   and ave values.
+
+   In order to hold a large number of samples, we need to allocate an array
+   from heap. This means that when it's time to die, we need to immediately
+   release this memory. For this reason, this thread does NOT return until
+   it's time to die.
+*/
+
+void ft_fast_aread (S_thread_entry *p)
+{
+  int delay_ms, num_samples, in_pin ;
+  unsigned long last_run_ms ;
+
+  /* sanity check our inputs first */
+
+  if (p->num_args != 3)
+  {
+    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+  delay_ms = atoi (p->in_args[0]) ;
+  num_samples = atoi (p->in_args[1]) ;
+  in_pin = atoi (p->in_args[2]) ;
+
+  unsigned short *samples = (unsigned short*) malloc (sizeof(unsigned short) *
+                                                      num_samples) ;
+
+  /* thread's main loop */
+
+  last_run_ms = millis () ;
+  while (p->state == THREAD_RUNNING)
+  {
+    p->loops++ ; // fake our loop counter
+
+
+
+    /* take short naps so we don't sleep past THREAD_SHUTDOWN_PERIOD */
+
+    int max_nap = THREAD_SHUTDOWN_PERIOD / 5 ; // short naps
+    int nap_ms = last_run_ms + delay_ms - millis() ;
+    int total_napped=0 ;
+    sprintf (p->msg, "loop:%d nap:%d", p->loops, nap_ms) ;
+
+    if (nap_ms > 0)
+    {
+      while ((total_napped < nap_ms) && (p->state == THREAD_RUNNING))
+      {
+        if (nap_ms - total_napped > max_nap)
+        {
+          delay (max_nap) ;
+          total_napped = total_napped + max_nap ;
+        }
+        else
+        {
+          delay (nap_ms - total_napped) ;
+          total_napped = nap_ms ;
+        }
+      }
+    }
+    last_run_ms = last_run_ms + delay_ms ;
+  }
+  free (samples) ;
+}
+
 void ft_dread (S_thread_entry *p)
 {
   if ((p->num_args != 3) && (p->num_args != 4))

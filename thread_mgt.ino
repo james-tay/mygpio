@@ -162,6 +162,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_counter ;
   if (strcmp (ft_taskname, "ft_aread") == 0)
     G_thread_entry[idx].ft_addr = ft_aread ;
+  if (strcmp (ft_taskname, "ft_fast_aread") == 0)
+    G_thread_entry[idx].ft_addr = ft_fast_aread ;
   if (strcmp (ft_taskname, "ft_adxl335") == 0)
     G_thread_entry[idx].ft_addr = ft_adxl335 ;
   if (strcmp (ft_taskname, "ft_dht22") == 0)
