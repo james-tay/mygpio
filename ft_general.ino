@@ -149,39 +149,70 @@ void ft_aread (S_thread_entry *p)
 
 void ft_fast_aread (S_thread_entry *p)
 {
-  int delay_ms, num_samples, in_pin ;
+  int delay_ms, num_samples, gap_ms, in_pin ;
   unsigned long last_run_ms ;
 
-  /* sanity check our inputs first */
+  /* sanity check our inputs and allocate memory first */
 
-  if (p->num_args != 3)
+  if (p->num_args != 4)
   {
-    strcpy (p->msg, "FATAL! Expecting 3x arguments") ;
+    strcpy (p->msg, "FATAL! Expecting 4x arguments") ;
     p->state = THREAD_STOPPED ;
     return ;
   }
-  delay_ms = atoi (p->in_args[0]) ;
-  num_samples = atoi (p->in_args[1]) ;
-  in_pin = atoi (p->in_args[2]) ;
+
+  delay_ms = atoi (p->in_args[0]) ;             // duration of entire cycle
+  num_samples = atoi (p->in_args[1]) ;          // number of analogRead() calls
+  gap_ms = atoi (p->in_args[2]) ;               // timing gap between samples
+  in_pin = atoi (p->in_args[3]) ;               // GPIO pin to read from
+
+  if (gap_ms * num_samples >= delay_ms)
+  {
+    strcpy (p->msg, "FATAL! samples * gap_ms >= delay") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  if (gap_ms >= THREAD_SHUTDOWN_PERIOD / 4)
+  {
+    sprintf (p->msg, "FATAL! gap_ms exceeds %d", THREAD_SHUTDOWN_PERIOD / 4) ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
 
   unsigned short *samples = (unsigned short*) malloc (sizeof(unsigned short) *
                                                       num_samples) ;
+  if (samples == NULL)
+  {
+    sprintf (p->msg, "FATAL! Cannot malloc() %d samples", num_samples) ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+  pinMode (in_pin, INPUT) ;
 
   /* thread's main loop */
 
+  int gap_usec = gap_ms * 1000 ;
   last_run_ms = millis () ;
+
   while (p->state == THREAD_RUNNING)
   {
     p->loops++ ; // fake our loop counter
 
-
+    int idx ;
+    for (idx=0 ; idx <num_samples ; idx++)
+    {
+      samples[idx] = analogRead (in_pin) ;
+      ets_delay_us (gap_usec) ; // NOTE !! this is a busy wait !!
+    }
 
     /* take short naps so we don't sleep past THREAD_SHUTDOWN_PERIOD */
 
     int max_nap = THREAD_SHUTDOWN_PERIOD / 5 ; // short naps
     int nap_ms = last_run_ms + delay_ms - millis() ;
     int total_napped=0 ;
-    sprintf (p->msg, "loop:%d nap:%d", p->loops, nap_ms) ;
+    sprintf (p->msg, "loop:%d nap:%d gap_usec:%d",
+             p->loops, nap_ms, gap_usec) ;
 
     if (nap_ms > 0)
     {
@@ -198,8 +229,24 @@ void ft_fast_aread (S_thread_entry *p)
           total_napped = nap_ms ;
         }
       }
+      last_run_ms = last_run_ms + delay_ms ;
+
+      /*
+         tune "gap_usec" so that the actual wait time matches what was asked
+         for. For example, if "gap_ms" is 2 and "samples" is 300, then we
+         should be completing in 600 ms.
+      */
+
+      int actual_ms = delay_ms - nap_ms ;
+      int intended_ms = num_samples * gap_ms ;
+      int offset = abs(intended_ms - actual_ms) / 2 ; // apply small adjustment
+      float adj_factor ;
+      if (actual_ms > intended_ms)
+        adj_factor = (float) (intended_ms - offset) / (float) intended_ms ;
+      else
+        adj_factor = (float) (intended_ms + offset) / (float) intended_ms ;
+      gap_usec = (int) ((float) gap_usec * adj_factor) ;
     }
-    last_run_ms = last_run_ms + delay_ms ;
   }
   free (samples) ;
 }
