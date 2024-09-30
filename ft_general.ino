@@ -188,7 +188,19 @@ void ft_fast_aread (S_thread_entry *p)
     p->state = THREAD_STOPPED ;
     return ;
   }
+
+  /* set input pin mode and then setup results fields */
+
   pinMode (in_pin, INPUT) ;
+  p->results[0].num_tags = 1 ;
+  p->results[0].meta[0] = (char*) "type" ;
+  p->results[0].data[0] = (char*) "\"Min\"" ;
+  p->results[1].num_tags = 1 ;
+  p->results[1].meta[0] = (char*) "type" ;
+  p->results[1].data[0] = (char*) "\"Ave\"" ;
+  p->results[2].num_tags = 1 ;
+  p->results[2].meta[0] = (char*) "type" ;
+  p->results[2].data[0] = (char*) "\"Max\"" ;
 
   /* thread's main loop */
 
@@ -205,6 +217,32 @@ void ft_fast_aread (S_thread_entry *p)
       samples[idx] = analogRead (in_pin) ;
       ets_delay_us (gap_usec) ; // NOTE !! this is a busy wait !!
     }
+
+    /* now calculate the min/max/ave values */
+
+    unsigned short min_value, max_value ;
+    unsigned int  total=0 ;
+
+    for (idx=0 ; idx < num_samples ; idx++)
+    {
+      total = total + samples[idx] ;
+      if (idx == 0)
+      {
+        min_value = samples[idx] ;
+        max_value = samples[idx] ;
+      }
+      else
+      {
+        if (samples[idx] < min_value)
+          min_value = samples[idx] ;
+        if (samples[idx] > max_value)
+          max_value = samples[idx] ;
+      }
+    }
+    p->results[0].i_value = min_value ;
+    p->results[1].i_value = total / num_samples ;
+    p->results[2].i_value = max_value ;
+    p->num_int_results = 3 ;
 
     /* take short naps so we don't sleep past THREAD_SHUTDOWN_PERIOD */
 
