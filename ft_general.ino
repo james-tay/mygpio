@@ -145,12 +145,17 @@ void ft_aread (S_thread_entry *p)
    from heap. This means that when it's time to die, we need to immediately
    release this memory. For this reason, this thread does NOT return until
    it's time to die.
+
+   Since taking samples is paced using "ets_delay_us()", which implements a
+   busy wait, it is very important to prevent multiple ft_fast_aread() threads
+   from entering their fast sampling loop concurrently. To prevent this, we
+   acquire "G_fast_aread_lock" first.
 */
 
 void ft_fast_aread (S_thread_entry *p)
 {
   int delay_ms, num_samples, gap_ms, in_pin ;
-  unsigned long last_run_ms ;
+  unsigned long last_run_ms, tv_start, tv_end ;
 
   /* sanity check our inputs and allocate memory first */
 
@@ -212,11 +217,32 @@ void ft_fast_aread (S_thread_entry *p)
     p->loops++ ; // fake our loop counter
 
     int idx ;
+
+    xSemaphoreTake (G_fast_aread_lock, portMAX_DELAY) ;
+    tv_start = millis() ;
     for (idx=0 ; idx <num_samples ; idx++)
     {
       samples[idx] = analogRead (in_pin) ;
       ets_delay_us (gap_usec) ; // NOTE !! this is a busy wait !!
     }
+    tv_end = millis() ;
+    xSemaphoreGive (G_fast_aread_lock) ;
+
+    /*
+       tune "gap_usec" so that the actual sampling interval time matches what
+       was asked for. For example, if "gap_ms" is 2 and "samples" is 300, then
+       we should be completing in 600 ms.
+    */
+
+    int actual_ms = tv_end - tv_start ;
+    int intended_ms = num_samples * gap_ms ;
+    int offset = abs(intended_ms - actual_ms) / 2 ; // apply small adjustment
+    float adj_factor ;
+    if (actual_ms > intended_ms)
+      adj_factor = (float) (intended_ms - offset) / (float) intended_ms ;
+    else
+      adj_factor = (float) (intended_ms + offset) / (float) intended_ms ;
+    gap_usec = (int) ((float) gap_usec * adj_factor) ;
 
     /* now calculate the min/max/ave values */
 
@@ -249,7 +275,7 @@ void ft_fast_aread (S_thread_entry *p)
     int max_nap = THREAD_SHUTDOWN_PERIOD / 5 ; // short naps
     int nap_ms = last_run_ms + delay_ms - millis() ;
     int total_napped=0 ;
-    sprintf (p->msg, "loop:%d nap:%d gap_usec:%d",
+    sprintf (p->msg, "loop:%d nap_ms:%d gap_usec:%d",
              p->loops, nap_ms, gap_usec) ;
 
     if (nap_ms > 0)
@@ -268,22 +294,6 @@ void ft_fast_aread (S_thread_entry *p)
         }
       }
       last_run_ms = last_run_ms + delay_ms ;
-
-      /*
-         tune "gap_usec" so that the actual wait time matches what was asked
-         for. For example, if "gap_ms" is 2 and "samples" is 300, then we
-         should be completing in 600 ms.
-      */
-
-      int actual_ms = delay_ms - nap_ms ;
-      int intended_ms = num_samples * gap_ms ;
-      int offset = abs(intended_ms - actual_ms) / 2 ; // apply small adjustment
-      float adj_factor ;
-      if (actual_ms > intended_ms)
-        adj_factor = (float) (intended_ms - offset) / (float) intended_ms ;
-      else
-        adj_factor = (float) (intended_ms + offset) / (float) intended_ms ;
-      gap_usec = (int) ((float) gap_usec * adj_factor) ;
     }
   }
   free (samples) ;
