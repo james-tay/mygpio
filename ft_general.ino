@@ -150,18 +150,36 @@ void ft_aread (S_thread_entry *p)
    busy wait, it is very important to prevent multiple ft_fast_aread() threads
    from entering their fast sampling loop concurrently. To prevent this, we
    acquire "G_fast_aread_lock" first.
+
+   If the optional 5th argument "rolling_ms" is specified, then this function
+   exposes an additional 3x metrics, ie, "rMin", "rAve" and "rMax". These
+   represent rolling values observered over "rolling_ms". For example, if
+   "delay_ms" is 2000 (ie, 2 sec) and "rolling_ms" is 60000 (ie, 60 secs),
+   then this function allocates a 3 sets of 60000 / 2000 = 30x element arrays
+   which store Min/Ave/Max values encountered over the past 60 secs. This is
+   useful for capturing transient events which may span just a few seconds
+   despite prometheus scraping us every minute.
 */
 
 void ft_fast_aread (S_thread_entry *p)
 {
-  int delay_ms, num_samples, gap_ms, in_pin ;
+  struct st_sample_set
+  {
+    unsigned short min ;
+    unsigned short ave ;
+    unsigned short max ;
+  } ;
+  typedef struct st_sample_set S_SampleSet ;
+
+  int delay_ms, num_samples, gap_ms, in_pin, rolling_ms=0, rolling_samples=0 ;
   unsigned long last_run_ms, tv_start, tv_end ;
+  S_SampleSet *sample_set=NULL ;
 
   /* sanity check our inputs and allocate memory first */
 
-  if (p->num_args != 4)
+  if ((p->num_args != 4) && (p->num_args != 5))
   {
-    strcpy (p->msg, "FATAL! Expecting 4x arguments") ;
+    strcpy (p->msg, "FATAL! Expecting 4x or 5x arguments") ;
     p->state = THREAD_STOPPED ;
     return ;
   }
@@ -170,6 +188,26 @@ void ft_fast_aread (S_thread_entry *p)
   num_samples = atoi (p->in_args[1]) ;          // number of analogRead() calls
   gap_ms = atoi (p->in_args[2]) ;               // timing gap between samples
   in_pin = atoi (p->in_args[3]) ;               // GPIO pin to read from
+  if (p->num_args == 5)
+  {
+    rolling_ms = atoi (p->in_args[4]) ;
+    if (rolling_ms < 2 * delay_ms)
+    {
+      strcpy (p->msg, "FATAL! rolling_ms must be at least 2x delay") ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+    rolling_samples = rolling_ms / delay_ms ;
+    sample_set = (S_SampleSet*) malloc (sizeof(S_SampleSet) *
+                                        rolling_samples) ;
+    if (sample_set == NULL)
+    {
+      sprintf (p->msg, "FATAL! Cannot malloc() %dx sample_set",
+               rolling_samples) ;
+      p->state = THREAD_STOPPED ;
+      return ;
+    }
+  }
 
   if (gap_ms * num_samples >= delay_ms)
   {
@@ -297,6 +335,8 @@ void ft_fast_aread (S_thread_entry *p)
     }
   }
   free (samples) ;
+  if (sample_set != NULL)
+    free (sample_set) ;
 }
 
 void ft_dread (S_thread_entry *p)
