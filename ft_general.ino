@@ -171,7 +171,8 @@ void ft_fast_aread (S_thread_entry *p)
   } ;
   typedef struct st_sample_set S_SampleSet ;
 
-  int delay_ms, num_samples, gap_ms, in_pin, rolling_ms=0, rolling_samples=0 ;
+  int delay_ms, num_samples, gap_ms, in_pin, rolling_ms=0 ;
+  int rolling_samples=0, rolling_offset=0 ;
   unsigned long last_run_ms, tv_start, tv_end ;
   S_SampleSet *sample_set=NULL ;
 
@@ -207,6 +208,7 @@ void ft_fast_aread (S_thread_entry *p)
       p->state = THREAD_STOPPED ;
       return ;
     }
+    memset (sample_set, 0, sizeof(S_SampleSet) * rolling_samples) ;
   }
 
   if (gap_ms * num_samples >= delay_ms)
@@ -244,6 +246,18 @@ void ft_fast_aread (S_thread_entry *p)
   p->results[2].num_tags = 1 ;
   p->results[2].meta[0] = (char*) "type" ;
   p->results[2].data[0] = (char*) "\"Max\"" ;
+  if (rolling_samples > 0)
+  {
+    p->results[3].num_tags = 1 ;
+    p->results[3].meta[0] = (char*) "type" ;
+    p->results[3].data[0] = (char*) "\"rMin\"" ;
+    p->results[4].num_tags = 1 ;
+    p->results[4].meta[0] = (char*) "type" ;
+    p->results[4].data[0] = (char*) "\"rAve\"" ;
+    p->results[5].num_tags = 1 ;
+    p->results[5].meta[0] = (char*) "type" ;
+    p->results[5].data[0] = (char*) "\"rMax\"" ;
+  }
 
   /* thread's main loop */
 
@@ -284,7 +298,7 @@ void ft_fast_aread (S_thread_entry *p)
 
     /* now calculate the min/max/ave values */
 
-    unsigned short min_value, max_value ;
+    unsigned short min_value, ave_value, max_value ;
     unsigned int  total=0 ;
 
     for (idx=0 ; idx < num_samples ; idx++)
@@ -303,17 +317,54 @@ void ft_fast_aread (S_thread_entry *p)
           max_value = samples[idx] ;
       }
     }
+    ave_value = total / num_samples ;
     p->results[0].i_value = min_value ;
-    p->results[1].i_value = total / num_samples ;
+    p->results[1].i_value = ave_value ;
     p->results[2].i_value = max_value ;
-    p->num_int_results = 3 ;
+
+    /* handle rolling samples, if requested */
+
+    if (rolling_ms > 0)
+    {
+      sample_set[rolling_offset].min = min_value ;
+      sample_set[rolling_offset].ave = ave_value ;
+      sample_set[rolling_offset].max = max_value ;
+      rolling_offset++ ;
+      if (rolling_offset == rolling_samples)
+        rolling_offset = 0 ;
+
+      /* now calculate and expose rolling values */
+
+      int elements = rolling_samples ;  // elements in "sample_set" to examine
+      if (p->loops < rolling_samples)
+        elements = p->loops ;
+
+      total = 0 ;
+      min_value = sample_set[0].min ;
+      max_value = sample_set[0].max ;
+      for (idx=1 ; idx < elements ; idx++)
+      {
+        total = total + sample_set[idx].ave ;
+        if (sample_set[idx].min < min_value)
+          min_value = sample_set[idx].min ;
+        if (sample_set[idx].max > max_value)
+          max_value = sample_set[idx].max ;
+      }
+      p->results[3].i_value = min_value ;
+      p->results[4].i_value = total / elements ;
+      p->results[5].i_value = max_value ;
+      p->num_int_results = 6 ;
+    }
+
+    if (p->num_int_results == 0)
+      p->num_int_results = 3 ;
 
     /* take short naps so we don't sleep past THREAD_SHUTDOWN_PERIOD */
 
     int max_nap = THREAD_SHUTDOWN_PERIOD / 5 ; // short naps
     int nap_ms = last_run_ms + delay_ms - millis() ;
     int total_napped=0 ;
-    sprintf (p->msg, "loop:%d nap_ms:%d gap_usec:%d",
+    sprintf (p->msg, "loops:%d nap_ms:%d gap_usec:%d",
              p->loops, nap_ms, gap_usec) ;
 
     if (nap_ms > 0)
