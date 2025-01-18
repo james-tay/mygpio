@@ -22,6 +22,7 @@ void f_action (char **tokens)
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
             "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
             "relay <thread name> on|off\r\n"
+            "sampler <num> <gap_ms> <cal_ms> <outfile> <gpioN> [gpioN ...]\r\n"
             "tone <GPIO pin> <freq> <dur(ms)>\r\n"
             "pwm_on <GPIO pin> <freq> <duty> <res[1-20]>\r\n"
             "pwm_duty <GPIO pin> <duty>\r\n"
@@ -300,6 +301,11 @@ void f_action (char **tokens)
       (tokens[2] != NULL))
   {
     f_relay (tokens[1], tokens[2]) ;
+  }
+  else
+  if (strcmp(tokens[0], "sampler") == 0)
+  {
+    f_sampler (tokens) ;
   }
   else
   if ((strcmp(tokens[0], "tone") == 0) && (tokens[1] != NULL) &&

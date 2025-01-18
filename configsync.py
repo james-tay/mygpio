@@ -109,9 +109,13 @@ def f_read_dev_conf(host):
   return(conf)
 
 # This function is given "file_path". Our job is to check if its "contents"
-# match, and thus return True or False otherwise (eg, file does not exist).
+# match, and thus return True or False. If "file_path" does not exist, it
+# returns True.
 
 def f_diff_file (file_path, contents):
+
+  if (os.path.isfile(file_path) == False):
+    return(True) # because it essentially doesn't match "contents"
   try:
     fd = open(file_path, "r")
   except:

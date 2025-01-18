@@ -171,3 +171,95 @@ void f_cron ()
   G_Metrics->cronRuns++ ;
 }
 
+/*
+   this function rapidly reads analog input(s), saving the requested number of
+   samples in to memory before writing it to a file (which can be transferred
+   later). Since we have a variable number of arguments, this function is
+   supplied a NULL terminated array of string pointers, in the following
+   sequence:
+
+     num    - total number of samples we'll be observing
+     gap_ms - interval between samples, all inputs are sampled together
+     cal_ms - how much time we have to calibrate our internal timer
+     file   - the output file we'll save results into
+     ...    - a variable list of GPIO inputs
+
+   Internally, we use "ets_delay_us()" to implement a busy wait to pace
+   samples according to the requested "gap_ms". In order to determine this
+   internal delay, we are given up to "cal_ms" amount of time to figure this
+   out.
+
+   During operation, we need to ensure other threads don't affect our
+   analogRead(). Thus we acquire "G_fast_aread_lock" during our busy loop.
+
+   Example usage:
+     sampler 500 2 200 myfile.dat 36 39 34
+
+   In the above example, a total of 500 samples will be taken 2 ms apart.
+   Before performing the sampling, we'll spend 200ms trying to tune the
+   "ets_delay_us()" gap between samples. We will then sample the values on
+   GPIO pins 36, 39 and 34. Finally, we write to the results to "myfile.dat".
+
+   Samples are stored in a single buffer made up of an array of int for
+   simplicity.
+
+     [ <32-bit_ts><gpio1_value>{<gpioN_value>...}, ... ]
+*/
+
+void f_sampler (char **args)
+{
+  #define SAMPLER_MAX_GPIO_INPUTS 4     // limited by MAX_TOKENS - 1
+  #define SAMPLER_MAX_SAMPLES 4000      // note, each sample is 16-bit
+
+  int i, total_args=0, num_samples, gap_ms, cal_ms, num_gpio, sbuf_len ;
+  int gpio_list[SAMPLER_MAX_GPIO_INPUTS] ;
+  int *sample_buf=NULL ;
+  char *outfile ;
+
+  /* attempt to parse our arguments first */
+
+  while (total_args < SAMPLER_MAX_GPIO_INPUTS + 6)
+    if (args[total_args] == NULL) break ;
+      else total_args++ ;
+
+  if ((total_args == (SAMPLER_MAX_GPIO_INPUTS + 6)) &&
+      (args[total_args-1] != NULL))
+  {
+    strcpy (G_reply_buf, "Too many arguments") ;
+    return ;
+  }
+  num_gpio = total_args - 5 ;
+
+  num_samples = atoi (args[1]) ;
+  gap_ms = atoi (args[2]) ;
+  cal_ms = atoi (args[3]) ;
+  outfile = args[4] ;
+
+  for (i=0 ; i < num_gpio ; i++)
+    gpio_list[i] = atoi(args[i+5]) ;
+
+  /* prepare the sample buffer */
+
+  sbuf_len = num_samples * (sizeof(int) * (num_gpio + 1)) ;
+  sample_buf = (int*) malloc (sbuf_len) ;
+  if (sample_buf == NULL)
+  {
+    sprintf(G_reply_buf, "FAULT: could not malloc sample_buf, %d bytes.\r\n",
+            sbuf_len) ;
+    return ;
+  }
+
+  // DEBUG code to check command line parsing.
+  sprintf(G_reply_buf, "total_args:%d num_gpio:%d num_samples:%d outfile:%s sbuf_len:%d\r\n",
+          total_args, num_gpio, num_samples, outfile, sbuf_len) ;
+
+
+
+
+
+
+
+
+  free (sample_buf) ;
+}
+
