@@ -22,7 +22,7 @@ void f_action (char **tokens)
             "hcsr04 <trigPin> <echoPin> - HC-SR04 ultrasonic ranger\r\n"
             "adxl335 <Xpin> <Ypin> <Zpin> <Time(ms)> <Interval(ms)>\r\n"
             "relay <thread name> on|off\r\n"
-            "sampler <num> <gap_ms> <cal_ms> <outfile> <gpioN> [gpioN ...]\r\n"
+            "sampler <num> <gap_ms> <outfile> <gpioN> [gpioN ...]\r\n"
             "tone <GPIO pin> <freq> <dur(ms)>\r\n"
             "pwm_on <GPIO pin> <freq> <duty> <res[1-20]>\r\n"
             "pwm_duty <GPIO pin> <duty>\r\n"
