@@ -187,12 +187,22 @@ void f_cron ()
    analogRead(). Thus we acquire "G_fast_aread_lock" during our busy loop.
 
    Example usage:
-     sampler 5000 1 myfile.dat 36 39 34 35
 
-   In the above example, a total of 5000 samples will be taken 1 ms apart.
+     sampler 5000 1 /myfile.json 36 39 34 35
+
+   In the above example, a total of 5000 samples will be taken 1ms apart.
    Before performing the sampling, we'll spend 200ms trying to tune the
    "ets_delay_us()" gap between samples. We will then sample the values on
-   GPIO pins 36, 39, 34 and 35. We write to the results to "/myfile.dat".
+   GPIO pins 36, 39, 34 and 35. We write to the results to "/myfile.json".
+
+     sampler 600 100 /over1min.json 36
+
+   In the above example, a total of 600 samples are taken in 100ms intervals,
+   thus spanning 1 minute. Note that the ESP32 will be UNRESPONSIVE during
+   this time because it is busy with this command. Thus the user should always
+   consider overall command timings before running this. To prevent the ESP32
+   from locking up too long, this function will abort the command if it
+   calculates we'll be locked up for longer than SAMPLER_MAX_TIME_MS.
 
    Samples are stored in a single buffer made up of an array of int for
    simplicity.
@@ -204,19 +214,30 @@ void f_cron ()
    optimal "gap_usec" value for ets_delay_us(), we'll do 2x test runs. The
    first uses our theoretical timings and then second run uses our adjusted
    timings.
+
+   When writing to the output file, it follows the following JSON format,
+
+     {
+       "samples" : [
+         [ <ts1>, <gpio1>, ... ],
+         ...
+       ]
+     }
 */
 
 void f_sampler (char **args)
 {
   #define SAMPLER_MAX_GPIO_INPUTS 4     // limited by MAX_TOKENS - 1
   #define SAMPLER_MAX_SAMPLES 5000      // note, each sample is 4 bytes
+  #define SAMPLER_MAX_GAP_MS 1000       // maximum allowed sample gap in msecs
+  #define SAMPLER_MAX_TIME_MS 20000     // don't run for more than 20 secs
   #define DEF_ANALOGREAD_TIME_USEC 86   // time for a single analogRead()
 
   int i, count, total_args=0, num_samples, gap_ms, num_gpio ;
-  int offset, sbuf_len, gap_usec ;
+  int len=0, offset, sbuf_len, gap_usec ;
   int gpio_list[SAMPLER_MAX_GPIO_INPUTS] ;
-  int *sample_buf=NULL ;
-  char *outfile ;
+  unsigned long *sample_buf=NULL ;
+  char *outfile, line[BUF_SIZE] ;
   unsigned long start_t, end_t, dur ;
 
   /* attempt to parse our arguments and sanity check them */
@@ -228,7 +249,7 @@ void f_sampler (char **args)
   if ((total_args == (SAMPLER_MAX_GPIO_INPUTS + 5)) &&
       (args[total_args-1] != NULL))
   {
-    strcpy (G_reply_buf, "Too many arguments\r\n") ;
+    strcpy (G_reply_buf, "FAULT: Too many arguments\r\n") ;
     return ;
   }
   num_gpio = total_args - 4 ;
@@ -238,17 +259,35 @@ void f_sampler (char **args)
   for (i=0 ; i < num_gpio ; i++)
     gpio_list[i] = atoi (args[i+4]) ;
 
+  if ((gap_ms < 1) || (gap_ms > SAMPLER_MAX_GAP_MS))
+  {
+    sprintf (G_reply_buf, "FAULT: Invalid gap_ms (1-%d).\r\n",
+             SAMPLER_MAX_GAP_MS) ;
+    return ;
+  }
+  if (outfile[0] != '/')
+  {
+    strcpy (G_reply_buf, "FAULT: Invalid filename.\r\n") ;
+    return ;
+  }
   if ((num_samples < 1) || (num_samples > SAMPLER_MAX_SAMPLES))
   {
-    sprintf (G_reply_buf, "Invalid number of samples (1-%d).\r\n",
+    sprintf (G_reply_buf, "FAULT: Invalid number of samples (1-%d).\r\n",
              SAMPLER_MAX_SAMPLES) ;
+    return ;
+  }
+  dur = num_samples * gap_ms ;
+  if (dur > SAMPLER_MAX_TIME_MS)
+  {
+    sprintf (G_reply_buf, "FAULT: total duration %dms exceeds %dms.\r\n",
+             dur, SAMPLER_MAX_TIME_MS) ;
     return ;
   }
 
   /* prepare the sample buffer */
 
-  sbuf_len = num_samples * (sizeof(int) * (num_gpio + 1)) ;
-  sample_buf = (int*) malloc (sbuf_len) ;
+  sbuf_len = num_samples * (sizeof(unsigned long) * (num_gpio + 1)) ;
+  sample_buf = (unsigned long*) malloc (sbuf_len) ;
   if (sample_buf == NULL)
   {
     sprintf (G_reply_buf, "FAULT: could not malloc sample_buf, %d bytes.\r\n",
@@ -264,31 +303,58 @@ void f_sampler (char **args)
   start_t = millis () ;
   for (count=0 ; count < num_samples ; count++)
   {
-    offset = (count * num_gpio) + i ;
+    offset = count * (num_gpio + 1) ;
     sample_buf[offset] = millis () ;
     for (i=0 ; i < num_gpio ; i++)
     {
-      offset = (count * num_gpio) + i + 1 ;
+      offset = (count * (num_gpio + 1)) + 1 + i ;
       sample_buf[offset] = analogRead (gpio_list[i]) ;
     }
     ets_delay_us (gap_usec) ;
   }
   end_t = millis () ;
   xSemaphoreGive (G_fast_aread_lock) ;
-
   dur = end_t - start_t ;
-  sprintf(G_reply_buf, "sbuf_len:%d gap_usec:%ld dur:%ld\r\n",
-          sbuf_len, gap_usec, dur) ;
 
   /* now save "sample_buf" into "outfile" */
 
+  File f = SPIFFS.open (outfile, "w") ;
+  if (f)
+  {
+    char s[16] ; // a temporary buffer for converting int to strings
 
-
-
-
-
-
-
+    strcpy (line, "{\r\n\"samples\":[\r\n") ;
+    len = f.print (line) ;
+    for (count=0 ; count < num_samples ; count++)
+    {
+      offset = count * (num_gpio + 1) ;
+      sprintf (s, "%ld", sample_buf[offset]) ;
+      sprintf (line, "[%s,", s) ;
+      for (i=0 ; i < num_gpio ; i++)
+      {
+        offset = (count * (num_gpio + 1)) + 1 + i ;
+        sprintf (s, "%d", sample_buf[offset]) ;
+        strcat (line, s) ;
+        if (i < num_gpio - 1)
+          strcat (line, ",") ;
+      }
+      if (count < num_samples - 1)
+        strcat (line, "],\r\n") ;
+      else
+        strcat (line, "]\r\n") ;
+      len += f.print (line) ;
+    }
+    strcpy (line, "]\r\n}\r\n") ;
+    len += f.print (line) ;
+    f.close () ;
+  }
+  else
+  {
+    sprintf (G_reply_buf, "FAULT: Cannot write to '%s'.\r\n", outfile) ;
+  }
   free (sample_buf) ;
+
+  sprintf(G_reply_buf, "sbuf_len:%d gap_usec:%ld dur:%ld len:%d\r\n",
+          sbuf_len, gap_usec, dur, len) ;
 }
 
