@@ -109,24 +109,29 @@ def f_read_dev_conf(host):
   return(conf)
 
 # This function is given "file_path". Our job is to check if its "contents"
-# match, and thus return True or False. If "file_path" does not exist, it
-# returns True.
+# match, and thus return True if contents match or False if contents do not
+# match. If "file_path" does not exist, it returns False.
 
 def f_diff_file (file_path, contents):
 
   if (os.path.isfile(file_path) == False):
-    return(True) # because it essentially doesn't match "contents"
+    return(False) # because it essentially doesn't match "contents"
   try:
     fd = open(file_path, "r")
   except:
+    e = sys.exc_info()
+    print("WARNING: Cannot open %s - %s" % (file_path, e[1]))
     return(False)
   try:
     buf = fd.read()
   except:
+    e = sys.exc_info()
+    print("WARNING: Cannot read %s - %s" % (file_path, e[1]))
     fd.close()
     return(False)
-
   fd.close()
+  buf = buf.rstrip("\n")
+
   if (buf == contents):
     return(True)
   else:
@@ -192,7 +197,7 @@ if (sys.argv[2] == "to_local"):
 
       # check if file contents match before (over)writing the file.
 
-      if (f_diff_file(file_path, G_devices[dev][file])):
+      if (f_diff_file(file_path, G_devices[dev][file]) == False):
         print("NOTICE: Writing %s." % file_path)
         try:
           fd = open(file_path, "w")
