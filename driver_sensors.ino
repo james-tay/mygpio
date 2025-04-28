@@ -136,6 +136,7 @@ int f_dht22 (int dataPin, float *temperature, float *humidity)
   delayMicroseconds (1200) ;
   digitalWrite (dataPin, HIGH) ;        // sensor trigger
   delayMicroseconds (20) ;
+  digitalWrite (dataPin, LOW) ;         // set low before becoming an input pin
   pinMode (dataPin, INPUT) ;
 
   /* expect DHT22 to respond with a low and then a high */

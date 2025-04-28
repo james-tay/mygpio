@@ -52,7 +52,7 @@ Next, we need to be able to build for the ESP32 platform, thus,
 ```
 % URL="https://dl.espressif.com/dl/package_esp32_index.json"
 % arduino-cli core update-index --additional-urls $URL
-% arduino-cli core install esp32:esp32 --additional-urls $URL
+% arduino-cli core install esp32:esp32@2.0.1 --additional-urls $URL
 ```
 
 For reference,
@@ -76,12 +76,12 @@ For reference,
 
 ```
 % arduino-cli lib list
-Name              Installed Available    Location              Description
-ArduinoOTA        1.0.9     1.0.10       LIBRARY_LOCATION_USER ...
-DallasTemperature 3.9.0     -            LIBRARY_LOCATION_USER -
-LiquidCrystal I2C 1.1.2     -            LIBRARY_LOCATION_USER -
-OneWire           2.3.7     -            LIBRARY_LOCATION_USER -
-PubSubClient      2.8       -            LIBRARY_LOCATION_USER -
+Name              Installed Available    Location  Description
+ArduinoOTA        1.1.0     -            user      -
+DallasTemperature 4.0.3     -            user      -
+LiquidCrystal I2C 1.1.2     -            user      -
+OneWire           2.3.8     -            user      -
+PubSubClient      2.8       -            user      -
 ```
 
 At this point we should be ready to compile and flash an ESP32,
@@ -111,6 +111,10 @@ a linux machine, this is typically,
 
 ```
 # minicom -D /dev/ttyUSB0
+or
+# screen /dev/ttyUSB0 115200
+or
+# arduino-cli monitor -p /dev/ttyUSB0 --config 115200 --raw --quiet
 ```
 
 Once connected, press ENTER, and "mygpio" should respond with the "OK"

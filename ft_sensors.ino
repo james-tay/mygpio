@@ -333,20 +333,25 @@ void ft_dht22 (S_thread_entry *p)
       else
       {
         /*
-           check if readings are within an acceptable delta and are not
-           unreasonably high/low.
+           check if temperature & humidity readings are
+             1. within an acceptable delta
+             2. not unreasonably high/low
+             3. are not both exactly 0.0
         */
 
         if ((fabsf(temperature - prev_t) < DHT22_MAX_TEMPERATURE_DELTA) &&
             (fabsf(humidity - prev_h) < DHT22_MAX_HUMIDITY_DELTA) &&
             (temperature < DHT22_MAX_TEMPERATURE) &&
-            (temperature > DHT22_MIN_TEMPERATURE))
+            (temperature > DHT22_MIN_TEMPERATURE) &&
+            ((temperature != 0.0) || (humidity != 0.0)))
+        {
           success = 1 ;
+          prev_t = temperature ;
+          prev_h = humidity ;
+        }
         else
-          p->results[2].f_value = p->results[2].f_value + 1 ;
+          p->results[2].f_value = p->results[2].f_value + 1 ; // abnormal
 
-        prev_t = temperature ;
-        prev_h = humidity ;
         if (success)
         {
           sprintf (p->msg, "polled in %dms", millis()-start_time) ;
