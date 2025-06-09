@@ -335,8 +335,12 @@ esp32-cam platform. To compile and upload,
 
 Due to the way the esp32 camera module uses serial signalling, it may be
 necessary to perform initial configuration (ie, wifi setup) using the arduino
-IDE's Serial Monitor. To use the camera, first initialize it, optionally
-configure it, and then start capturing jpeg frames. For example,
+IDE's Serial Monitor. Check the serial port device, set it to 115200 baud and
+check your Board is set to "AI Thinker ESP32-CAM" (set Serial Monitor to send
+"Carriage return").
+
+To use the camera, first initialize it, optionally configure it, and then start
+capturing jpeg frames. For example,
 
 ```
 % curl http://esp32-cam.example.com/v1?cmd=cam+init
