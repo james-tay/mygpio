@@ -446,7 +446,9 @@ void ft_ds18b20 (S_thread_entry *p)
   while (retries > 0)
   {
     memset (addr, 0, addr_size) ;
+    vTaskPrioritySet (p->tid, configMAX_PRIORITIES - 1) ;
     results = f_ds18b20 (dataPin, addr, t) ;
+    vTaskPrioritySet (p->tid, tskIDLE_PRIORITY) ;
     if (results < 1)
     {
       p->num_float_results = 0 ;
