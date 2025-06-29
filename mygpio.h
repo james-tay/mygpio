@@ -6,6 +6,8 @@
 #include <FS.h>
 #include <Wire.h>                     // this is for I2C support
 #include <WiFi.h>
+#include <time.h>
+#include <sntp.h>
 #include <SPIFFS.h>
 #include <Update.h>
 #include <PubSubClient.h>

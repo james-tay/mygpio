@@ -684,6 +684,7 @@ void f_esp32 (char **tokens)
       "ft_hcsr04,<delay>,<aggr>,<trigPin>,<echoPin>,<thres(cm)>\r\n"
       "ft_i2sin,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<ip:port>[,<gain>]\r\n"
       "ft_i2sout,<sampleRate>,<SCKpin>,<WSpin>,<SDpin>,<UDPport>\r\n"
+      "ft_ntpclient,<ntp_server>\r\n"
       "ft_relay,<pin>,<dur(secs)>\r\n"
       "ft_serial2tcp,<port>,<baud>,<RXpin>,<TXpin>\r\n"
       "ft_watchdog,<intervalSecs>,<minUptimeSecs>,<noActivitySecs>\r\n"

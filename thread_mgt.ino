@@ -180,6 +180,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_hcsr04 ;
   if (strcmp (ft_taskname, "ft_tread") == 0)
     G_thread_entry[idx].ft_addr = ft_tread ;
+  if (strcmp (ft_taskname, "ft_ntpclient") == 0)
+    G_thread_entry[idx].ft_addr = ft_ntpclient ;
   if (strcmp (ft_taskname, "ft_relay") == 0)
     G_thread_entry[idx].ft_addr = ft_relay ;
   if (strcmp (ft_taskname, "ft_i2sin") == 0)
