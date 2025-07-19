@@ -19,11 +19,14 @@
 #include <DallasTemperature.h>
 #include <LiquidCrystal_I2C.h>
 #include <esp_camera.h>
+#include <lwip/netdb.h>
+#include <ping/ping_sock.h>
 
 #define MAX_SSID_LEN 32
 #define MAX_PASSWD_LEN 32             // maximum wifi password length
 #define MAX_MQTT_LEN 128              // maximum mqtt topic/message buffer
 #define MAX_WIFI_TIMEOUT 60           // wifi connect timeout (secs)
+#define MAX_PING_PKTS 5               // maximum allowed ping count
 #define MAX_SD_BACKLOG 4              // TCP listening socket backlog
 #define MAX_FILENAME 16               // maximum filename length
 #define WEB_PORT 80                   // web server listens on this port

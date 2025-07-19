@@ -20,8 +20,10 @@ void f_wifiConnect (char *ssid, char *pw, char *msg)
     WiFi.SSID(i).toCharArray(scan_ssid, MAX_SSID_LEN) ;
     if (strcmp(ssid, scan_ssid) == 0)
     {
-      sprintf (line, "found(%s ch:%d %ddBm) ",
-               WiFi.BSSIDstr(i).c_str(), WiFi.channel(i), WiFi.RSSI(i)) ;
+      uint8_t *ptr = WiFi.BSSID(i) ;
+      sprintf (line, "found(%x:%x:%x:%x:%x:%x ch:%d %ddBm) ",
+               ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5],
+               WiFi.channel(i), WiFi.RSSI(i)) ;
       strcat (msg, line) ;
 
       if (scan_chan == 0) /* this is our first matching AP, note it down */
@@ -50,9 +52,9 @@ void f_wifiConnect (char *ssid, char *pw, char *msg)
     return ;
   }
 
-  sprintf (line, "using[%x:%x:%x:%x:%x:%x]",
+  sprintf (line, "using(%x:%x:%x:%x:%x:%x ch:%d)",
            scan_bssid[0], scan_bssid[1], scan_bssid[2],
-           scan_bssid[3], scan_bssid[4], scan_bssid[5]) ;
+           scan_bssid[3], scan_bssid[4], scan_bssid[5], scan_chan) ;
   strcat (msg, line) ;
   WiFi.begin (ssid, pw, scan_chan, scan_bssid, true) ;
 }
@@ -225,11 +227,111 @@ void f_wifi (char **tokens)
         }
       }
     }
-    strcat (G_reply_buf, "FAULT: Connection attempt timed out.\r\n") ;
+    strcat (G_reply_buf, "FAULT: Wifi connection timed out. Retrying.\r\n") ;
+
+    /* if connection failed, use the normal "WiFi.begin()" to try connect */
+
+    WiFi.begin (cfg_wifi_ssid, cfg_wifi_pw) ;
   }
   else
   {
     strcat (G_reply_buf, "FAULT: Invalid argument.\r\n") ;
   }
+}
+
+/*
+   The following functions handle a ping request. Recall that this is blocking
+   in that we cannot service other requests in the meantime. Thus we will send
+   out ICMP echo requests in 1 second intervals, up to 5 of them, and we'll
+   wait up to 1 second for replies. Now the way ping is implemented is that we
+   need to setup a ping session which will execute callback functions as
+   follows,
+
+     - f_ping_success()
+     - f_ping_timeout()
+     - f_ping_end()
+
+   Now we're able to send a single argument to each of our callbacks. This is
+   our opportunity to pass in a data structure which captures the state of the
+   ping session.
+
+   The ping subsystem is made available for both user (ie, calling our REST)
+   and internal systems. Thus we need the functions,
+
+     - f_ping()         # this is called when the user calls REST
+     - f_ping_run()     # this actually sets up the ping session
+*/
+
+void f_cb_ping_success (esp_ping_handle_t handle, void *args)
+{
+
+}
+
+void f_cb_ping_timeout (esp_ping_handle_t handle, void *args)
+{
+
+}
+
+void f_cb_ping_end (esp_ping_handle_t handle, void *args)
+{
+
+}
+
+void f_ping_run (int pkts, char *dest, char *error_reason)
+{
+  /*
+     resolve "dest" host into an IPv4 address "target_addr" we can use in
+     "esp_ping_config_t".
+  */
+
+  ip_addr_t target_addr ;
+  struct addrinfo *addr_info ;
+  struct in_addr dst_addr ;
+
+  memset (&target_addr, 0, sizeof(target_addr)) ;
+  getaddrinfo (dest, NULL, NULL, &addr_info) ;
+  dst_addr = ((struct sockaddr_in *) (addr_info->ai_addr))->sin_addr ;
+  int result = inet_addr_to_ip4addr (ip_2_ip4(&target_addr), &dst_addr) ;
+  freeaddrinfo (addr_info) ;
+
+  if (result != 0)
+  {
+    strcpy (error_reason, "Cannot resolve hostname") ;
+    return ;
+  }
+
+  /* now we configure the ping session */
+
+  esp_ping_config_t ping_config = ESP_PING_DEFAULT_CONFIG () ;
+  ping_config.target_addr = target_addr ;
+  ping_config.count = pkts ;
+  ping_config.interval_ms = 1000 ;              // default 1 sec interval
+  ping_config.timeout_ms = 1000 ;               // default 1 sec timeout
+
+
+}
+
+/*
+   This function is called by the user, it's mainly a wrapper to f_ping_run().
+*/
+
+void f_ping (char **tokens)
+{
+  static char error_reason[80] ;
+  error_reason[0] = 0 ;
+
+  int count = atoi (tokens[1]) ;
+  char *dest = tokens[2] ;
+
+  if (count > MAX_PING_PKTS)
+  {
+    sprintf(G_reply_buf, "FAULT: maximum count is %d.\r\n", MAX_PING_PKTS) ;
+    return ;
+  }
+
+  f_ping_run (count, dest, error_reason) ;
+
+
+
 }
 
