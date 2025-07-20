@@ -253,31 +253,59 @@ void f_wifi (char **tokens)
 
    Now we're able to send a single argument to each of our callbacks. This is
    our opportunity to pass in a data structure which captures the state of the
-   ping session.
+   ping session. This is the purpose of the struct "S_ping_data".
 
    The ping subsystem is made available for both user (ie, calling our REST)
    and internal systems. Thus we need the functions,
 
-     - f_ping()         # this is called when the user calls REST
+     - f_ping()         # this is called when the user calls our REST command
      - f_ping_run()     # this actually sets up the ping session
+
+   References
+     - https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/protocols/icmp_echo.html
 */
+
+#define PING_ERROR_MSG_MAX_LEN 128
+
+struct ping_data_s
+{
+  unsigned char running ;               // 1=running 0=stopped
+  unsigned char num_ping_success ;      // number of ICMP echo responses
+  unsigned char num_ping_timeout ;      // number of ping timeouts
+  unsigned int elapsed_ms[MAX_PING_PKTS] ; // individual roundtrip responses
+} ;
+typedef struct ping_data_s S_ping_data ;
 
 void f_cb_ping_success (esp_ping_handle_t handle, void *args)
 {
+  S_ping_data *ping_data = (S_ping_data*) args ;
+  ping_data->num_ping_success++ ;
 
+  unsigned int elapsed_ms ;
+  unsigned short seq_num ;
+
+  esp_ping_get_profile (handle, ESP_PING_PROF_TIMEGAP,
+                        &elapsed_ms, sizeof(elapsed_ms)) ;
+  esp_ping_get_profile (handle, ESP_PING_PROF_SEQNO,
+                        &seq_num, sizeof(seq_num)) ;
+  if (seq_num < MAX_PING_PKTS)
+    ping_data->elapsed_ms[seq_num] = elapsed_ms ;
 }
 
 void f_cb_ping_timeout (esp_ping_handle_t handle, void *args)
 {
-
+  S_ping_data *ping_data = (S_ping_data*) args ;
+  ping_data->num_ping_timeout++ ;
 }
 
 void f_cb_ping_end (esp_ping_handle_t handle, void *args)
 {
-
+  S_ping_data *ping_data = (S_ping_data*) args ;
+  ping_data->running = 0 ;
 }
 
-void f_ping_run (int pkts, char *dest, char *error_reason)
+void f_ping_run (int pkts, char *dest, char *error_msg,
+                 struct ping_data_s *ping_data)
 {
   /*
      resolve "dest" host into an IPv4 address "target_addr" we can use in
@@ -285,20 +313,13 @@ void f_ping_run (int pkts, char *dest, char *error_reason)
   */
 
   ip_addr_t target_addr ;
-  struct addrinfo *addr_info ;
-  struct in_addr dst_addr ;
+  target_addr.u_addr.ip4.addr = ESP_IP4TOUINT32 (8,8,8,8) ;
+  target_addr.type = ESP_IPADDR_TYPE_V4 ;
 
-  memset (&target_addr, 0, sizeof(target_addr)) ;
-  getaddrinfo (dest, NULL, NULL, &addr_info) ;
-  dst_addr = ((struct sockaddr_in *) (addr_info->ai_addr))->sin_addr ;
-  int result = inet_addr_to_ip4addr (ip_2_ip4(&target_addr), &dst_addr) ;
-  freeaddrinfo (addr_info) ;
 
-  if (result != 0)
-  {
-    strcpy (error_reason, "Cannot resolve hostname") ;
-    return ;
-  }
+
+
+
 
   /* now we configure the ping session */
 
@@ -308,7 +329,36 @@ void f_ping_run (int pkts, char *dest, char *error_reason)
   ping_config.interval_ms = 1000 ;              // default 1 sec interval
   ping_config.timeout_ms = 1000 ;               // default 1 sec timeout
 
+  esp_ping_callbacks_t cbs ;                    // configure our callbacks
+  cbs.on_ping_success = f_cb_ping_success ;
+  cbs.on_ping_timeout = f_cb_ping_timeout ;
+  cbs.on_ping_end = f_cb_ping_end ;
+  cbs.cb_args = ping_data ;
 
+  /*
+     create the ping session, fire it off and enter a semi-busy wait until
+     it's all done.
+  */
+
+  esp_ping_handle_t ping_session ;
+  esp_err_t result = esp_ping_new_session (&ping_config, &cbs, &ping_session) ;
+  if (result != ESP_OK)
+  {
+    snprintf (error_msg, PING_ERROR_MSG_MAX_LEN-1,
+              "FAULT: Cannot start ping session: %s\r\n",
+              esp_err_to_name (result)) ;
+    return ;
+  }
+
+  unsigned long cutoff = millis() + ((MAX_PING_PKTS+2) * 1000) ;
+  ping_data->running = 1 ;
+  esp_ping_start (ping_session) ;
+
+  while ((ping_data->running) && (millis() < cutoff)) // don't wait forever
+    delay (100) ;
+
+  esp_ping_stop (ping_session) ;
+  esp_ping_delete_session (ping_session) ;
 }
 
 /*
@@ -317,8 +367,8 @@ void f_ping_run (int pkts, char *dest, char *error_reason)
 
 void f_ping (char **tokens)
 {
-  static char error_reason[80] ;
-  error_reason[0] = 0 ;
+  static char error_msg[PING_ERROR_MSG_MAX_LEN] ;
+  error_msg[0] = 0 ;
 
   int count = atoi (tokens[1]) ;
   char *dest = tokens[2] ;
@@ -329,9 +379,17 @@ void f_ping (char **tokens)
     return ;
   }
 
-  f_ping_run (count, dest, error_reason) ;
+  S_ping_data ping_data ;
+  memset (&ping_data, 0, sizeof(S_ping_data)) ;
 
+  f_ping_run (count, dest, error_msg, &ping_data) ;
+  if (error_msg[0] != 0)
+  {
+    strcpy (G_reply_buf, error_msg) ;
+    return ;                            // uh oh, something went wrong
+  }
 
-
+  sprintf(G_reply_buf, "success:%d timed_out:%d\r\n",
+          ping_data.num_ping_success, ping_data.num_ping_timeout) ;
 }
 

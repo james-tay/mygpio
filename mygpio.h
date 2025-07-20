@@ -19,6 +19,7 @@
 #include <DallasTemperature.h>
 #include <LiquidCrystal_I2C.h>
 #include <esp_camera.h>
+#include <esp_err.h>
 #include <lwip/netdb.h>
 #include <ping/ping_sock.h>
 
