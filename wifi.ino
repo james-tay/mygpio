@@ -272,7 +272,8 @@ struct ping_data_s
   unsigned char running ;               // 1=running 0=stopped
   unsigned char num_ping_success ;      // number of ICMP echo responses
   unsigned char num_ping_timeout ;      // number of ping timeouts
-  unsigned int elapsed_ms[MAX_PING_PKTS] ; // individual roundtrip responses
+  unsigned int ipaddr ;                 // the destination IP we're ping'ing
+  int elapsed_ms[MAX_PING_PKTS] ;       // individual roundtrip responses
 } ;
 typedef struct ping_data_s S_ping_data ;
 
@@ -288,14 +289,20 @@ void f_cb_ping_success (esp_ping_handle_t handle, void *args)
                         &elapsed_ms, sizeof(elapsed_ms)) ;
   esp_ping_get_profile (handle, ESP_PING_PROF_SEQNO,
                         &seq_num, sizeof(seq_num)) ;
-  if (seq_num < MAX_PING_PKTS)
-    ping_data->elapsed_ms[seq_num] = elapsed_ms ;
+  if (seq_num <= MAX_PING_PKTS)
+    ping_data->elapsed_ms[seq_num-1] = elapsed_ms ;
 }
 
 void f_cb_ping_timeout (esp_ping_handle_t handle, void *args)
 {
   S_ping_data *ping_data = (S_ping_data*) args ;
   ping_data->num_ping_timeout++ ;
+
+  unsigned short seq_num ;
+  esp_ping_get_profile (handle, ESP_PING_PROF_SEQNO,
+                        &seq_num, sizeof(seq_num)) ;
+  if (seq_num <= MAX_PING_PKTS)
+    ping_data->elapsed_ms[seq_num-1] = -1 ;
 }
 
 void f_cb_ping_end (esp_ping_handle_t handle, void *args)
@@ -308,18 +315,21 @@ void f_ping_run (int pkts, char *dest, char *error_msg,
                  struct ping_data_s *ping_data)
 {
   /*
-     resolve "dest" host into an IPv4 address "target_addr" we can use in
-     "esp_ping_config_t".
+     parse the "dst" IPv4 address and put it into "target_addr" so that we can
+     use it in "esp_ping_config_t".
   */
 
+  unsigned int a, b, c, d ;
+  if (sscanf (dest, "%u.%u.%u.%u", &a, &b, &c, &d) != 4)
+  {
+    strcpy (error_msg, "FAULT: Cannot parse IP address.\r\n") ;
+    return ;
+  }
+
   ip_addr_t target_addr ;
-  target_addr.u_addr.ip4.addr = ESP_IP4TOUINT32 (8,8,8,8) ;
+  target_addr.u_addr.ip4.addr = ESP_IP4TOUINT32 (d, c, b, a) ;
   target_addr.type = ESP_IPADDR_TYPE_V4 ;
-
-
-
-
-
+  ping_data->ipaddr = target_addr.u_addr.ip4.addr ;
 
   /* now we configure the ping session */
 
@@ -373,9 +383,9 @@ void f_ping (char **tokens)
   int count = atoi (tokens[1]) ;
   char *dest = tokens[2] ;
 
-  if (count > MAX_PING_PKTS)
+  if ((count < 1) || (count > MAX_PING_PKTS))
   {
-    sprintf(G_reply_buf, "FAULT: maximum count is %d.\r\n", MAX_PING_PKTS) ;
+    sprintf(G_reply_buf, "FAULT: count must be 1-%d.\r\n", MAX_PING_PKTS) ;
     return ;
   }
 
@@ -389,7 +399,24 @@ void f_ping (char **tokens)
     return ;                            // uh oh, something went wrong
   }
 
-  sprintf(G_reply_buf, "success:%d timed_out:%d\r\n",
-          ping_data.num_ping_success, ping_data.num_ping_timeout) ;
+  /* put together the string which captures ping timings and then report it */
+
+  char timings[MAX_PING_PKTS * 8], cur_timing[8] ;
+  timings[0] = 0 ;
+  for (int i=0 ; i < count ; i++)
+  {
+    sprintf (cur_timing, "%d", ping_data.elapsed_ms[i]) ;
+    strcat (timings, cur_timing) ;
+    if (i < count-1)
+      strcat(timings, ",") ;
+  }
+
+  unsigned char *ip = (unsigned char*) &ping_data.ipaddr ;
+  sprintf(G_reply_buf,
+          "dst:%d.%d.%d.%d success:%d timeout:%d timings_ms:%s\r\n",
+          ip[0], ip[1], ip[2], ip[3],
+          ping_data.num_ping_success,
+          ping_data.num_ping_timeout,
+          timings) ;
 }
 

@@ -24,7 +24,7 @@ void f_action (char **tokens)
       "relay <thread name> on|off\r\n"
       "sampler <num> <gap_ms> <outfile> <gpioN> [gpioN ...]\r\n"
       "tone <GPIO pin> <freq> <dur(ms)>\r\n"
-      "ping <count 1-%d> <dest>\r\n"
+      "ping <count 1-%d> <dest_ip>\r\n"
       "pwm_on <GPIO pin> <freq> <duty> <res[1-20]>\r\n"
       "pwm_duty <GPIO pin> <duty>\r\n"
       "pwm_off <GPIO pin>\r\n"
