@@ -44,8 +44,8 @@
 
 /* min/max fps when streaming */
 
-#define STREAM_MIN_FPS 1
-#define STREAM_MAX_FPS 15
+#define STREAM_MIN_FPS 0.001
+#define STREAM_MAX_FPS 15.0
 
 /*
    This function forms the lifecycle for the thread responsible for supporting
@@ -83,7 +83,7 @@ void f_cam_streaming_thread ()
 
     /* based on the desired fps, calculate "interval_ms" */
 
-    interval_ms = 1000 / G_CamMgt->stream_fps ;
+    interval_ms = (int) (1000.0 / G_CamMgt->stream_fps) ;
     next_tm = millis() + interval_ms ;
 
     /* main loop, send frames until client disconnects or camera fault */
@@ -542,7 +542,7 @@ void f_cam_img (S_WebClient *client)
             client->hold_open = 1 ;
             client->req_pos = 0 ;
             G_CamMgt->client = client ;
-            G_CamMgt->stream_fps = atoi (value) ;
+            G_CamMgt->stream_fps = atof (value) ;
             if (G_CamMgt->stream_fps < STREAM_MIN_FPS)
               G_CamMgt->stream_fps = STREAM_MIN_FPS ;
             if (G_CamMgt->stream_fps > STREAM_MAX_FPS)
