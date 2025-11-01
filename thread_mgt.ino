@@ -190,6 +190,8 @@ void f_thread_create (char *name)
     G_thread_entry[idx].ft_addr = ft_i2sout ;
   if (strcmp (ft_taskname, "ft_serial2tcp") == 0)
     G_thread_entry[idx].ft_addr = ft_serial2tcp ;
+  if (strcmp (ft_taskname, "ft_tasks") == 0)
+    G_thread_entry[idx].ft_addr = ft_tasks ;
   if (strcmp (ft_taskname, "ft_watchdog") == 0)
     G_thread_entry[idx].ft_addr = ft_watchdog ;
 
