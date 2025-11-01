@@ -68,18 +68,26 @@ void f_fs (char **tokens)
   {
     char *filename = tokens[2] ;
     File f = SPIFFS.open (filename, "r") ;
-    int amt = f.readBytes (msg, BUF_SIZE-1) ;
-    f.close () ;
-    if (amt > 0)
-    {
-      msg[amt] = 0 ;
-      strcat (G_reply_buf, msg) ;
-      strcat (G_reply_buf, "\r\n") ;
-    }
+    if (f.size() < 1)
+      strcat (G_reply_buf, "FAULT: Cannot read file.\r\n") ;
     else
     {
-      strcat (G_reply_buf, "FAULT: Cannot read file.\r\n") ;
+      int total = 0 ;
+      while (total < f.size())
+      {
+        int amt = f.readBytes (msg, BUF_SIZE-1) ;
+        if (amt > 0)
+        {
+          msg[amt] = 0 ;
+          strcat (G_reply_buf, msg) ;
+          total = total + amt ;
+        }
+        if (amt < 1)
+          break ;
+      }
+      strcat (G_reply_buf, "\r\n") ;
     }
+    f.close () ;
   }
   else
   if ((strcmp(tokens[1], "rm") == 0) &&                         // rm
