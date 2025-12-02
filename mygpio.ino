@@ -13,6 +13,7 @@
      % arduino-cli lib install PubSubClient             # version 2.8
      % arduino-cli lib install DallasTemperature        # version 3.9.0
      % arduino-cli lib install "LiquidCrystal I2C"      # version 1.1.2
+     % arduino-cli lib install OneWire                  # version 2.3.8
 
      % arduino-cli compile -b esp32:esp32:esp32 .
      % arduino-cli upload -v -p /dev/ttyUSB0 -b esp32:esp32:esp32 .

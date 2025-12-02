@@ -58,7 +58,7 @@ void f_cam_streaming_thread ()
   char line[REPLY_SIZE] ;
   camera_fb_t *fb = NULL ;
   int interval_ms = 0 ;
-  unsigned long next_tm=0 ;
+  unsigned long next_tm=0, t_start=0, t_end=0 ;
 
   while (1)
   {
@@ -90,6 +90,7 @@ void f_cam_streaming_thread ()
 
     while ((G_CamMgt->client != NULL) && (G_CamMgt->client->sd > 0))
     {
+      t_start = millis () ;
       xSemaphoreTake (G_CamMgt->lock, portMAX_DELAY) ;
       fb = esp_camera_fb_get () ;
       xSemaphoreGive (G_CamMgt->lock) ;
@@ -121,8 +122,18 @@ void f_cam_streaming_thread ()
         break ;
       }
 
+      /*
+         Note that "camLastCaptureDurMs" may be 0, this is because the
+         "esp_camera_fb_get()" returns the current framebuffer. Image capture
+         is ongoing in the background.
+      */
+
+      t_end = millis () ;
+      G_Metrics->camLastCaptureDurMs = t_end - t_start ;
+
       /* send the jpeg frame */
 
+      t_start = millis () ;
       sprintf (line, "--%s\n"
                      "Content-Type: image/jpeg\n"
                      "Content-Length: %d\n\n",
@@ -157,6 +168,10 @@ void f_cam_streaming_thread ()
         }
         G_Metrics->camStreamed++ ;
       }
+      t_end = millis () ;
+      G_Metrics->camLastFrameSize = jpg_len ;
+      G_Metrics->camLastXmitDurMs = t_end - t_start ;
+      G_Metrics->camLastCaptureTimeMs = t_end ;
       esp_camera_fb_return (fb) ;
 
       /* figure out how long we should wait */

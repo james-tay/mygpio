@@ -70,6 +70,7 @@ Install the external libraries we depend on,
 % arduino-cli lib install PubSubClient
 % arduino-cli lib install DallasTemperature
 % arduino-cli lib install "LiquidCrystal I2C"
+% arduino-cli lib install OneWire
 ```
 
 For reference,
