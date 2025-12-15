@@ -688,6 +688,7 @@ void f_esp32 (char **tokens)
       "ft_ntpclient,<ntp_server>,<sync_interval_secs>\r\n"
       "ft_relay,<pin>,<dur(secs)>\r\n"
       "ft_serial2tcp,<port>,<baud>,<RXpin>,<TXpin>\r\n"
+      "ft_spi,<port>,<mosi_pin>,<miso_pin>,<sck_pin>,<cs_pin>\r\n"
       "ft_tasks,<filename>\r\n"
       "ft_watchdog,<intervalSecs>,<minUptimeSecs>,<noActivitySecs>\r\n"
       "\r\n"
