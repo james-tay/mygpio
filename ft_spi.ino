@@ -70,8 +70,8 @@
      digitalWrite(CS_PIN, LOW) ;
 
    Over the life cycle of the TCP session, this thread handles messages
-   described above in "DATA TRANSFER". Once the TCP client disconnects, this
-   thread performs,
+   described above in "DATA TRANSFER". Only 1x connected client is supported
+   at any one time. Once the TCP client disconnects, this thread performs,
 
      spi->endTransaction() ;
      digitalWrite(CS_PIN, HIGH) ;
@@ -89,6 +89,8 @@
 
 #include <SPI.h>
 
+#define SPI_MSG_BUFSIZE 1500    // maximum size of a message to/from client
+
 void ft_spi (S_thread_entry *p)
 {
   if (p->num_args != 5)
@@ -98,7 +100,112 @@ void ft_spi (S_thread_entry *p)
     return ;
   }
 
+  int listen_port = atoi (p->in_args[0]) ;
+  int mosi_pin = atoi (p->in_args[1]) ;
+  int miso_pin = atoi (p->in_args[2]) ;
+  int sck_pin = atoi (p->in_args[3]) ;
+  int cs_pin = atoi (p->in_args[4]) ;
+
+  /* try allocate the SPI message buffer from heap */
+
+  unsigned char *spi_buf = (unsigned char*) malloc(SPI_MSG_BUFSIZE) ;
+  if (spi_buf == NULL)
+  {
+    strcpy (p->msg, "FATAL! cannot allocate spi_buf") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
+
+  /* configure metrics that we'll expose */
+
+  p->results[0].num_tags = 1 ;
+  p->results[0].meta[0] = (char*) "client" ;
+  p->results[0].data[0] = (char*) "\"connected\"" ;
+
+  p->num_int_results = 1 ;
+
+  /* try to setup a listening TCP port */
+
+  struct sockaddr_in addr ;
+  memset (&addr, 0, sizeof(addr)) ;
+  addr.sin_family = AF_INET ;
+  addr.sin_addr.s_addr = INADDR_ANY ;
+  addr.sin_port = htons (listen_port) ;
+  int listen_sd = socket (AF_INET, SOCK_STREAM, IPPROTO_IP) ;
+  if (bind (listen_sd, (const struct sockaddr*) &addr, sizeof(addr)) < 0)
+  {
+    close (listen_sd) ;
+    strcpy (p->msg, "FATAL! bind() failed") ;
+    p->state = THREAD_STOPPED ;
+    free (spi_buf) ;
+    return ;
+  }
+  if (listen (listen_sd, 1) != 0)
+  {
+    close (listen_sd) ;
+    strcpy (p->msg, "FATAL! listen() failed") ;
+    p->state = THREAD_STOPPED ;
+    free (spi_buf) ;
+    return ;
+  }
+
+  /*
+     this is the main loop, wait for network activity, but check "p->state"
+     periodically in case we need to shutdown.
+  */
+
+  int nap_ms = THREAD_SHUTDOWN_PERIOD / 5 ;
+  int num_fds = 0 ;
+  int client_sd = 0 ;
+  int result, amt ;
+  fd_set rfds ;
+  struct timeval tv ;
+
+  while (p->state == THREAD_RUNNING)
+  {
+    tv.tv_sec = 0 ;
+    tv.tv_usec = nap_ms * 1000 ;
+    if (client_sd > 0)
+    {
+      FD_SET (client_sd, &rfds) ;       // only monitor TCP client
+      num_fds = client_sd + 1 ;
+    }
+    else
+    {
+      FD_SET (listen_sd, &rfds) ;       // only monitor listening socket
+      num_fds = listen_sd + 1 ;
+    }
+    result = select (num_fds, &rfds, NULL, NULL, &tv) ;
+    if (result > 0)
+    {
+      if (FD_ISSET (listen_sd, &rfds))                  // new tcp client !!
+      {
+        client_sd = accept (listen_sd, NULL, NULL) ;
+        p->results[0].i_value = 1 ;
+      }
+      if (FD_ISSET (client_sd, &rfds))
+      {
+        amt = read (client_sd, spi_buf, SPI_MSG_BUFSIZE) ;
+        if (amt < 1)                                    // tcp client closed
+        {
+          close (client_sd) ;
+          client_sd = 0 ;
+          p->results[0].i_value = 0 ;
+        }
 
 
+
+
+
+      }
+
+    }
+  }
+
+  close (listen_sd) ;
+  if (client_sd > 0)
+    close(client_sd) ;
+  p->state = THREAD_STOPPED ;
+  free (spi_buf) ;
 }
 
