@@ -58,11 +58,26 @@
    All messages to/from a client must begin with an opcode, which identifies
    what the message is about. The following opcode IDs are implemented.
 
-      1 - client sending echo request
-      2 - server sending echo response
-      3 - client sending payload, do not send response
-      4 - client sending payload, send response immediately
-      5 - server sending response
+      1 - client sending SPI config (do this before sending SPI payload)
+      2 - client sending echo request
+      3 - server sending echo response
+      4 - client sending payload, do not send response
+      5 - client sending payload, send response immediately
+      6 - server sending response (reply for opcodes 4 and 5)
+
+   The client's SPI config message (ie, opcode 1) has the following format,
+
+     <opcode><length><payload...><0x00,0x00>
+
+   Where,
+     opcode  - is always 1
+     length  - is always 6
+     payload - field format for SPI settings as follows
+
+       <4-byte:SCK_freq_khz><1-byte:SPI_order><1-byte:SPI_mode>
+
+   Reference
+     https://docs.arduino.cc/language-reference/en/functions/communication/SPI/SPISettings/
 
    IMPLEMENTATION
 
@@ -81,18 +96,17 @@
      delete spi ;
      spi_bus_free(VSPI_HOST) ;
 
-   Each time a client connects on this thread's listening TCP socket, this
-   thread performs,
+   Each time a client connects on this thread's listening TCP socket, the
+   client MUST send an SPI config message, after which the thread performs,
 
      spi->beginTransaction(...) ;
-     digitalWrite(CS_PIN, LOW) ;
 
    Over the life cycle of the TCP session, this thread handles messages
-   described above in "DATA TRANSFER". Only 1x connected client is supported
-   at any one time. Once the TCP client disconnects, this thread performs,
+   described above in "DATA TRANSFER". Only 1x connected TCP client is
+   supported at any one time. Once the TCP client disconnects, this thread
+   performs,
 
      spi->endTransaction() ;
-     digitalWrite(CS_PIN, HIGH) ;
 
    In the event that the client is connected to this thread, but suddenly
    crashes, then this thread keeps the client's socket descriptor open
@@ -108,12 +122,16 @@
      - MOSI pin
      - MISO pin
      - SCK pin
-     - CS pin
      - Client max allowed idle time (secs)
 
-   To send test message which includes 2x of SPI data to this thread,
+   To send test message to this thread using "socat",
 
-     $ echo -ne "\x01\x00\x02\xbe\xef\x00\x00" >/dev/tcp/example.com/9000
+     $ echo -ne "\x02\x00\x01\xff\x00\x00" | socat - TCP4:192.168.1.10:9000
+
+   This thread only manages the clocking in/out of data over the MOSI/MISO
+   pins. This thread does NOT manage the CS pin, that would be the user's
+   responsibility. In this way, this thread can interact with multiple SPI
+   devices when the user manages the individual CS pins.
 */
 
 #include <SPI.h>
@@ -165,7 +183,7 @@ int f_spi_validate_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
 
 void ft_spi (S_thread_entry *p)
 {
-  if (p->num_args != 6)
+  if (p->num_args != 5)
   {
     strcpy (p->msg, "FATAL! Expecting 5x arguments") ;
     p->state = THREAD_STOPPED ;
@@ -176,8 +194,7 @@ void ft_spi (S_thread_entry *p)
   int mosi_pin = atoi (p->in_args[1]) ;
   int miso_pin = atoi (p->in_args[2]) ;
   int sck_pin = atoi (p->in_args[3]) ;
-  int cs_pin = atoi (p->in_args[4]) ;
-  int max_idle_secs = atoi (p->in_args[5]) ;
+  int max_idle_secs = atoi (p->in_args[4]) ;
 
   /* try allocate the SPI message buffer from heap */
 
