@@ -79,6 +79,9 @@
    Reference
      https://docs.arduino.cc/language-reference/en/functions/communication/SPI/SPISettings/
 
+   If this thread receives an unsupported opcode from the client, the TCP
+   session is closed immediately.
+
    IMPLEMENTATION
 
    When this thread starts up, it initializes the ESP32's hardware "VSPI"
@@ -126,7 +129,8 @@
 
    To send test message to this thread using "socat",
 
-     $ echo -ne "\x02\x00\x01\xff\x00\x00" | socat - TCP4:192.168.1.10:9000
+     $ echo -ne "\x02\x00\x01\xff\x00\x00" | \
+         socat - TCP4:192.168.6.50:9000 | xxd
 
    This thread only manages the clocking in/out of data over the MOSI/MISO
    pins. This thread does NOT manage the CS pin, that would be the user's
@@ -143,6 +147,13 @@
 */
 
 #define SPI_MSG_BUFSIZE 1440
+
+#define SPI_OP_SPI_CONFIG       1
+#define SPI_OP_ECHO_REQ         2
+#define SPI_OP_ECHO_RESP        3
+#define SPI_OP_SEND_NO_RESP     4
+#define SPI_OP_SEND_WITH_RESP   5
+#define SPI_OP_DEVICE_RESP      6
 
 /*
    This function is called from ft_spi() just after it has performed a recv()
@@ -181,6 +192,39 @@ int f_spi_validate_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
     return (expected) ;
 }
 
+/*
+   This function is called from ft_spi() and supplied a complete "msg" of
+   "len" bytes. Our job is to identify the opcode and act accordingly. For
+   the most part, we return 1, or 0 if we received an invalid opcode.
+   IMPORTANT !!! the contents of "msg" may be replaced in the course of our
+   work.
+*/
+
+int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
+{
+  unsigned char opcode ;
+  unsigned short msg_size ;
+  unsigned char *payload ;
+
+  opcode = msg[0] ;
+  memcpy (&msg_size, msg+1, sizeof(msg_size)) ;
+  msg_size = ntohs(msg_size) ;
+  payload = msg + 3 ;
+
+  switch (opcode)
+  {
+    case SPI_OP_ECHO_REQ:
+      msg[0] = SPI_OP_ECHO_RESP ;
+      write (sd, msg, len) ;
+      break ;
+    default:
+      return (0) ;
+  }
+
+  p->results[1].i_value++ ;                             // message handled
+  return (1) ;
+}
+
 void ft_spi (S_thread_entry *p)
 {
   if (p->num_args != 5)
@@ -194,7 +238,7 @@ void ft_spi (S_thread_entry *p)
   int mosi_pin = atoi (p->in_args[1]) ;
   int miso_pin = atoi (p->in_args[2]) ;
   int sck_pin = atoi (p->in_args[3]) ;
-  int max_idle_secs = atoi (p->in_args[4]) ;
+  int max_idle_ms = atoi (p->in_args[4]) * 1000 ;
 
   /* try allocate the SPI message buffer from heap */
 
@@ -212,7 +256,15 @@ void ft_spi (S_thread_entry *p)
   p->results[0].meta[0] = (char*) "client" ;
   p->results[0].data[0] = (char*) "\"connected\"" ;
 
-  p->num_int_results = 1 ;
+  p->results[1].num_tags = 1 ;
+  p->results[1].meta[0] = (char*) "msgs" ;
+  p->results[1].data[0] = (char*) "\"handled\"" ;
+
+  p->results[2].num_tags = 1 ;
+  p->results[2].meta[0] = (char*) "msgs" ;
+  p->results[2].data[0] = (char*) "\"invalid\"" ;
+
+  p->num_int_results = 3 ;
 
   /* try to setup a listening TCP port */
 
@@ -248,14 +300,18 @@ void ft_spi (S_thread_entry *p)
   int nap_ms = THREAD_SHUTDOWN_PERIOD / 5 ;
   int num_fds = 0 ;
   int client_sd = 0 ;
+  int close_client = 0 ;
   int result, amt ;
+  unsigned long last_activity_ms=0 ;
   fd_set rfds ;
   struct timeval tv ;
 
   while (p->state == THREAD_RUNNING)
   {
+    close_client = 0 ;
     tv.tv_sec = 0 ;
     tv.tv_usec = nap_ms * 1000 ;
+    FD_ZERO (&rfds) ;
     if (client_sd > 0)
     {
       FD_SET (client_sd, &rfds) ;       // only monitor TCP client
@@ -271,39 +327,58 @@ void ft_spi (S_thread_entry *p)
     {
       if (FD_ISSET (listen_sd, &rfds))                  // new tcp client !!
       {
+        int flag = 1 ;
         client_sd = accept (listen_sd, NULL, NULL) ;
+        setsockopt (client_sd, IPPROTO_TCP, TCP_NODELAY,
+                    (char*)&flag, sizeof(int)) ;
         p->results[0].i_value = 1 ;
+        last_activity_ms = millis () ;
       }
       if (FD_ISSET (client_sd, &rfds))
       {
         amt = recv (client_sd, spi_buf, SPI_MSG_BUFSIZE, MSG_PEEK) ;
         if (amt < 1)                                    // tcp client closed
-        {
-          close (client_sd) ;
-          client_sd = 0 ;
-          p->results[0].i_value = 0 ;
-        }
+          close_client = 1 ;
         else
         {
           amt = f_spi_validate_msg (p, client_sd, spi_buf, amt) ;
           if (amt < 0)                                  // invalid message
           {
-            close (client_sd) ;
-            client_sd = 0 ;
-            p->results[0].i_value = 0 ;
+            p->results[2].i_value++ ;
+            close_client = 1 ;
           }
           else
           {
-            amt = read (client_sd, spi_buf, amt) ;      // pull exact message
-
-
-
-
+            last_activity_ms = millis () ;
+            amt = read (client_sd, spi_buf, amt) ;      // pull one message
+            if (f_spi_handle_msg (p, client_sd, spi_buf, amt) == 0)
+              close_client = 1 ;
           }
         }
       }
     }
+
+    /* check if TCP client is connected and has idled too long */
+
+    if (client_sd > 0)
+    {
+      unsigned long now = millis () ;
+      if (now - last_activity_ms > max_idle_ms)
+        close_client = 1 ;
+    }
+
+    /* if the "close_client" flag is set, then disconnect TCP client now */
+
+    if ((client_sd > 0) && (close_client))
+    {
+      shutdown (client_sd, SHUT_RDWR) ;
+      close (client_sd) ;
+      client_sd = 0 ;
+      p->results[0].i_value = 0 ;
+    }
   }
+
+  /* if we got here, that's because we've been told to shutdown */
 
   close (listen_sd) ;
   if (client_sd > 0)
