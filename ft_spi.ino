@@ -76,8 +76,14 @@
 
        <4-byte:SCK_freq_khz><1-byte:SPI_order><1-byte:SPI_mode>
 
-   Reference
-     https://docs.arduino.cc/language-reference/en/functions/communication/SPI/SPISettings/
+     SPI_order,
+       0 = LSBFIRST
+       1 = MSBFIRST
+     SPI_mode, for CPOL (Clock Polarity) and CPHA (Clock Phase)
+       0 = CPOL 0 (clock idle at 0v), CPHA 0 (sample data on 1st edge of clock)
+       1 = CPOL 0, CPHA 1 (sample data on 2nd edge of clock)
+       2 = CPOL 1 (clock idle at 3.3v), CPHA 0
+       3 = CPOL 1, CPHA 1
 
    If this thread receives an unsupported opcode from the client, the TCP
    session is closed immediately.
@@ -127,7 +133,7 @@
      - SCK pin
      - Client max allowed idle time (secs)
 
-   To send test message to this thread using "socat",
+   To send test message to this thread using "socat" (and read the reply),
 
      $ echo -ne "\x02\x00\x01\xff\x00\x00" | \
          socat - TCP4:192.168.6.50:9000 | xxd
@@ -148,12 +154,35 @@
 
 #define SPI_MSG_BUFSIZE 1440
 
+/* The various SPI opcodes used between us and a TCP client */
+
 #define SPI_OP_SPI_CONFIG       1
 #define SPI_OP_ECHO_REQ         2
 #define SPI_OP_ECHO_RESP        3
 #define SPI_OP_SEND_NO_RESP     4
 #define SPI_OP_SEND_WITH_RESP   5
 #define SPI_OP_DEVICE_RESP      6
+
+/* SPI speed limits for SCK */
+
+#define SPI_MAX_SCK_FREQ_KHZ 40000
+
+/* Data structure in a SPI_OP_SPI_CONFIG message from the TCP client */
+
+struct spi_config_msg
+{
+  unsigned int freq_khz ;
+  unsigned char order ;
+  unsigned char mode ;
+} ;
+typedef struct spi_config_msg S_spi_config_msg ;
+
+/* Global variables */
+
+SPIClass *G_spi_dev=NULL ;
+SPISettings G_spi_settings ;
+
+/* ========================================================================= */
 
 /*
    This function is called from ft_spi() just after it has performed a recv()
@@ -205,6 +234,8 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
   unsigned char opcode ;
   unsigned short msg_size ;
   unsigned char *payload ;
+  S_spi_config_msg cfg ;
+  SPISettings s_settings ;
 
   opcode = msg[0] ;
   memcpy (&msg_size, msg+1, sizeof(msg_size)) ;
@@ -213,16 +244,35 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
 
   switch (opcode)
   {
+    case SPI_OP_SPI_CONFIG:
+      memcpy (&cfg, payload, sizeof(S_spi_config_msg)) ;
+
+      /* sanity check all values before we continue */
+
+      if ((cfg.freq_khz < 1) ||
+          (cfg.freq_khz > SPI_MAX_SCK_FREQ_KHZ) ||
+          (cfg.order > 1) ||
+          (cfg.mode > 3))
+        return (0) ;
+
+      G_spi_settings = SPISettings(cfg.freq_khz * 1000, cfg.order, cfg.mode) ;
+
+
+
+
+      break ;
+
     case SPI_OP_ECHO_REQ:
       msg[0] = SPI_OP_ECHO_RESP ;
       write (sd, msg, len) ;
       break ;
+
     default:
       return (0) ;
   }
 
   p->results[1].i_value++ ;                             // message handled
-  return (1) ;
+  return (1) ;                                          // return success
 }
 
 void ft_spi (S_thread_entry *p)
@@ -291,6 +341,14 @@ void ft_spi (S_thread_entry *p)
     return ;
   }
   sprintf (p->msg, "listening on %d", listen_port) ;
+
+  /* bring SPI interface hardware online, note that CS is user controlled */
+
+  if (G_spi_dev == NULL)
+  {
+    G_spi_dev = new SPIClass (VSPI) ;
+    G_spi_dev->begin (sck_pin, miso_pin, mosi_pin, -1) ;
+  }
 
   /*
      this is the main loop, wait for network activity, but check "p->state"
@@ -385,5 +443,9 @@ void ft_spi (S_thread_entry *p)
     close(client_sd) ;
   p->state = THREAD_STOPPED ;
   free (spi_buf) ;
+
+  G_spi_dev->end() ;
+  delete (G_spi_dev) ;
+  G_spi_dev = NULL ;
 }
 
