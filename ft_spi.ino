@@ -138,6 +138,11 @@
      $ echo -ne "\x02\x00\x01\xff\x00\x00" | \
          socat - TCP4:192.168.6.50:9000 | xxd
 
+   To setup the SPI device and hold the TCP session open for 5 seconds,
+
+     $ (echo -ne "\x01\x00\x06\x00\x00\x00\x05\x01\x02\x00\x00" ; sleep 5) | \
+         socat - TCP4:192.168.6.50:9000 | xxd
+
    This thread only manages the clocking in/out of data over the MOSI/MISO
    pins. This thread does NOT manage the CS pin, that would be the user's
    responsibility. In this way, this thread can interact with multiple SPI
@@ -171,7 +176,7 @@
 
 struct spi_config_msg
 {
-  unsigned int freq_khz ;
+  unsigned long freq_khz ;
   unsigned char order ;
   unsigned char mode ;
 } ;
@@ -241,13 +246,17 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
   memcpy (&msg_size, msg+1, sizeof(msg_size)) ;
   msg_size = ntohs(msg_size) ;
   payload = msg + 3 ;
+  sprintf (p->msg, "opcode:%d size:%d", opcode, msg_size) ;
 
   switch (opcode)
   {
     case SPI_OP_SPI_CONFIG:
       memcpy (&cfg, payload, sizeof(S_spi_config_msg)) ;
+      cfg.freq_khz = ntohl(cfg.freq_khz) ;
 
       /* sanity check all values before we continue */
+      sprintf (p->msg, "freq:%dkhz order:%d mode:%d",
+               cfg.freq_khz, cfg.order, cfg.mode) ;
 
       if ((cfg.freq_khz < 1) ||
           (cfg.freq_khz > SPI_MAX_SCK_FREQ_KHZ) ||
@@ -256,10 +265,6 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
         return (0) ;
 
       G_spi_settings = SPISettings(cfg.freq_khz * 1000, cfg.order, cfg.mode) ;
-
-
-
-
       break ;
 
     case SPI_OP_ECHO_REQ:
@@ -391,6 +396,7 @@ void ft_spi (S_thread_entry *p)
                     (char*)&flag, sizeof(int)) ;
         p->results[0].i_value = 1 ;
         last_activity_ms = millis () ;
+        sprintf (p->msg, "client on %d", listen_port) ;
       }
       if (FD_ISSET (client_sd, &rfds))
       {
@@ -433,6 +439,7 @@ void ft_spi (S_thread_entry *p)
       close (client_sd) ;
       client_sd = 0 ;
       p->results[0].i_value = 0 ;
+      sprintf (p->msg, "listening on %d", listen_port) ;
     }
   }
 
