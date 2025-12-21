@@ -8,9 +8,6 @@
    It then opens a listening TCP socket, through which an external party may
    interact with the SPI device.
 
-   References
-     - https://www.e-tinkers.com/2020/03/do-you-know-arduino-spi-and-arduino-spi-library/
-
    Recall that, for the best performance, the ESP32 has 2x general purpose
    SPI interfaces (called HSPI and VSPI).
 
@@ -29,23 +26,20 @@
      uint8_t buf[6] ;
      c = ... ;
      memcpy(buf, ...) ;
-     SPI.transfer(c) ;   // writes single byte, reads single byte into "c"
-     SPI.transfer(buf) ; // writes 6 bytes, reads back 6 bytes, byte by byte
+     SPI.transfer(c) ;      // writes single byte, reads single byte into "c"
+     SPI.transfer(buf, 6) ; // writes 6 bytes, reads back 6 bytes into "buf"
 
    With this in mind, when a TCP client connects to this thread, the message
-   format is,
+   format between client and server is always,
 
-     from client:
        <1-byte opcode><2-byte length><payload...><0x00, 0x00>
 
-     from server:
-       <1-byte opcode><2-byte length><payload...><0x00, 0x00>
-
-   The 2-byte length field is in big endian and informs the receiver to expect
-   between 1 and 65535 bytes of payload. In reality, the maximum payload is
-   capped at "SPI_MSG_BUFSIZE - 5". At the end of this payload is exactly
-   2x bytes of 0x00. This is a sanity check which allows both parties to
-   discard unintentional/errornous traffic (eg, someone telnets by mistake).
+   The 2-byte length field is in network byte order (ie, big endian) and it
+   informs the receiver to expect between 1 and 65535 bytes of payload. In
+   reality, the maximum payload is capped at "SPI_MSG_BUFSIZE - 5". At the end
+   of this payload is exactly 2x bytes of 0x00. This is a sanity check which
+   allows both parties to discard unintentional/errornous traffic (eg, someone
+   telnets by mistake).
 
    Thus upon connecting to the server, the client is expected to send a message
    which is at least 6 bytes (ie, 1 + 2 + 1 + 2). This thread delivers the
@@ -103,7 +97,6 @@
 
      spi->end() ;
      delete spi ;
-     spi_bus_free(VSPI_HOST) ;
 
    Each time a client connects on this thread's listening TCP socket, the
    client MUST send an SPI config message, after which the thread performs,
@@ -138,10 +131,46 @@
      $ echo -ne "\x02\x00\x01\xff\x00\x00" | \
          socat - TCP4:192.168.6.50:9000 | xxd
 
-   To setup the SPI device and hold the TCP session open for 5 seconds,
+   To setup the SPI device (5khz clock, order 1, mode 2) and hold the TCP
+   session open for 5 seconds,
 
      $ (echo -ne "\x01\x00\x06\x00\x00\x00\x05\x01\x02\x00\x00" ; sleep 5) | \
          socat - TCP4:192.168.6.50:9000 | xxd
+
+   The following example sets up SPI with SCK at 10khz, sends the WHO_AM_I
+   request (ie, 0xf5) to an MPU-9250 and reads a 1-byte response (ie, 0x75).
+
+     #!/bin/bash
+     CTL_HOST="esp32.example.com"
+     CTL_PORT=9000
+     CS_PIN=5
+
+     curl "http://$CTL_HOST/v1?cmd=hi+$CS_PIN" # pull CS high
+
+     # SPI config - 10khz, MSBFIRST, SPI mode 0
+     CMD_CONFIG="\x01\x00\x06\x00\x00\x00\xa0\x01\x00\x00\x00"
+     # Send WHO_AM_I
+     CMD_WHOAMI="\x04\x00\x01\xf5\x00\x00"
+     # Get 1-byte response
+     CMD_REPLY="\x05\x00\x01\x00\x00\x00"
+
+     curl "http://$CTL_HOST/v1?cmd=lo+$CS_PIN" # pull CS low
+     (
+       echo -ne "$CMD_CONFIG"
+       echo -ne "$CMD_WHOAMI"
+       echo -ne "$CMD_REPLY"
+     ) | socat - TCP4:$CTL_HOST:$CTL_PORT | xxd
+
+     curl "http://$CTL_HOST/v1?cmd=hi+$CS_PIN" # pull CS back to high
+
+   The output from the above script looks like this (note the \x75 reply),
+
+     pin:5 HIGH
+     pin:5 LOW
+     00000000: 0600 0175 0000                           ...u..
+     pin:5 HIGH
+
+   NOTES
 
    This thread only manages the clocking in/out of data over the MOSI/MISO
    pins. This thread does NOT manage the CS pin, that would be the user's
@@ -184,8 +213,8 @@ typedef struct spi_config_msg S_spi_config_msg ;
 
 /* Global variables */
 
-SPIClass *G_spi_dev=NULL ;
-SPISettings G_spi_settings ;
+int G_spi_transaction=0 ;       // spi->beginTransaction() has been called
+SPIClass *G_spi_dev=NULL ;      // the SPI hardware device on the ESP32
 
 /* ========================================================================= */
 
@@ -250,26 +279,46 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
 
   switch (opcode)
   {
-    case SPI_OP_SPI_CONFIG:
+    case SPI_OP_SPI_CONFIG:                             // setup SPI settings
       memcpy (&cfg, payload, sizeof(S_spi_config_msg)) ;
       cfg.freq_khz = ntohl(cfg.freq_khz) ;
 
       /* sanity check all values before we continue */
-      sprintf (p->msg, "freq:%dkhz order:%d mode:%d",
-               cfg.freq_khz, cfg.order, cfg.mode) ;
 
       if ((cfg.freq_khz < 1) ||
           (cfg.freq_khz > SPI_MAX_SCK_FREQ_KHZ) ||
           (cfg.order > 1) ||
           (cfg.mode > 3))
         return (0) ;
+      sprintf (p->msg, "freq:%dkhz order:%d mode:%d",
+               cfg.freq_khz, cfg.order, cfg.mode) ;
 
-      G_spi_settings = SPISettings(cfg.freq_khz * 1000, cfg.order, cfg.mode) ;
+      /* apply SPI settings and get hardware ready */
+
+      G_spi_transaction = 1 ;
+      G_spi_dev->beginTransaction (SPISettings(cfg.freq_khz * 1000,
+                                               cfg.order, cfg.mode)) ;
       break ;
 
-    case SPI_OP_ECHO_REQ:
+    case SPI_OP_ECHO_REQ:                               // echo request
       msg[0] = SPI_OP_ECHO_RESP ;
       write (sd, msg, len) ;
+      break ;
+
+    case SPI_OP_SEND_NO_RESP:                           // send bytes w/o reply
+      if (G_spi_transaction == 0)
+        return (0) ; // return failure
+      G_spi_dev->transfer (payload, msg_size) ;
+      p->results[3].i_value = p->results[3].i_value + msg_size ;
+      break ;
+
+    case SPI_OP_SEND_WITH_RESP:                         // send bytes /w reply
+      if (G_spi_transaction == 0)
+        return (0) ; // return failure
+      G_spi_dev->transfer (payload, msg_size) ;
+      p->results[3].i_value = p->results[3].i_value + msg_size ;
+      msg[0] = SPI_OP_DEVICE_RESP ;
+      write(sd, msg, len) ;
       break ;
 
     default:
@@ -319,7 +368,11 @@ void ft_spi (S_thread_entry *p)
   p->results[2].meta[0] = (char*) "msgs" ;
   p->results[2].data[0] = (char*) "\"invalid\"" ;
 
-  p->num_int_results = 3 ;
+  p->results[3].num_tags = 1 ;
+  p->results[3].meta[0] = (char*) "bytes" ;
+  p->results[3].data[0] = (char*) "\"transferred\"" ;
+
+  p->num_int_results = 4 ;
 
   /* try to setup a listening TCP port */
 
@@ -439,6 +492,11 @@ void ft_spi (S_thread_entry *p)
       close (client_sd) ;
       client_sd = 0 ;
       p->results[0].i_value = 0 ;
+      if (G_spi_transaction)
+      {
+        G_spi_dev->endTransaction () ;
+        G_spi_transaction = 0 ;
+      }
       sprintf (p->msg, "listening on %d", listen_port) ;
     }
   }
