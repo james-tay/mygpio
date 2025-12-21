@@ -137,38 +137,41 @@
      $ (echo -ne "\x01\x00\x06\x00\x00\x00\x05\x01\x02\x00\x00" ; sleep 5) | \
          socat - TCP4:192.168.6.50:9000 | xxd
 
-   The following example sets up SPI with SCK at 10khz, sends the WHO_AM_I
-   request (ie, 0xf5) to an MPU-9250 and reads a 1-byte response (ie, 0x75).
+   The following example sets up SPI with SCK at 10khz, MSGFIRST and SPI mode 0
+   to communicate with an MCP2008. We then send a request to perform a single
+   ended sampling of channel 0. We send 3-bytes and read back 3-bytes, although
+   the value of interest is in the last 10-bits.
 
      #!/bin/bash
      CTL_HOST="esp32.example.com"
      CTL_PORT=9000
      CS_PIN=5
+     VCC_PIN=17
 
-     curl "http://$CTL_HOST/v1?cmd=hi+$CS_PIN" # pull CS high
-
-     # SPI config - 10khz, MSBFIRST, SPI mode 0
+     # SPI config - 10khz (\00\a0), MSBFIRST, SPI mode 0
      CMD_CONFIG="\x01\x00\x06\x00\x00\x00\xa0\x01\x00\x00\x00"
-     # Send WHO_AM_I
-     CMD_WHOAMI="\x04\x00\x01\xf5\x00\x00"
-     # Get 1-byte response
-     CMD_REPLY="\x05\x00\x01\x00\x00\x00"
 
-     curl "http://$CTL_HOST/v1?cmd=lo+$CS_PIN" # pull CS low
+     # Send 3-byte single-ended sample request on channel 0
+     CMD_SAMPLE_A="\x05\x00\x03\x01\x80\x00\x00\x00"
+
+     curl "http://$CTL_HOST/v1?cmd=hi+$VCC_PIN"   # power ON
+     curl "http://$CTL_HOST/v1?cmd=hi+$CS_PIN"    # pull CS high (chip offline)
+     curl "http://$CTL_HOST/v1?cmd=lo+$CS_PIN"    # pull CS low (chip online)
      (
        echo -ne "$CMD_CONFIG"
-       echo -ne "$CMD_WHOAMI"
-       echo -ne "$CMD_REPLY"
+       echo -ne "$CMD_SAMPLE_A"
      ) | socat - TCP4:$CTL_HOST:$CTL_PORT | xxd
+     curl "http://$CTL_HOST/v1?cmd=hi+$CS_PIN"    # pull CS high (chip offline)
 
-     curl "http://$CTL_HOST/v1?cmd=hi+$CS_PIN" # pull CS back to high
+   Running the above code gives the following result,
 
-   The output from the above script looks like this (note the \x75 reply),
-
+     $ ./test.sh
+     pin:17 HIGH
      pin:5 HIGH
      pin:5 LOW
-     00000000: 0600 0175 0000                           ...u..
+     00000000: 0600 0301 82d8 0000                      ........
      pin:5 HIGH
+
 
    NOTES
 
