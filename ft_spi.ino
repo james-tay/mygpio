@@ -57,7 +57,12 @@
       3 - server sending echo response
       4 - client sending payload, do not send response
       5 - client sending payload, send response immediately
-      6 - server sending response (reply for opcodes 4 and 5)
+      6 - client requests pin LOW, no response needed
+      7 - client requests pin HIGH, no response needed
+      8 - client requests pause in usecs (max 999999 usec), no response needed
+     16 - server sending response (reply for opcodes 4 and 5)
+
+   [ opcode 1 - SPI config ]
 
    The client's SPI config message (ie, opcode 1) has the following format,
 
@@ -78,6 +83,22 @@
        1 = CPOL 0, CPHA 1 (sample data on 2nd edge of clock)
        2 = CPOL 1 (clock idle at 3.3v), CPHA 0
        3 = CPOL 1, CPHA 1
+
+   [ opcode 6 and 7 - set pin LOW/HIGH ]
+
+   The client requests for a certain GPIO pin to be set low(6) or high(7).
+   This is useful for situations where we need to rapidly set the CS pin
+   depnding on the application. The length of this message must be "1" and
+   the 1-byte payload is the GPIO pin to operate on.
+
+   [ opcode 8 - pause ]
+
+   The client requests for a short pause before continuing SPI operations.
+   This is application dependant. For example, we might want a slight pause
+   after sending a device reset instruction. The length of this message must
+   be "4" and the 4-byte payload is an "unsigned long" (network byte order).
+
+   [ unknown opcode ]
 
    If this thread receives an unsupported opcode from the client, the TCP
    session is closed immediately.
@@ -136,6 +157,10 @@
 
      $ (echo -ne "\x01\x00\x06\x00\x00\x00\x05\x01\x02\x00\x00" ; sleep 5) | \
          socat - TCP4:192.168.6.50:9000 | xxd
+
+   The following configuration example is used to configure this thread,
+
+     ft_spi,9000,23,19,18,30
 
    The following example sets up SPI with SCK at 10khz, MSGFIRST and SPI mode 0
    to communicate with an MCP2008. We then send a request to perform a single
@@ -198,11 +223,18 @@
 #define SPI_OP_ECHO_RESP        3
 #define SPI_OP_SEND_NO_RESP     4
 #define SPI_OP_SEND_WITH_RESP   5
-#define SPI_OP_DEVICE_RESP      6
+#define SPI_OP_PIN_LOW          6
+#define SPI_OP_PIN_HIGH         7
+#define SPI_OP_PAUSE_USECS      8
+#define SPI_OP_DEVICE_RESP      16
 
 /* SPI speed limits for SCK */
 
 #define SPI_MAX_SCK_FREQ_KHZ 40000
+
+/* The maximum pause duration allowed */
+
+#define SPI_PAUSE_MAX_USECS 1000000
 
 /* Data structure in a SPI_OP_SPI_CONFIG message from the TCP client */
 
@@ -268,6 +300,7 @@ int f_spi_validate_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
 
 int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
 {
+  int value ;
   unsigned char opcode ;
   unsigned short msg_size ;
   unsigned char *payload ;
@@ -322,6 +355,32 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
       p->results[3].i_value = p->results[3].i_value + msg_size ;
       msg[0] = SPI_OP_DEVICE_RESP ;
       write(sd, msg, len) ;
+      break ;
+
+    case SPI_OP_PIN_LOW:                                // set a pin LOW
+      if (msg_size != 1)
+        return (0) ; // return failure
+      value = payload[0] ;
+      pinMode (value, OUTPUT) ;
+      digitalWrite (value, LOW) ;
+      break ;
+
+    case SPI_OP_PIN_HIGH:                               // set a pin HIGH
+      if (msg_size != 1)
+        return (0) ; // return failure
+      value = payload[0] ;
+      pinMode (value, OUTPUT) ;
+      digitalWrite (value, HIGH) ;
+      break ;
+
+    case SPI_OP_PAUSE_USECS:                            // pause for a bit
+      if (msg_size != 4)
+        return (0) ; // return failure
+      memcpy (&value, payload, sizeof(value)) ;
+      value = ntohl (value) ;
+      if (value >= SPI_PAUSE_MAX_USECS)
+        return (0) ; // return failure
+      delayMicroseconds (value) ;
       break ;
 
     default:
