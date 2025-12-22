@@ -31,6 +31,7 @@ including,
 - receive raw audio via UDP and play it on an I2S audio amplifier (MAX98357)
 - activate relays for a specific number of seconds
 - connect TTL serial devices to a TCP port
+- interact with SPI devices by sending messages over a TCP socket
 
 Other features include,
 
