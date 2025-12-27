@@ -209,12 +209,12 @@
 #include <SPI.h>
 
 /*
-   maximum size of a message to/from client. This value was chosen so that
-   a complete message fits within a single TCP packet (ie, IP + TCP + options)
-   so as to avoid "fragmentation".
+   maximum size of a message to/from client. This value was chosen so that a
+   complete message can capture at least 2 rowx of 480x 3-byte pixels in an
+   LCD display.
 */
 
-#define SPI_MSG_BUFSIZE 1440
+#define SPI_MSG_BUFSIZE 4096
 
 /* The various SPI opcodes used between us and a TCP client */
 
@@ -315,7 +315,6 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
 
   p->results[6].i_value = opcode ;
   p->results[7].i_value = msg_size ;
-  sprintf (p->msg, "opcode:%d size:%d", opcode, msg_size) ;
 
   switch (opcode)
   {
@@ -330,8 +329,6 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
           (cfg.order > 1) ||
           (cfg.mode > 3))
         return (0) ;
-      sprintf (p->msg, "freq:%dkhz order:%d mode:%d",
-               cfg.freq_khz, cfg.order, cfg.mode) ;
 
       /* apply SPI settings and get hardware ready */
 
@@ -412,6 +409,7 @@ void ft_spi (S_thread_entry *p)
 
   /* try allocate the SPI message buffer from heap */
 
+  unsigned int spi_len = 0 ;
   unsigned char *spi_buf = (unsigned char*) malloc(SPI_MSG_BUFSIZE) ;
   if (spi_buf == NULL)
   {
@@ -447,11 +445,11 @@ void ft_spi (S_thread_entry *p)
   p->results[5].data[0] = (char*) "\"too_short\"" ;
 
   p->results[6].num_tags = 1 ;
-  p->results[6].meta[0] = (char*) "cur_msg" ;
+  p->results[6].meta[0] = (char*) "last_msg" ;
   p->results[6].data[0] = (char*) "\"opcode\"" ;
 
   p->results[7].num_tags = 1 ;
-  p->results[7].meta[0] = (char*) "cur_msg" ;
+  p->results[7].meta[0] = (char*) "last_msg" ;
   p->results[7].data[0] = (char*) "\"size\"" ;
 
   p->num_int_results = 8 ;
@@ -499,7 +497,7 @@ void ft_spi (S_thread_entry *p)
   int num_fds = 0 ;
   int client_sd = 0 ;
   int close_client = 0 ;
-  int result, amt ;
+  int result, available, amt, offset ;
   unsigned long last_activity_ms=0 ;
   fd_set rfds ;
   struct timeval tv ;
@@ -520,6 +518,8 @@ void ft_spi (S_thread_entry *p)
       FD_SET (listen_sd, &rfds) ;       // only monitor listening socket
       num_fds = listen_sd + 1 ;
     }
+    sprintf (p->msg, "cur_buf_len:%d", spi_len) ;
+
     result = select (num_fds, &rfds, NULL, NULL, &tv) ;
     if (result > 0)
     {
@@ -535,30 +535,40 @@ void ft_spi (S_thread_entry *p)
       }
       if (FD_ISSET (client_sd, &rfds))
       {
-        amt = recv (client_sd, spi_buf, SPI_MSG_BUFSIZE, MSG_PEEK) ;
-        if (amt < 1)                                    // tcp client closed
+        available = SPI_MSG_BUFSIZE - spi_len ;
+        if (available < 1)                              // message too large
+        {
           close_client = 1 ;
+          p->results[2].i_value++ ;                     // invalid message
+        }
         else
         {
-          amt = f_spi_validate_msg (p, client_sd, spi_buf, amt) ;
-          if (amt < 0)                                  // invalid message
-          {
-            p->results[2].i_value++ ;
-            close_client = 1 ;
-          }
+          amt = read (client_sd, spi_buf + spi_len, available) ;
+          if (amt < 1)
+            close_client = 1 ;                          // client disconnected
           else
-          if (amt == 0)                                 // message too short
           {
-            p->results[5].i_value++ ;
-            delay(10) ;
-          }
-          else
-          if (amt > 0)
-          {
-            last_activity_ms = millis () ;
-            amt = read (client_sd, spi_buf, amt) ;      // pull one message
-            if (f_spi_handle_msg (p, client_sd, spi_buf, amt) == 0)
+            spi_len = spi_len + amt ;
+            amt = f_spi_validate_msg (p, client_sd, spi_buf, spi_len) ;
+            if (amt < 1)
+            {
               close_client = 1 ;
+              p->results[2].i_value++ ;                 // invalid message
+            }
+            if (amt > 0)
+            {
+              last_activity_ms = millis () ;
+              if (f_spi_handle_msg (p, client_sd, spi_buf, amt) == 0)
+                close_client = 1 ;
+              else
+              {
+                /* left shift the bytes in "spi_buf" by "amt" */
+
+                for (offset=amt ; offset < spi_len ; offset++)
+                  spi_buf[offset-amt] = spi_buf[offset] ;
+                spi_len = spi_len - amt ;
+              }
+            }
           }
         }
       }
@@ -583,6 +593,7 @@ void ft_spi (S_thread_entry *p)
       shutdown (client_sd, SHUT_RDWR) ;
       close (client_sd) ;
       client_sd = 0 ;
+      spi_len = 0 ;
       p->results[0].i_value = 0 ;
       if (G_spi_transaction)
       {
