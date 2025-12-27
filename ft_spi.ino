@@ -261,7 +261,8 @@ SPIClass *G_spi_dev=NULL ;      // the SPI hardware device on the ESP32
      b) next 2x bytes is a valid 16-bit length
      c) the last 2x bytes are 0x00,0x00
    If valid, this function returns the length of the message. If invalid, we
-   return -1.
+   return -1. It is possible that we may not have a complete message yet, in
+   which case, we return 0.
 */
 
 int f_spi_validate_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
@@ -269,10 +270,10 @@ int f_spi_validate_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
   unsigned char opcode ;
   unsigned short msg_size ;
 
-  if (len < 6)                                  // "msg" is impossibly small
-    return (-1) ;
+  if (len < 5)                          // "msg" is impossibly small
+    return (0) ;
 
-  opcode = msg[0] ;
+  opcode = msg[0] ;                     // TODO - validate "opcode"
   memcpy (&msg_size, msg+1, sizeof(msg_size)) ;
   msg_size = ntohs(msg_size) ;
 
@@ -280,14 +281,14 @@ int f_spi_validate_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
 
   int expected = 1 + 2 + msg_size + 2 ;
   if (len < expected)
-    return (-1) ;                               // "msg" is too short
+    return (0) ;                        // "msg" is too short more incoming ?
 
   /* make sure "msg" ends with \x00, \x00 */
 
   if ((msg[expected-1] != 0) || (msg[expected-2] != 0))
-    return (-1) ;                               // missing \x00 \x00 at the end
+    return (-1) ;                       // missing \x00 \x00 at the end
   else
-    return (expected) ;
+    return (expected) ;                 // found a complete "msg" :)
 }
 
 /*
@@ -311,6 +312,9 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
   memcpy (&msg_size, msg+1, sizeof(msg_size)) ;
   msg_size = ntohs(msg_size) ;
   payload = msg + 3 ;
+
+  p->results[6].i_value = opcode ;
+  p->results[7].i_value = msg_size ;
   sprintf (p->msg, "opcode:%d size:%d", opcode, msg_size) ;
 
   switch (opcode)
@@ -434,7 +438,23 @@ void ft_spi (S_thread_entry *p)
   p->results[3].meta[0] = (char*) "bytes" ;
   p->results[3].data[0] = (char*) "\"transferred\"" ;
 
-  p->num_int_results = 4 ;
+  p->results[4].num_tags = 1 ;
+  p->results[4].meta[0] = (char*) "msgs" ;
+  p->results[4].data[0] = (char*) "\"timed_out\"" ;
+
+  p->results[5].num_tags = 1 ;
+  p->results[5].meta[0] = (char*) "msgs" ;
+  p->results[5].data[0] = (char*) "\"too_short\"" ;
+
+  p->results[6].num_tags = 1 ;
+  p->results[6].meta[0] = (char*) "cur_msg" ;
+  p->results[6].data[0] = (char*) "\"opcode\"" ;
+
+  p->results[7].num_tags = 1 ;
+  p->results[7].meta[0] = (char*) "cur_msg" ;
+  p->results[7].data[0] = (char*) "\"size\"" ;
+
+  p->num_int_results = 8 ;
 
   /* try to setup a listening TCP port */
 
@@ -527,6 +547,13 @@ void ft_spi (S_thread_entry *p)
             close_client = 1 ;
           }
           else
+          if (amt == 0)                                 // message too short
+          {
+            p->results[5].i_value++ ;
+            delay(10) ;
+          }
+          else
+          if (amt > 0)
           {
             last_activity_ms = millis () ;
             amt = read (client_sd, spi_buf, amt) ;      // pull one message
@@ -543,7 +570,10 @@ void ft_spi (S_thread_entry *p)
     {
       unsigned long now = millis () ;
       if (now - last_activity_ms > max_idle_ms)
+      {
         close_client = 1 ;
+        p->results[4].i_value++ ;
+      }
     }
 
     /* if the "close_client" flag is set, then disconnect TCP client now */
