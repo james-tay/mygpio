@@ -347,6 +347,7 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
         return (0) ; // return failure
       G_spi_dev->transfer (payload, msg_size) ;
       p->results[3].i_value = p->results[3].i_value + msg_size ;
+      p->results[5].i_value++ ;
       break ;
 
     case SPI_OP_SEND_WITH_RESP:                         // send bytes /w reply
@@ -354,6 +355,7 @@ int f_spi_handle_msg (S_thread_entry *p, int sd, unsigned char *msg, int len)
         return (0) ; // return failure
       G_spi_dev->transfer (payload, msg_size) ;
       p->results[3].i_value = p->results[3].i_value + msg_size ;
+      p->results[5].i_value++ ;
       msg[0] = SPI_OP_DEVICE_RESP ;
       write(sd, msg, len) ;
       break ;
@@ -422,37 +424,41 @@ void ft_spi (S_thread_entry *p)
 
   p->results[0].num_tags = 1 ;
   p->results[0].meta[0] = (char*) "client" ;
-  p->results[0].data[0] = (char*) "\"connected\"" ;
+  p->results[0].data[0] = (char*) "\"connected\"" ;     // 0=disconnected
 
   p->results[1].num_tags = 1 ;
   p->results[1].meta[0] = (char*) "msgs" ;
-  p->results[1].data[0] = (char*) "\"handled\"" ;
+  p->results[1].data[0] = (char*) "\"handled\"" ;       // total msgs received
 
   p->results[2].num_tags = 1 ;
   p->results[2].meta[0] = (char*) "msgs" ;
-  p->results[2].data[0] = (char*) "\"invalid\"" ;
+  p->results[2].data[0] = (char*) "\"invalid\"" ;       // msg format errors
 
   p->results[3].num_tags = 1 ;
   p->results[3].meta[0] = (char*) "bytes" ;
-  p->results[3].data[0] = (char*) "\"transferred\"" ;
+  p->results[3].data[0] = (char*) "\"transferred\"" ;   // SPI transfer'ed IO
 
   p->results[4].num_tags = 1 ;
   p->results[4].meta[0] = (char*) "msgs" ;
-  p->results[4].data[0] = (char*) "\"timed_out\"" ;
+  p->results[4].data[0] = (char*) "\"timed_out\"" ;     // client inactivity
 
   p->results[5].num_tags = 1 ;
   p->results[5].meta[0] = (char*) "msgs" ;
-  p->results[5].data[0] = (char*) "\"too_short\"" ;
+  p->results[5].data[0] = (char*) "\"spi_io\"" ;        // SPI data transfers
 
   p->results[6].num_tags = 1 ;
   p->results[6].meta[0] = (char*) "last_msg" ;
-  p->results[6].data[0] = (char*) "\"opcode\"" ;
+  p->results[6].data[0] = (char*) "\"opcode\"" ;        // last msg's opcode
 
   p->results[7].num_tags = 1 ;
   p->results[7].meta[0] = (char*) "last_msg" ;
-  p->results[7].data[0] = (char*) "\"size\"" ;
+  p->results[7].data[0] = (char*) "\"size\"" ;          // last msg's size
 
-  p->num_int_results = 8 ;
+  p->results[8].num_tags = 1 ;
+  p->results[8].meta[0] = (char*) "msgs" ;
+  p->results[8].data[0] = (char*) "\"too_long\"" ;      // > SPI_MSG_BUFSIZE
+
+  p->num_int_results = 9 ;
 
   /* try to setup a listening TCP port */
 
@@ -504,11 +510,12 @@ void ft_spi (S_thread_entry *p)
 
   while (p->state == THREAD_RUNNING)
   {
+    available = SPI_MSG_BUFSIZE - spi_len ;
     close_client = 0 ;
     tv.tv_sec = 0 ;
     tv.tv_usec = nap_ms * 1000 ;
     FD_ZERO (&rfds) ;
-    if (client_sd > 0)
+    if ((client_sd > 0) && (available > 0))
     {
       FD_SET (client_sd, &rfds) ;       // only monitor TCP client
       num_fds = client_sd + 1 ;
@@ -530,32 +537,34 @@ void ft_spi (S_thread_entry *p)
         setsockopt (client_sd, IPPROTO_TCP, TCP_NODELAY,
                     (char*)&flag, sizeof(int)) ;
         p->results[0].i_value = 1 ;
+        spi_len = 0 ;
         last_activity_ms = millis () ;
         sprintf (p->msg, "client on %d", listen_port) ;
       }
       if (FD_ISSET (client_sd, &rfds))
       {
-        available = SPI_MSG_BUFSIZE - spi_len ;
-        if (available < 1)                              // message too large
-        {
-          close_client = 1 ;
-          p->results[2].i_value++ ;                     // invalid message
-        }
+        amt = read (client_sd, spi_buf + spi_len, available) ;
+        if (amt < 1)
+          close_client = 1 ;                          // client disconnected
         else
         {
-          amt = read (client_sd, spi_buf + spi_len, available) ;
-          if (amt < 1)
-            close_client = 1 ;                          // client disconnected
-          else
+          spi_len = spi_len + amt ;
+
+          /*
+             keep scanning bytes in "spi_buf", where there could be multiple
+             messages. Loop until there are no more complete messages left.
+          */
+
+          while (close_client == 0)
           {
-            spi_len = spi_len + amt ;
             amt = f_spi_validate_msg (p, client_sd, spi_buf, spi_len) ;
-            if (amt < 1)
+            if (amt < 0)
             {
               close_client = 1 ;
-              p->results[2].i_value++ ;                 // invalid message
+              p->results[2].i_value++ ;               // invalid message
             }
-            if (amt > 0)
+            else
+            if (amt > 0)                              // complete message
             {
               last_activity_ms = millis () ;
               if (f_spi_handle_msg (p, client_sd, spi_buf, amt) == 0)
@@ -565,14 +574,19 @@ void ft_spi (S_thread_entry *p)
                 /* left shift the bytes in "spi_buf" by "amt" */
 
                 for (offset=amt ; offset < spi_len ; offset++)
+                {
+                  available++ ;
                   spi_buf[offset-amt] = spi_buf[offset] ;
+                }
                 spi_len = spi_len - amt ;
               }
             }
+            else                                      // need more bytes
+              break ;
           }
-        }
-      }
-    }
+        } // ... if we read new stuff into "spi_buf"
+      } // ... if FD_ISSET()
+    } // .. if select()
 
     /* check if TCP client is connected and has idled too long */
 
@@ -582,8 +596,16 @@ void ft_spi (S_thread_entry *p)
       if (now - last_activity_ms > max_idle_ms)
       {
         close_client = 1 ;
-        p->results[4].i_value++ ;
+        p->results[4].i_value++ ;                       // client inactivity
       }
+    }
+
+    /* if "spi_buf" is full, then it's full with an impossibly long message */
+
+    if (available == 0)
+    {
+      close_client = 1 ;
+      p->results[8].i_value++ ;                         // > SPI_MSG_BUFSIZE
     }
 
     /* if the "close_client" flag is set, then disconnect TCP client now */
