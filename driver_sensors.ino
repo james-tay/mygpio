@@ -5,7 +5,10 @@
 /*
    Polls a BMP180 on the I2C bus. This should return temperature and pressure
    data which is then written into "temperature" and "pressure". On success
-   we return 1, otherwise 0.
+   we return 1, otherwise 0. Note that we will use the default I2C pins on the
+   ESP32, which are:
+     GPIO22 -> SCL
+     GPIO21 -> SDA
 */
 
 int f_bmp180 (float *temperature, float *pressure)
@@ -34,17 +37,6 @@ int f_bmp180 (float *temperature, float *pressure)
     return (0) ;
   }
 
-  char line[BUF_SIZE] ;
-
-  sprintf (line, "ac1: %d\r\nac2: %d\r\nac3: %d\r\n", ac1, ac2, ac3) ;
-  strcat (G_reply_buf, line) ;
-  sprintf (line, "ac4: %d\r\nac5: %d\r\nac6: %d\r\n", ac4, ac5, ac6) ;
-  strcat (G_reply_buf, line) ;
-  sprintf (line, "b1: %d\r\nb2: %d\r\nmb: %d\r\nmc: %d\r\n", b2, mb, mc) ;
-  strcat (G_reply_buf, line) ;
-  sprintf (line, "md: %d\r\n", md) ;
-  strcat (G_reply_buf, line) ;
-
   /*
      read the raw temperature by writing 0x2E to address 0xF4, the result is
      2 bytes at 0xF6.
@@ -57,9 +49,6 @@ int f_bmp180 (float *temperature, float *pressure)
   delay (5) ;                           // datasheet says wait 4.5 ms
   short raw_t=0 ;
   f_i2c_readShort (BMP180_ADDR, 0xF6, &raw_t) ;
-
-  sprintf (line, "raw_t: %d\r\n", raw_t) ;
-  strcat (G_reply_buf, line) ;
 
   /* now calculate the true temperature */
 
@@ -89,9 +78,6 @@ int f_bmp180 (float *temperature, float *pressure)
   long lsb = Wire.read () ;
   long xlsb = Wire.read () ;
   long raw_p = ((msb << 16) + (lsb << 8) + xlsb) >> (8 - BMP180_MODE) ;
-
-  sprintf (line, "raw_p: %d\r\n", raw_p) ;
-  strcat (G_reply_buf, line) ;
 
   long b6 = b5 - 4000 ;
   x1 = (b2 * (b6 * b6) >> 12) >> 11 ;

@@ -519,3 +519,10 @@ void ft_ds18b20 (S_thread_entry *p)
     delay (nap) ;
 }
 
+void ft_bmp180 (S_thread_entry *p)
+{
+
+
+
+}
+
