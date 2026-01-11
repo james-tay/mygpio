@@ -521,8 +521,64 @@ void ft_ds18b20 (S_thread_entry *p)
 
 void ft_bmp180 (S_thread_entry *p)
 {
+  #define BMP180_POWER_ON_DELAY_MS 50
 
+  if (p->num_args != 2)
+  {
+    strcpy (p->msg, "FATAL! Expecting 2x arguments") ;
+    p->state = THREAD_STOPPED ;
+    return ;
+  }
 
+  unsigned long start_time = millis () ;
+  int delay_ms = atoi (p->in_args[0]) ;
+  int pwr_pin = atoi (p->in_args[1]) ;
 
+  if (p->loops == 0)
+  {
+    p->results[0].num_tags = 1 ;
+    p->results[0].meta[0] = (char*) "measurement" ;
+    p->results[0].data[0] = (char*) "\"pressure\"" ;
+
+    p->results[1].num_tags = 1 ;
+    p->results[1].meta[0] = (char*) "measurement" ;
+    p->results[1].data[0] = (char*) "\"temperature\"" ;
+
+    f_register_power_pin (pwr_pin, p) ;
+  }
+
+  if (pwr_pin >= 0)
+  {
+    pinMode (pwr_pin, OUTPUT) ;
+    digitalWrite (pwr_pin, HIGH) ;
+    delay (BMP180_POWER_ON_DELAY_MS) ;
+  }
+
+  float temperature, pressure ;
+  if (f_bmp180 (&temperature, &pressure))
+  {
+    p->results[0].f_value = pressure ;
+    p->results[1].f_value = temperature ;
+    p->num_float_results = 2 ;
+  }
+  else
+  {
+    p->num_float_results = 0 ;
+    strcpy (p->msg, "failed") ;
+  }
+
+  /* if nobody else is using this power pin, then it is safe to turn it off */
+
+  if ((pwr_pin >= 0) && (G_pin_flags[pwr_pin].is_shared_power == 0))
+    digitalWrite (pwr_pin, LOW) ;
+
+  unsigned long end_time = millis () ;
+  unsigned long duration = end_time - start_time ;
+  if (p->num_float_results > 0)
+    sprintf (p->msg, "polled in %dms", duration) ;
+
+  int nap = delay_ms -duration ;
+  if (nap > 0)
+    delay (nap) ;
 }
 
