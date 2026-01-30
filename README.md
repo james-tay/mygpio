@@ -413,6 +413,12 @@ and run an "fs format".
   XCLK to 6mhz when initializing the camera,
   `curl http://esp32-cam.example.com/v1?cmd=cam+init+6`
 
+- When trying to initialize the ESP32 camera, sometimes you might get the
+  error message,
+  `FAULT: esp_camera_init() failed 0x105.`
+  Try to toggle pin 32 lo and hi (power down pin), this should reset the
+  camera.
+
 - Due to high cpu consumption at high(er) resolutions and/or frame rates, it
   may be possible to overheat the unit, which results in unstable behavior. To
   workaround this, either reduce the frame rate, reduce the XCLK frequency or
